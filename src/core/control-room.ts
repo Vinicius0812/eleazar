@@ -81,6 +81,8 @@ export interface TaskTransition {
   id: string;
   taskId: string;
   fromStatus: TaskStatus;
+  /** Lease observed with fromStatus; required to reject stale reserved-task snapshots. */
+  fromDispatchLease: string | null;
   toStatus: TaskStatus;
   actor: string;
   reason: string | null;

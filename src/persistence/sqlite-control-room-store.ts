@@ -56,9 +56,13 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return this.#db.transaction(() => {
       const previous = this.getTask(task.id);
       if (!previous) return null;
+      const fromDispatchLease = transition.fromDispatchLease;
       const result = this.#db.prepare(`UPDATE tasks SET title = @title, prompt = @prompt, priority = @priority, status = @status,
         kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt
-        WHERE id = @id AND status = @fromStatus`).run({ ...task, fromStatus: transition.fromStatus });
+        WHERE id = @id AND status = @fromStatus
+          AND ((@fromDispatchLease IS NULL AND dispatch_lease IS NULL) OR dispatch_lease = @fromDispatchLease)`).run({
+        ...task, fromStatus: transition.fromStatus, fromDispatchLease
+      });
       if (result.changes !== 1) return null;
       this.recordTransition(transition);
       if (previous.dispatchLease && previous.dispatchLease !== task.dispatchLease) {
@@ -142,8 +146,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return this.#db.prepare("SELECT * FROM delegation_decisions WHERE task_id = ? ORDER BY rowid").all(taskId).map(mapDelegation).filter(isPresent);
   }
   recordTransition(transition: TaskTransition): void {
-    this.#db.prepare(`INSERT INTO task_transitions (id, task_id, from_status, to_status, actor, reason, created_at)
-      VALUES (@id, @taskId, @fromStatus, @toStatus, @actor, @reason, @createdAt)`).run(transition);
+    this.#db.prepare(`INSERT INTO task_transitions (id, task_id, from_status, from_lease, to_status, actor, reason, created_at)
+      VALUES (@id, @taskId, @fromStatus, @fromDispatchLease, @toStatus, @actor, @reason, @createdAt)`).run(transition);
   }
   listTransitions(taskId: string): TaskTransition[] {
     return this.#db.prepare("SELECT * FROM task_transitions WHERE task_id = ? ORDER BY rowid").all(taskId).map(mapTransition).filter(isPresent);
@@ -161,14 +165,15 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         level TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS delegation_decisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), selected_provider TEXT,
         reason TEXT NOT NULL, candidates_json TEXT NOT NULL, actions_json TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), from_status TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), from_status TEXT NOT NULL, from_lease TEXT,
         to_status TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL);
     `);
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
+    this.#addColumnIfMissing("task_transitions", "from_lease", "TEXT");
   }
 
-  #addColumnIfMissing(table: "tasks" | "executions", column: string, definition: string): void {
+  #addColumnIfMissing(table: "tasks" | "executions" | "task_transitions", column: string, definition: string): void {
     const columns = this.#db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((item) => item.name === column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
@@ -204,5 +209,5 @@ function mapDelegation(row: unknown): DelegationDecision | null {
 }
 function mapTransition(row: unknown): TaskTransition | null {
   if (!row) return null; const item = row as Row;
-  return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), fromStatus: stringValue(item, "from_status") as TaskTransition["fromStatus"], toStatus: stringValue(item, "to_status") as TaskTransition["toStatus"], actor: stringValue(item, "actor"), reason: nullableString(item, "reason"), createdAt: stringValue(item, "created_at") };
+  return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), fromStatus: stringValue(item, "from_status") as TaskTransition["fromStatus"], fromDispatchLease: nullableString(item, "from_lease"), toStatus: stringValue(item, "to_status") as TaskTransition["toStatus"], actor: stringValue(item, "actor"), reason: nullableString(item, "reason"), createdAt: stringValue(item, "created_at") };
 }

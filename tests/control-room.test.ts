@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,9 +47,9 @@ describe("Control Room SQLite persistence", () => {
     const project = service.registerProject({ name: "Core", path: process.cwd() });
     const task = service.createTask({ projectId: project.id, title: "Tarefa", prompt: "Planeje algo" });
     const planning = { ...task, status: "planning" as const, updatedAt: "2026-01-01T00:00:00.000Z" };
-    store.transitionTask(planning, { id: "transition-id", taskId: task.id, fromStatus: "queued", toStatus: "planning", actor: "test", reason: null, createdAt: planning.updatedAt });
+    store.transitionTask(planning, { id: "transition-id", taskId: task.id, fromStatus: "queued", fromDispatchLease: null, toStatus: "planning", actor: "test", reason: null, createdAt: planning.updatedAt });
     const running = { ...planning, status: "running" as const, updatedAt: "2026-01-01T00:00:01.000Z" };
-    expect(() => store.transitionTask(running, { id: "transition-id", taskId: task.id, fromStatus: "planning", toStatus: "running", actor: "test", reason: null, createdAt: running.updatedAt })).toThrow();
+    expect(() => store.transitionTask(running, { id: "transition-id", taskId: task.id, fromStatus: "planning", fromDispatchLease: null, toStatus: "running", actor: "test", reason: null, createdAt: running.updatedAt })).toThrow();
     expect(store.getTask(task.id)?.status).toBe("planning");
     expect(store.listTransitions(task.id)).toHaveLength(1);
     store.close();
@@ -65,11 +65,26 @@ describe("Control Room SQLite persistence", () => {
     const planning = service.transitionTask(created.id, "planning");
     const stale = first.getTask(created.id)!;
     const cancelled = { ...second.getTask(created.id)!, status: "cancelled" as const, dispatchLease: null, updatedAt: "2026-01-01T00:00:00.000Z" };
-    expect(second.transitionTask(cancelled, { id: "cancel", taskId: created.id, fromStatus: "planning", toStatus: "cancelled", actor: "test", reason: null, createdAt: cancelled.updatedAt })?.status).toBe("cancelled");
+    expect(second.transitionTask(cancelled, { id: "cancel", taskId: created.id, fromStatus: "planning", fromDispatchLease: null, toStatus: "cancelled", actor: "test", reason: null, createdAt: cancelled.updatedAt })?.status).toBe("cancelled");
     const obsolete = { ...stale, status: "running" as const, updatedAt: "2026-01-01T00:00:01.000Z" };
-    expect(first.transitionTask(obsolete, { id: "stale", taskId: created.id, fromStatus: planning.status, toStatus: "running", actor: "test", reason: null, createdAt: obsolete.updatedAt })).toBeNull();
+    expect(first.transitionTask(obsolete, { id: "stale", taskId: created.id, fromStatus: planning.status, fromDispatchLease: stale.dispatchLease, toStatus: "running", actor: "test", reason: null, createdAt: obsolete.updatedAt })).toBeNull();
     expect(first.getTask(created.id)?.status).toBe("cancelled");
     first.close(); second.close();
+  });
+
+  it("rejeita transicao generica de lease antigo quando uma nova reserva ainda esta em planning", async () => {
+    const { service, store } = await fixture();
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Tarefa", prompt: "Planeje algo" });
+    const oldAttempt = dispatchAttempt(task.id, "old-lease", "old-decision", "old-execution");
+    const reserved = store.claimDispatch(task.id, oldAttempt)!;
+    const stale = { ...reserved, status: "cancelled" as const, dispatchLease: null, updatedAt: "2026-01-01T00:00:01.000Z" };
+    expect(store.transitionTask({ ...reserved, status: "queued", dispatchLease: null, updatedAt: "2026-01-01T00:00:00.000Z" }, { id: "requeue", taskId: task.id, fromStatus: "planning", fromDispatchLease: "old-lease", toStatus: "queued", actor: "test", reason: null, createdAt: "2026-01-01T00:00:00.000Z" })?.status).toBe("queued");
+    const newAttempt = dispatchAttempt(task.id, "new-lease", "new-decision", "new-execution");
+    expect(store.claimDispatch(task.id, newAttempt)?.dispatchLease).toBe("new-lease");
+    expect(store.transitionTask(stale, { id: "stale", taskId: task.id, fromStatus: "planning", fromDispatchLease: "old-lease", toStatus: "cancelled", actor: "test", reason: null, createdAt: stale.updatedAt })).toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({ status: "planning", dispatchLease: "new-lease" });
+    store.close();
   });
 });
 
@@ -277,29 +292,25 @@ describe("Git worktree isolation", () => {
     });
     const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
     await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task);
-    expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", task.id)]);
+    expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", "task-1-lease-1")]);
   });
 
-  it("reconcilia somente worktree marcada por lease antigo e registrada no projeto", async () => {
+  it("usa destino distinto por lease e nunca remove worktree antiga", async () => {
     const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "new-lease", createdAt: "now", updatedAt: "now" };
-    const target = join(projectDirectory, ".eleazar", "worktrees", task.id);
-    await mkdir(target, { recursive: true });
-    await writeFile(join(target, ".eleazar-control-room-lease.json"), JSON.stringify({ taskId: task.id, leaseId: "old-lease" }));
+    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
+    const newTask = { ...oldTask, dispatchLease: "new-lease" };
     const commands: readonly string[][] = [];
     const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
       (commands as string[][]).push([...args]);
-      const worktree = args.indexOf("worktree");
-      if (worktree >= 0 && args[worktree + 1] === "list") return `worktree ${target}\nHEAD abc\n`;
-      if (worktree >= 0 && args[worktree + 1] === "remove") { await rm(target, { recursive: true, force: true }); return ""; }
-      if (args.includes("add")) { await mkdir(target, { recursive: true }); return ""; }
+      if (args.includes("add")) { await mkdir(args.at(-1)!, { recursive: true }); return ""; }
       throw new Error("comando inesperado");
     });
-    await expect(provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task)).resolves.toBe(target);
-    expect(commands.some((args) => args.includes("worktree") && args.includes("list") && args.includes("--porcelain"))).toBe(true);
-    expect(commands.some((args) => args.includes("worktree") && args.includes("remove") && args.includes(target))).toBe(true);
-    expect(commands.some((args) => args.includes("worktree") && args.includes("add") && args.includes(target))).toBe(true);
-    expect(JSON.parse(await readFile(join(target, ".eleazar-control-room-lease.json"), "utf8"))).toEqual({ taskId: task.id, leaseId: "new-lease" });
+    const project = { id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" };
+    const oldTarget = await provisioner.prepare(project, oldTask);
+    const newTarget = await provisioner.prepare(project, newTask);
+    expect(oldTarget).toBe(join(projectDirectory, ".eleazar", "worktrees", "task-1-old-lease"));
+    expect(newTarget).toBe(join(projectDirectory, ".eleazar", "worktrees", "task-1-new-lease"));
+    expect(commands.some((args) => args.includes("remove"))).toBe(false);
   });
 });
 
@@ -348,7 +359,7 @@ function dispatchAttempt(taskId: string, leaseId: string, decisionId: string, ex
   const execution: TaskExecution = { id: executionId, taskId, leaseId, provider: "codex", status: "planned", startedAt: null, finishedAt: null, summary: null };
   return {
     leaseId,
-    transition: { id: `transition-${leaseId}`, taskId, fromStatus: "queued", toStatus: "planning", actor: "test", reason: null, createdAt },
+    transition: { id: `transition-${leaseId}`, taskId, fromStatus: "queued", fromDispatchLease: null, toStatus: "planning", actor: "test", reason: null, createdAt },
     decision: { id: decisionId, taskId, selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [], createdAt },
     execution
   };

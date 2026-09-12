@@ -79,7 +79,7 @@ export class ControlRoomService {
     assertValidTransition(task.status, toStatus);
     const updated = { ...task, status: toStatus, dispatchLease: retainsLease(toStatus) ? task.dispatchLease : null, updatedAt: now() };
     const transitioned = this.store.transitionTask(updated, {
-      id: randomUUID(), taskId, fromStatus: task.status, toStatus, actor,
+      id: randomUUID(), taskId, fromStatus: task.status, fromDispatchLease: task.dispatchLease, toStatus, actor,
       reason: reason?.trim() || null, createdAt: updated.updatedAt
     });
     if (!transitioned) throw new Error("A tarefa mudou de estado; releia antes de transicionar novamente.");
@@ -94,7 +94,7 @@ export class ControlRoomService {
     const decision: DelegationDecision = { id: randomUUID(), taskId, selectedProvider: request.selectedProvider, reason: request.reason.trim(), candidates: request.candidates, requestedActions: request.requestedActions, createdAt: claimedAt };
     const attempt: DispatchAttempt = {
       leaseId,
-      transition: { id: randomUUID(), taskId, fromStatus: "queued", toStatus: "planning", actor: "dispatcher", reason: "preparando despacho", createdAt: claimedAt },
+      transition: { id: randomUUID(), taskId, fromStatus: "queued", fromDispatchLease: null, toStatus: "planning", actor: "dispatcher", reason: "preparando despacho", createdAt: claimedAt },
       decision,
       execution
     };
@@ -112,14 +112,14 @@ export class ControlRoomService {
         worktreePath = await this.worktrees.prepare(project, task);
       }
       const completed = this.store.completeDispatchPreparation(taskId, leaseId, worktreePath, {
-        id: randomUUID(), taskId, fromStatus: "planning", toStatus: "running", actor: "dispatcher",
+        id: randomUUID(), taskId, fromStatus: "planning", fromDispatchLease: leaseId, toStatus: "running", actor: "dispatcher",
         reason: "despacho preparado; execucao do provedor e externa", createdAt: now()
       }, now());
       return completed ?? this.requireTask(taskId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const failed = this.store.failDispatchAttempt(taskId, leaseId, {
-        id: randomUUID(), taskId, fromStatus: "planning", toStatus: "failed", actor: "dispatcher",
+        id: randomUUID(), taskId, fromStatus: "planning", fromDispatchLease: leaseId, toStatus: "failed", actor: "dispatcher",
         reason: "falha ao preparar despacho", createdAt: now()
       }, message, { id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
       return failed ?? this.requireTask(taskId);
