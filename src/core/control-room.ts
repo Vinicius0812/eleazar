@@ -33,6 +33,7 @@ export interface ControlRoomTask {
   status: TaskStatus;
   kind: TaskKind;
   worktreePath: string | null;
+  dispatchLease: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +43,7 @@ export type ExecutionStatus = "planned" | "running" | "completed" | "failed" | "
 export interface TaskExecution {
   id: string;
   taskId: string;
+  leaseId: string | null;
   provider: ProviderName | null;
   status: ExecutionStatus;
   startedAt: string | null;
@@ -85,6 +87,13 @@ export interface TaskTransition {
   createdAt: string;
 }
 
+export interface DispatchAttempt {
+  leaseId: string;
+  transition: TaskTransition;
+  decision: DelegationDecision;
+  execution: TaskExecution;
+}
+
 export interface NewProject {
   name: string;
   path: string;
@@ -107,7 +116,9 @@ export interface ControlRoomStore {
   listTasks(projectId?: string): ControlRoomTask[];
   updateTask(task: ControlRoomTask): void;
   transitionTask(task: ControlRoomTask, transition: TaskTransition): void;
-  claimTaskForDispatch(taskId: string, transition: TaskTransition): ControlRoomTask | null;
+  claimDispatch(taskId: string, attempt: DispatchAttempt): ControlRoomTask | null;
+  completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null;
+  failDispatchAttempt(taskId: string, leaseId: string, transition: TaskTransition, executionSummary: string, log: ExecutionLog): ControlRoomTask | null;
   createExecution(execution: TaskExecution): void;
   getExecution(id: string): TaskExecution | null;
   updateExecution(execution: TaskExecution): void;

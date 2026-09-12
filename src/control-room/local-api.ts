@@ -20,7 +20,8 @@ export function createControlRoomServer(service: ControlRoomService): Server {
 async function route(service: ControlRoomService, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (method !== "GET" && method !== "HEAD") assertSafeLocalMutation(request);
+  assertSafeLocalRequest(request);
+  if (method !== "GET" && method !== "HEAD") assertJsonMutation(request);
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {
@@ -69,9 +70,9 @@ function optionalString(body: Record<string, unknown>, name: string): string | u
 function arrayOfStrings(value: unknown, name: string): string[] { if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function json(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(body)); }
 
-function assertSafeLocalMutation(request: IncomingMessage): void {
+function assertSafeLocalRequest(request: IncomingMessage): void {
   if (!isLoopbackAddress(request.socket.remoteAddress) || !isLoopbackHost(request.headers.host)) {
-    const error = new Error("Mutacoes locais exigem origem de rede e Host loopback.");
+    const error = new Error("A API local exige origem de rede e Host loopback.");
     (error as Error & { statusCode?: number }).statusCode = 403;
     throw error;
   }
@@ -81,6 +82,9 @@ function assertSafeLocalMutation(request: IncomingMessage): void {
     (error as Error & { statusCode?: number }).statusCode = 403;
     throw error;
   }
+}
+
+function assertJsonMutation(request: IncomingMessage): void {
   const mediaType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") {
     const error = new Error("Mutacoes locais exigem Content-Type application/json.");
@@ -97,7 +101,8 @@ function isLoopbackOrigin(origin: string): boolean {
   try { return isLoopbackName(new URL(origin).hostname); } catch { return false; }
 }
 function isLoopbackName(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const normalized = hostname.replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";

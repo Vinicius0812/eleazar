@@ -9,6 +9,7 @@ import {
   type ControlRoomTask,
   type DelegationCandidate,
   type DelegationDecision,
+  type DispatchAttempt,
   type LocalProject,
   type NewProject,
   type NewTask,
@@ -65,6 +66,7 @@ export class ControlRoomService {
       kind: input.kind ?? classifyTask(input.prompt),
       status: "queued",
       worktreePath: null,
+      dispatchLease: null,
       createdAt,
       updatedAt: createdAt
     };
@@ -75,7 +77,7 @@ export class ControlRoomService {
   transitionTask(taskId: string, toStatus: TaskStatus, actor = "control-room", reason?: string): ControlRoomTask {
     const task = this.requireTask(taskId);
     assertValidTransition(task.status, toStatus);
-    const updated = { ...task, status: toStatus, updatedAt: now() };
+    const updated = { ...task, status: toStatus, dispatchLease: retainsLease(toStatus) ? task.dispatchLease : null, updatedAt: now() };
     this.store.transitionTask(updated, {
       id: randomUUID(), taskId, fromStatus: task.status, toStatus, actor,
       reason: reason?.trim() || null, createdAt: updated.updatedAt
@@ -86,50 +88,40 @@ export class ControlRoomService {
   async dispatch(taskId: string, request: DispatchRequest): Promise<ControlRoomTask> {
     assertSafeTaskActions(request.requestedActions);
     const claimedAt = now();
-    let task = this.store.claimTaskForDispatch(taskId, {
-      id: randomUUID(), taskId, fromStatus: "queued", toStatus: "planning", actor: "dispatcher",
-      reason: "preparando despacho", createdAt: claimedAt
-    });
-    if (!task) throw new Error("A tarefa nao esta pronta para despacho ou ja foi reservada.");
-
-    const decision: DelegationDecision = {
-      id: randomUUID(), taskId, selectedProvider: request.selectedProvider, reason: request.reason.trim(),
-      candidates: request.candidates, requestedActions: request.requestedActions, createdAt: now()
+    const leaseId = randomUUID();
+    const execution = { id: randomUUID(), taskId, leaseId, provider: request.selectedProvider, status: "planned" as const, startedAt: null, finishedAt: null, summary: null };
+    const decision: DelegationDecision = { id: randomUUID(), taskId, selectedProvider: request.selectedProvider, reason: request.reason.trim(), candidates: request.candidates, requestedActions: request.requestedActions, createdAt: claimedAt };
+    const attempt: DispatchAttempt = {
+      leaseId,
+      transition: { id: randomUUID(), taskId, fromStatus: "queued", toStatus: "planning", actor: "dispatcher", reason: "preparando despacho", createdAt: claimedAt },
+      decision,
+      execution
     };
-    this.store.recordDelegation(decision);
+    let task = this.store.claimDispatch(taskId, attempt);
+    if (!task) throw new Error("A tarefa nao esta pronta para despacho ou ja foi reservada.");
 
     if (!request.selectedProvider) {
       return this.transitionTask(taskId, "waiting_approval", "dispatcher", "nenhum provedor selecionado");
     }
-
-    const execution = {
-      id: randomUUID(), taskId, provider: request.selectedProvider, status: "planned" as const,
-      startedAt: null, finishedAt: null, summary: null
-    };
-    this.store.createExecution(execution);
     try {
+      let worktreePath: string | null = null;
       if (request.requestedActions.includes("create_worktree")) {
         if (!this.worktrees) throw new Error("Provisionador de worktree nao configurado.");
         const project = this.requireProject(task.projectId);
-        const worktreePath = await this.worktrees.prepare(project, task);
-        const current = this.requireTask(taskId);
-        if (current.status !== "planning") return this.finishSupersededExecution(execution.id, current);
-        task = { ...current, worktreePath, updatedAt: now() };
-        this.store.updateTask(task);
+        worktreePath = await this.worktrees.prepare(project, task);
       }
-      const current = this.requireTask(taskId);
-      if (current.status !== "planning") return this.finishSupersededExecution(execution.id, current);
-      this.store.updateExecution({ ...execution, status: "running", startedAt: now() });
-      return this.transitionTask(taskId, "running", "dispatcher", "despacho preparado; execucao do provedor e externa");
+      const completed = this.store.completeDispatchPreparation(taskId, leaseId, worktreePath, {
+        id: randomUUID(), taskId, fromStatus: "planning", toStatus: "running", actor: "dispatcher",
+        reason: "despacho preparado; execucao do provedor e externa", createdAt: now()
+      }, now());
+      return completed ?? this.requireTask(taskId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const current = this.requireTask(taskId);
-      const status = current.status === "cancelled" ? "cancelled" : "failed";
-      this.store.updateExecution({ ...execution, status, finishedAt: now(), summary: message });
-      this.store.appendLog({ id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
-      return current.status === "planning"
-        ? this.transitionTask(taskId, "failed", "dispatcher", "falha ao preparar despacho")
-        : current;
+      const failed = this.store.failDispatchAttempt(taskId, leaseId, {
+        id: randomUUID(), taskId, fromStatus: "planning", toStatus: "failed", actor: "dispatcher",
+        reason: "falha ao preparar despacho", createdAt: now()
+      }, message, { id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
+      return failed ?? this.requireTask(taskId);
     }
   }
 
@@ -148,17 +140,10 @@ export class ControlRoomService {
     return project;
   }
 
-  private finishSupersededExecution(executionId: string, task: ControlRoomTask): ControlRoomTask {
-    this.store.updateExecution({
-      id: executionId, taskId: task.id, provider: this.store.getExecution(executionId)?.provider ?? null,
-      status: "cancelled", startedAt: null, finishedAt: now(), summary: `Preparacao substituida por estado ${task.status}.`
-    });
-    this.store.appendLog({ id: randomUUID(), executionId, level: "warn", message: `Preparacao interrompida: tarefa em ${task.status}.`, createdAt: now() });
-    return task;
-  }
 }
 
 function now(): string { return new Date().toISOString(); }
+function retainsLease(status: TaskStatus): boolean { return status === "planning" || status === "running"; }
 
 export function isTaskPriority(value: string): value is TaskPriority {
   return value === "low" || value === "normal" || value === "high" || value === "critical";

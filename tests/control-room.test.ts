@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ControlRoomService, type WorktreeProvisioner } from "../src/core/control-room-service.js";
-import type { ControlRoomTask, LocalProject } from "../src/core/control-room.js";
+import type { ControlRoomTask, DispatchAttempt, LocalProject, TaskExecution } from "../src/core/control-room.js";
 import { GitWorktreeProvisioner } from "../src/core/git-worktree-provisioner.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
@@ -73,6 +73,22 @@ class BlockingWorktrees implements WorktreeProvisioner {
   release(): void { this.#release(); }
 }
 
+class FirstAttemptWorktrees implements WorktreeProvisioner {
+  calls = 0;
+  #startedResolve!: () => void;
+  #settle!: () => void;
+  #fail!: (error: Error) => void;
+  readonly started = new Promise<void>((resolve) => { this.#startedResolve = resolve; });
+  readonly first = new Promise<string>((resolve, reject) => { this.#settle = () => resolve("/isolated/old"); this.#fail = reject; });
+  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<string> {
+    this.calls += 1;
+    if (this.calls === 1) { this.#startedResolve(); return this.first; }
+    return `/isolated/${task.id}`;
+  }
+  succeedFirst(): void { this.#settle(); }
+  failFirst(): void { this.#fail(new Error("worktree antiga falhou")); }
+}
+
 describe("safe delegation dispatch", () => {
   it("registra a decisao e prepara worktree isolada para implementacao", async () => {
     const directory = await mkdtemp(join(tmpdir(), "eleazar-control-room-")); temporaryDirectories.push(directory);
@@ -117,15 +133,18 @@ describe("safe delegation dispatch", () => {
     const directory = await mkdtemp(join(tmpdir(), "eleazar-control-room-")); temporaryDirectories.push(directory);
     const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
     const worktrees = new BlockingWorktrees(); const service = new ControlRoomService(store, worktrees);
+    const otherStore = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const otherService = new ControlRoomService(otherStore);
     const project = service.registerProject({ name: "Core", path: process.cwd() });
     const task = service.createTask({ projectId: project.id, title: "Testar", prompt: "Teste a camada" });
     const first = service.dispatch(task.id, { selectedProvider: "codex", reason: "primeiro", candidates: [], requestedActions: ["create_worktree"] });
     await worktrees.started;
-    await expect(service.dispatch(task.id, { selectedProvider: "codex", reason: "segundo", candidates: [], requestedActions: ["create_worktree"] })).rejects.toThrow("reservada");
+    await expect(otherService.dispatch(task.id, { selectedProvider: "codex", reason: "segundo", candidates: [], requestedActions: ["create_worktree"] })).rejects.toThrow("reservada");
     worktrees.release();
     expect((await first).status).toBe("running");
     expect(worktrees.calls).toBe(1);
     expect(store.listExecutions(task.id)).toHaveLength(1);
+    otherStore.close();
     store.close();
   });
 
@@ -157,6 +176,74 @@ describe("safe delegation dispatch", () => {
     expect(worktrees.calls).toBe(1);
     store.close();
   });
+
+  it("nao permite que tentativa antiga conclua depois de reenfileiramento e novo lease", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-control-room-")); temporaryDirectories.push(directory);
+    const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const worktrees = new FirstAttemptWorktrees(); const service = new ControlRoomService(store, worktrees);
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Testar", prompt: "Teste a camada" });
+    const first = service.dispatch(task.id, { selectedProvider: "codex", reason: "primeira", candidates: [], requestedActions: ["create_worktree"] });
+    await worktrees.started;
+    const oldLease = store.getTask(task.id)?.dispatchLease;
+    service.transitionTask(task.id, "queued", "user", "reenfileirou");
+    const current = await service.dispatch(task.id, { selectedProvider: "codex", reason: "segunda", candidates: [], requestedActions: [] });
+    expect(current.status).toBe("running");
+    expect(current.dispatchLease).not.toBe(oldLease);
+    worktrees.succeedFirst();
+    expect((await first).dispatchLease).toBe(current.dispatchLease);
+    expect(store.getTask(task.id)?.worktreePath).toBeNull();
+    expect(store.listExecutions(task.id)).toMatchObject([{ status: "running" }, { status: "cancelled" }]);
+    store.close();
+  });
+
+  it("nao permite que falha de tentativa antiga afete um novo lease", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-control-room-")); temporaryDirectories.push(directory);
+    const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const worktrees = new FirstAttemptWorktrees(); const service = new ControlRoomService(store, worktrees);
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Testar", prompt: "Teste a camada" });
+    const first = service.dispatch(task.id, { selectedProvider: "codex", reason: "primeira", candidates: [], requestedActions: ["create_worktree"] });
+    await worktrees.started;
+    service.transitionTask(task.id, "queued", "user", "reenfileirou");
+    const current = await service.dispatch(task.id, { selectedProvider: "codex", reason: "segunda", candidates: [], requestedActions: [] });
+    const oldExecution = store.listExecutions(task.id).find((execution) => execution.status === "cancelled");
+    worktrees.failFirst();
+    expect((await first).dispatchLease).toBe(current.dispatchLease);
+    expect(store.getTask(task.id)?.status).toBe("running");
+    expect(oldExecution && store.listLogs(oldExecution.id)).toEqual([]);
+    store.close();
+  });
+});
+
+describe("dispatch claim transaction", () => {
+  it("reverte claim quando persistir a decisao falha e permite novo despacho", async () => {
+    const { service, store } = await fixture();
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Tarefa", prompt: "Planeje algo" });
+    const attempt = dispatchAttempt(task.id, "lease-a", "decision-duplicate", "execution-a");
+    store.recordDelegation(attempt.decision);
+    expect(() => store.claimDispatch(task.id, attempt)).toThrow();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.listTransitions(task.id)).toEqual([]);
+    expect(store.listExecutions(task.id)).toEqual([]);
+    expect((await service.dispatch(task.id, { selectedProvider: "codex", reason: "novo", candidates: [], requestedActions: [] })).status).toBe("running");
+    store.close();
+  });
+
+  it("reverte claim quando criar a execucao falha e permite novo despacho", async () => {
+    const { service, store } = await fixture();
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Tarefa", prompt: "Planeje algo" });
+    const attempt = dispatchAttempt(task.id, "lease-a", "decision-a", "execution-duplicate");
+    store.createExecution({ id: "execution-duplicate", taskId: task.id, leaseId: null, provider: null, status: "cancelled", startedAt: null, finishedAt: null, summary: null });
+    expect(() => store.claimDispatch(task.id, attempt)).toThrow();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.listTransitions(task.id)).toEqual([]);
+    expect(store.listDelegations(task.id)).toEqual([]);
+    expect((await service.dispatch(task.id, { selectedProvider: "codex", reason: "novo", candidates: [], requestedActions: [] })).status).toBe("running");
+    store.close();
+  });
 });
 
 describe("Git worktree isolation", () => {
@@ -169,7 +256,7 @@ describe("Git worktree isolation", () => {
       expect(setting).toBeDefined();
       expect(await readdir(setting!.slice("core.hooksPath=".length))).toEqual([]);
     });
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, createdAt: "now", updatedAt: "now" };
+    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: null, createdAt: "now", updatedAt: "now" };
     await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task);
     expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", task.id)]);
   });
@@ -198,14 +285,37 @@ describe("local Control Room API", () => {
     expect((await send(address.port, "/api/control-room/projects", [Buffer.from("{}")], { host: "example.test", "content-type": "application/json" })).status).toBe(403);
     expect((await send(address.port, "/api/control-room/projects", [Buffer.from("{}")])).status).toBe(415);
     expect((await send(address.port, "/api/control-room/projects", [Buffer.from("{}")], { "content-type": "application/jsonp" })).status).toBe(415);
+    expect((await send(address.port, "/api/control-room/tasks", [], { host: "example.test" }, "GET")).status).toBe(403);
+    expect((await send(address.port, "/api/control-room/projects", [Buffer.alloc(1_000_001)], { "content-type": "application/json" })).status).toBe(400);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  });
+
+  it("aceita leitura pela forma IPv6 loopback [::1]", async () => {
+    const { service, store } = await fixture();
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "::1", resolve));
+    const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+    expect((await send(address.port, "/api/control-room/projects", [], { host: `[::1]:${address.port}` }, "GET", "::1")).status).toBe(200);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     store.close();
   });
 });
 
-function send(port: number, path: string, chunks: readonly Buffer[], headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
+function dispatchAttempt(taskId: string, leaseId: string, decisionId: string, executionId: string): DispatchAttempt {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const execution: TaskExecution = { id: executionId, taskId, leaseId, provider: "codex", status: "planned", startedAt: null, finishedAt: null, summary: null };
+  return {
+    leaseId,
+    transition: { id: `transition-${leaseId}`, taskId, fromStatus: "queued", toStatus: "planning", actor: "test", reason: null, createdAt },
+    decision: { id: decisionId, taskId, selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [], createdAt },
+    execution
+  };
+}
+
+function send(port: number, path: string, chunks: readonly Buffer[], headers: Record<string, string> = {}, method = "POST", hostname = "127.0.0.1"): Promise<{ status: number; body: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
-    const request = httpRequest({ hostname: "127.0.0.1", port, path, method: "POST", headers }, (response) => {
+    const request = httpRequest({ hostname, port, path, method, headers }, (response) => {
       let text = ""; response.setEncoding("utf8"); response.on("data", (chunk: string) => { text += chunk; });
       response.on("end", () => resolve({ status: response.statusCode ?? 0, body: JSON.parse(text) as Record<string, unknown> }));
     });

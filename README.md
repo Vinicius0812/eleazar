@@ -78,7 +78,7 @@ createControlRoomServer(service).listen(4317, "127.0.0.1");
 
 Rotas JSON locais: `GET/POST /api/control-room/projects`, `GET/POST /api/control-room/tasks`, `POST /api/control-room/tasks/:id/transition` e `POST /api/control-room/tasks/:id/dispatch`. Mutacoes aceitam somente conexoes, `Host` e (quando presente) `Origin` loopback, com `Content-Type: application/json`.
 
-Tarefas que solicitam `create_worktree` recebem uma worktree isolada em `.eleazar/worktrees/<id>`, independentemente da classificacao textual. O subprocesso Git usa um `core.hooksPath` temporario e vazio, portanto hooks fornecidos pelo projeto nao executam durante o provisionamento. O banco e as worktrees ficam em `.eleazar/`, ja ignorado pelo Git. O despacho permite apenas leitura, criacao de worktree e testes; `push`, `merge` e `deploy` sao bloqueados pela camada de dominio e exigem um fluxo de aprovacao futuro.
+Tarefas que solicitam `create_worktree` recebem uma worktree isolada em `.eleazar/worktrees/<id>`, independentemente da classificacao textual. Cada despacho recebe um lease persistido: uma tentativa antiga nao pode gravar conclusao ou falha depois que a tarefa e reenfileirada. O subprocesso Git usa um `core.hooksPath` temporario e vazio, portanto hooks fornecidos pelo projeto nao executam durante o provisionamento. O banco e as worktrees ficam em `.eleazar/`, ja ignorado pelo Git. O despacho permite apenas leitura, criacao de worktree e testes; `push`, `merge` e `deploy` sao bloqueados pela camada de dominio e exigem um fluxo de aprovacao futuro.
 
 ## Seguranca
 

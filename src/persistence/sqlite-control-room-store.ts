@@ -37,8 +37,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return this.#db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all().map(mapProject).filter(isPresent);
   }
   createTask(task: ControlRoomTask): void {
-    this.#db.prepare(`INSERT INTO tasks (id, project_id, title, prompt, priority, status, kind, worktree_path, created_at, updated_at)
-      VALUES (@id, @projectId, @title, @prompt, @priority, @status, @kind, @worktreePath, @createdAt, @updatedAt)`).run(task);
+    this.#db.prepare(`INSERT INTO tasks (id, project_id, title, prompt, priority, status, kind, worktree_path, dispatch_lease, created_at, updated_at)
+      VALUES (@id, @projectId, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @createdAt, @updatedAt)`).run(task);
   }
   getTask(id: string): ControlRoomTask | null { return mapTask(this.#db.prepare("SELECT * FROM tasks WHERE id = ?").get(id)); }
   listTasks(projectId?: string): ControlRoomTask[] {
@@ -49,33 +49,73 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   }
   updateTask(task: ControlRoomTask): void {
     const result = this.#db.prepare(`UPDATE tasks SET title = @title, prompt = @prompt, priority = @priority, status = @status,
-      kind = @kind, worktree_path = @worktreePath, updated_at = @updatedAt WHERE id = @id`).run(task);
+      kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt WHERE id = @id`).run(task);
     if (result.changes !== 1) throw new Error("Tarefa nao encontrada para atualizacao.");
   }
   transitionTask(task: ControlRoomTask, transition: TaskTransition): void {
     this.#db.transaction(() => {
+      const previous = this.getTask(task.id);
+      if (!previous) throw new Error("Tarefa nao encontrada para atualizacao.");
       this.updateTask(task);
       this.recordTransition(transition);
+      if (previous.dispatchLease && previous.dispatchLease !== task.dispatchLease) {
+        this.#db.prepare(`UPDATE executions SET status = 'cancelled', finished_at = @finishedAt, summary = 'tentativa substituida'
+          WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'planned'`).run({ taskId: task.id, leaseId: previous.dispatchLease, finishedAt: transition.createdAt });
+      }
     })();
   }
-  claimTaskForDispatch(taskId: string, transition: TaskTransition): ControlRoomTask | null {
+  claimDispatch(taskId: string, attempt: import("../core/control-room.js").DispatchAttempt): ControlRoomTask | null {
     return this.#db.transaction(() => {
       const current = this.getTask(taskId);
       if (!current || current.status !== "queued") return null;
-      const claimed = { ...current, status: "planning" as const, updatedAt: transition.createdAt };
-      const result = this.#db.prepare("UPDATE tasks SET status = @status, updated_at = @updatedAt WHERE id = @id AND status = 'queued'").run(claimed);
+      const claimed = { ...current, status: "planning" as const, dispatchLease: attempt.leaseId, updatedAt: attempt.transition.createdAt };
+      const result = this.#db.prepare(`UPDATE tasks SET status = @status, dispatch_lease = @dispatchLease, updated_at = @updatedAt
+        WHERE id = @id AND status = 'queued' AND dispatch_lease IS NULL`).run(claimed);
       if (result.changes !== 1) return null;
-      this.recordTransition(transition);
+      this.recordTransition(attempt.transition);
+      this.recordDelegation(attempt.decision);
+      this.createExecution(attempt.execution);
       return claimed;
     })();
   }
+  completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null {
+    return this.#db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (!current || current.status !== "planning" || current.dispatchLease !== leaseId) return null;
+      const completed = { ...current, status: "running" as const, worktreePath: worktreePath ?? current.worktreePath, updatedAt: transition.createdAt };
+      const task = this.#db.prepare(`UPDATE tasks SET status = @status, worktree_path = @worktreePath, updated_at = @updatedAt
+        WHERE id = @id AND status = 'planning' AND dispatch_lease = @leaseId`).run({ ...completed, leaseId });
+      if (task.changes !== 1) return null;
+      const execution = this.#db.prepare(`UPDATE executions SET status = 'running', started_at = @startedAt
+        WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'planned'`).run({ taskId, leaseId, startedAt });
+      if (execution.changes !== 1) throw new Error("Execucao reservada nao encontrada.");
+      this.recordTransition(transition);
+      return completed;
+    })();
+  }
+  failDispatchAttempt(taskId: string, leaseId: string, transition: TaskTransition, executionSummary: string, log: ExecutionLog): ControlRoomTask | null {
+    return this.#db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (!current || current.status !== "planning" || current.dispatchLease !== leaseId) return null;
+      const failed = { ...current, status: "failed" as const, dispatchLease: null, updatedAt: transition.createdAt };
+      const task = this.#db.prepare(`UPDATE tasks SET status = @status, dispatch_lease = NULL, updated_at = @updatedAt
+        WHERE id = @id AND status = 'planning' AND dispatch_lease = @leaseId`).run({ ...failed, leaseId });
+      if (task.changes !== 1) return null;
+      const execution = this.#db.prepare(`UPDATE executions SET status = 'failed', finished_at = @finishedAt, summary = @summary
+        WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'planned'`).run({ taskId, leaseId, finishedAt: transition.createdAt, summary: executionSummary });
+      if (execution.changes !== 1) throw new Error("Execucao reservada nao encontrada.");
+      this.recordTransition(transition);
+      this.appendLog(log);
+      return failed;
+    })();
+  }
   createExecution(execution: TaskExecution): void {
-    this.#db.prepare(`INSERT INTO executions (id, task_id, provider, status, started_at, finished_at, summary)
-      VALUES (@id, @taskId, @provider, @status, @startedAt, @finishedAt, @summary)`).run(execution);
+    this.#db.prepare(`INSERT INTO executions (id, task_id, lease_id, provider, status, started_at, finished_at, summary)
+      VALUES (@id, @taskId, @leaseId, @provider, @status, @startedAt, @finishedAt, @summary)`).run(execution);
   }
   getExecution(id: string): TaskExecution | null { return mapExecution(this.#db.prepare("SELECT * FROM executions WHERE id = ?").get(id)); }
   updateExecution(execution: TaskExecution): void {
-    const result = this.#db.prepare(`UPDATE executions SET provider = @provider, status = @status, started_at = @startedAt,
+    const result = this.#db.prepare(`UPDATE executions SET lease_id = @leaseId, provider = @provider, status = @status, started_at = @startedAt,
       finished_at = @finishedAt, summary = @summary WHERE id = @id`).run(execution);
     if (result.changes !== 1) throw new Error("Execucao nao encontrada para atualizacao.");
   }
@@ -109,9 +149,9 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
-        prompt TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL, worktree_path TEXT,
+        prompt TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL, worktree_path TEXT, dispatch_lease TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS executions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), provider TEXT,
+      CREATE TABLE IF NOT EXISTS executions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), lease_id TEXT, provider TEXT,
         status TEXT NOT NULL, started_at TEXT, finished_at TEXT, summary TEXT);
       CREATE TABLE IF NOT EXISTS execution_logs (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
         level TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -120,6 +160,13 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), from_status TEXT NOT NULL,
         to_status TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL);
     `);
+    this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
+    this.#addColumnIfMissing("executions", "lease_id", "TEXT");
+  }
+
+  #addColumnIfMissing(table: "tasks" | "executions", column: string, definition: string): void {
+    const columns = this.#db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 
@@ -136,11 +183,11 @@ function mapTask(row: unknown): ControlRoomTask | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
-    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), dispatchLease: nullableString(item, "dispatch_lease"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
-  return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), provider: nullableString(item, "provider") as TaskExecution["provider"],
+  return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), leaseId: nullableString(item, "lease_id"), provider: nullableString(item, "provider") as TaskExecution["provider"],
     status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary") };
 }
 function mapLog(row: unknown): ExecutionLog | null {
