@@ -106,6 +106,8 @@ export interface ControlRoomStore {
   getTask(id: string): ControlRoomTask | null;
   listTasks(projectId?: string): ControlRoomTask[];
   updateTask(task: ControlRoomTask): void;
+  transitionTask(task: ControlRoomTask, transition: TaskTransition): void;
+  claimTaskForDispatch(taskId: string, transition: TaskTransition): ControlRoomTask | null;
   createExecution(execution: TaskExecution): void;
   getExecution(id: string): TaskExecution | null;
   updateExecution(execution: TaskExecution): void;

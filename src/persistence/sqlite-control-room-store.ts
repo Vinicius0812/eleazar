@@ -52,6 +52,23 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       kind = @kind, worktree_path = @worktreePath, updated_at = @updatedAt WHERE id = @id`).run(task);
     if (result.changes !== 1) throw new Error("Tarefa nao encontrada para atualizacao.");
   }
+  transitionTask(task: ControlRoomTask, transition: TaskTransition): void {
+    this.#db.transaction(() => {
+      this.updateTask(task);
+      this.recordTransition(transition);
+    })();
+  }
+  claimTaskForDispatch(taskId: string, transition: TaskTransition): ControlRoomTask | null {
+    return this.#db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (!current || current.status !== "queued") return null;
+      const claimed = { ...current, status: "planning" as const, updatedAt: transition.createdAt };
+      const result = this.#db.prepare("UPDATE tasks SET status = @status, updated_at = @updatedAt WHERE id = @id AND status = 'queued'").run(claimed);
+      if (result.changes !== 1) return null;
+      this.recordTransition(transition);
+      return claimed;
+    })();
+  }
   createExecution(execution: TaskExecution): void {
     this.#db.prepare(`INSERT INTO executions (id, task_id, provider, status, started_at, finished_at, summary)
       VALUES (@id, @taskId, @provider, @status, @startedAt, @finishedAt, @summary)`).run(execution);

@@ -76,8 +76,7 @@ export class ControlRoomService {
     const task = this.requireTask(taskId);
     assertValidTransition(task.status, toStatus);
     const updated = { ...task, status: toStatus, updatedAt: now() };
-    this.store.updateTask(updated);
-    this.store.recordTransition({
+    this.store.transitionTask(updated, {
       id: randomUUID(), taskId, fromStatus: task.status, toStatus, actor,
       reason: reason?.trim() || null, createdAt: updated.updatedAt
     });
@@ -85,12 +84,13 @@ export class ControlRoomService {
   }
 
   async dispatch(taskId: string, request: DispatchRequest): Promise<ControlRoomTask> {
-    let task = this.requireTask(taskId);
-    if (task.status !== "queued" && task.status !== "planning") {
-      throw new Error(`A tarefa ${task.id} nao esta pronta para despacho.`);
-    }
     assertSafeTaskActions(request.requestedActions);
-    if (task.status === "queued") task = this.transitionTask(task.id, "planning", "dispatcher", "preparando despacho");
+    const claimedAt = now();
+    let task = this.store.claimTaskForDispatch(taskId, {
+      id: randomUUID(), taskId, fromStatus: "queued", toStatus: "planning", actor: "dispatcher",
+      reason: "preparando despacho", createdAt: claimedAt
+    });
+    if (!task) throw new Error("A tarefa nao esta pronta para despacho ou ja foi reservada.");
 
     const decision: DelegationDecision = {
       id: randomUUID(), taskId, selectedProvider: request.selectedProvider, reason: request.reason.trim(),
@@ -108,20 +108,28 @@ export class ControlRoomService {
     };
     this.store.createExecution(execution);
     try {
-      if (task.kind === "implementation") {
+      if (request.requestedActions.includes("create_worktree")) {
         if (!this.worktrees) throw new Error("Provisionador de worktree nao configurado.");
         const project = this.requireProject(task.projectId);
         const worktreePath = await this.worktrees.prepare(project, task);
-        task = { ...task, worktreePath, updatedAt: now() };
+        const current = this.requireTask(taskId);
+        if (current.status !== "planning") return this.finishSupersededExecution(execution.id, current);
+        task = { ...current, worktreePath, updatedAt: now() };
         this.store.updateTask(task);
       }
+      const current = this.requireTask(taskId);
+      if (current.status !== "planning") return this.finishSupersededExecution(execution.id, current);
       this.store.updateExecution({ ...execution, status: "running", startedAt: now() });
       return this.transitionTask(taskId, "running", "dispatcher", "despacho preparado; execucao do provedor e externa");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.store.updateExecution({ ...execution, status: "failed", finishedAt: now(), summary: message });
+      const current = this.requireTask(taskId);
+      const status = current.status === "cancelled" ? "cancelled" : "failed";
+      this.store.updateExecution({ ...execution, status, finishedAt: now(), summary: message });
       this.store.appendLog({ id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
-      return this.transitionTask(taskId, "failed", "dispatcher", "falha ao preparar despacho");
+      return current.status === "planning"
+        ? this.transitionTask(taskId, "failed", "dispatcher", "falha ao preparar despacho")
+        : current;
     }
   }
 
@@ -138,6 +146,15 @@ export class ControlRoomService {
     const project = this.store.getProject(id);
     if (!project) throw new Error("Projeto local nao encontrado.");
     return project;
+  }
+
+  private finishSupersededExecution(executionId: string, task: ControlRoomTask): ControlRoomTask {
+    this.store.updateExecution({
+      id: executionId, taskId: task.id, provider: this.store.getExecution(executionId)?.provider ?? null,
+      status: "cancelled", startedAt: null, finishedAt: now(), summary: `Preparacao substituida por estado ${task.status}.`
+    });
+    this.store.appendLog({ id: randomUUID(), executionId, level: "warn", message: `Preparacao interrompida: tarefa em ${task.status}.`, createdAt: now() });
+    return task;
   }
 }
 
