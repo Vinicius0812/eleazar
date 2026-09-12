@@ -115,7 +115,7 @@ export interface ControlRoomStore {
   getTask(id: string): ControlRoomTask | null;
   listTasks(projectId?: string): ControlRoomTask[];
   updateTask(task: ControlRoomTask): void;
-  transitionTask(task: ControlRoomTask, transition: TaskTransition): void;
+  transitionTask(task: ControlRoomTask, transition: TaskTransition): ControlRoomTask | null;
   claimDispatch(taskId: string, attempt: DispatchAttempt): ControlRoomTask | null;
   completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null;
   failDispatchAttempt(taskId: string, leaseId: string, transition: TaskTransition, executionSummary: string, log: ExecutionLog): ControlRoomTask | null;

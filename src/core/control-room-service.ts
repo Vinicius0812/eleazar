@@ -78,11 +78,12 @@ export class ControlRoomService {
     const task = this.requireTask(taskId);
     assertValidTransition(task.status, toStatus);
     const updated = { ...task, status: toStatus, dispatchLease: retainsLease(toStatus) ? task.dispatchLease : null, updatedAt: now() };
-    this.store.transitionTask(updated, {
+    const transitioned = this.store.transitionTask(updated, {
       id: randomUUID(), taskId, fromStatus: task.status, toStatus, actor,
       reason: reason?.trim() || null, createdAt: updated.updatedAt
     });
-    return updated;
+    if (!transitioned) throw new Error("A tarefa mudou de estado; releia antes de transicionar novamente.");
+    return transitioned;
   }
 
   async dispatch(taskId: string, request: DispatchRequest): Promise<ControlRoomTask> {

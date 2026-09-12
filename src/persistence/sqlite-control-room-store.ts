@@ -52,16 +52,20 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt WHERE id = @id`).run(task);
     if (result.changes !== 1) throw new Error("Tarefa nao encontrada para atualizacao.");
   }
-  transitionTask(task: ControlRoomTask, transition: TaskTransition): void {
-    this.#db.transaction(() => {
+  transitionTask(task: ControlRoomTask, transition: TaskTransition): ControlRoomTask | null {
+    return this.#db.transaction(() => {
       const previous = this.getTask(task.id);
-      if (!previous) throw new Error("Tarefa nao encontrada para atualizacao.");
-      this.updateTask(task);
+      if (!previous) return null;
+      const result = this.#db.prepare(`UPDATE tasks SET title = @title, prompt = @prompt, priority = @priority, status = @status,
+        kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt
+        WHERE id = @id AND status = @fromStatus`).run({ ...task, fromStatus: transition.fromStatus });
+      if (result.changes !== 1) return null;
       this.recordTransition(transition);
       if (previous.dispatchLease && previous.dispatchLease !== task.dispatchLease) {
         this.#db.prepare(`UPDATE executions SET status = 'cancelled', finished_at = @finishedAt, summary = 'tentativa substituida'
           WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'planned'`).run({ taskId: task.id, leaseId: previous.dispatchLease, finishedAt: transition.createdAt });
       }
+      return task;
     })();
   }
   claimDispatch(taskId: string, attempt: import("../core/control-room.js").DispatchAttempt): ControlRoomTask | null {

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +53,23 @@ describe("Control Room SQLite persistence", () => {
     expect(store.getTask(task.id)?.status).toBe("planning");
     expect(store.listTransitions(task.id)).toHaveLength(1);
     store.close();
+  });
+
+  it("nao sobrescreve cancelamento concorrente com snapshot obsoleto de outra conexao", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-control-room-")); temporaryDirectories.push(directory);
+    const first = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const second = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const service = new ControlRoomService(first);
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const created = service.createTask({ projectId: project.id, title: "Tarefa", prompt: "Planeje algo" });
+    const planning = service.transitionTask(created.id, "planning");
+    const stale = first.getTask(created.id)!;
+    const cancelled = { ...second.getTask(created.id)!, status: "cancelled" as const, dispatchLease: null, updatedAt: "2026-01-01T00:00:00.000Z" };
+    expect(second.transitionTask(cancelled, { id: "cancel", taskId: created.id, fromStatus: "planning", toStatus: "cancelled", actor: "test", reason: null, createdAt: cancelled.updatedAt })?.status).toBe("cancelled");
+    const obsolete = { ...stale, status: "running" as const, updatedAt: "2026-01-01T00:00:01.000Z" };
+    expect(first.transitionTask(obsolete, { id: "stale", taskId: created.id, fromStatus: planning.status, toStatus: "running", actor: "test", reason: null, createdAt: obsolete.updatedAt })).toBeNull();
+    expect(first.getTask(created.id)?.status).toBe("cancelled");
+    first.close(); second.close();
   });
 });
 
@@ -255,10 +272,34 @@ describe("Git worktree isolation", () => {
       const setting = args.find((item) => item.startsWith("core.hooksPath="));
       expect(setting).toBeDefined();
       expect(await readdir(setting!.slice("core.hooksPath=".length))).toEqual([]);
+      await mkdir(args.at(-1)!, { recursive: true });
+      return "";
     });
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: null, createdAt: "now", updatedAt: "now" };
+    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
     await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task);
     expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", task.id)]);
+  });
+
+  it("reconcilia somente worktree marcada por lease antigo e registrada no projeto", async () => {
+    const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
+    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "new-lease", createdAt: "now", updatedAt: "now" };
+    const target = join(projectDirectory, ".eleazar", "worktrees", task.id);
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, ".eleazar-control-room-lease.json"), JSON.stringify({ taskId: task.id, leaseId: "old-lease" }));
+    const commands: readonly string[][] = [];
+    const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
+      (commands as string[][]).push([...args]);
+      const worktree = args.indexOf("worktree");
+      if (worktree >= 0 && args[worktree + 1] === "list") return `worktree ${target}\nHEAD abc\n`;
+      if (worktree >= 0 && args[worktree + 1] === "remove") { await rm(target, { recursive: true, force: true }); return ""; }
+      if (args.includes("add")) { await mkdir(target, { recursive: true }); return ""; }
+      throw new Error("comando inesperado");
+    });
+    await expect(provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task)).resolves.toBe(target);
+    expect(commands.some((args) => args.includes("worktree") && args.includes("list") && args.includes("--porcelain"))).toBe(true);
+    expect(commands.some((args) => args.includes("worktree") && args.includes("remove") && args.includes(target))).toBe(true);
+    expect(commands.some((args) => args.includes("worktree") && args.includes("add") && args.includes(target))).toBe(true);
+    expect(JSON.parse(await readFile(join(target, ".eleazar-control-room-lease.json"), "utf8"))).toEqual({ taskId: task.id, leaseId: "new-lease" });
   });
 });
 
