@@ -1,0 +1,146 @@
+import type { ProviderName, TaskKind } from "./contracts.js";
+
+export const taskPriorities = ["low", "normal", "high", "critical"] as const;
+export type TaskPriority = (typeof taskPriorities)[number];
+
+export const taskStatuses = [
+  "queued",
+  "planning",
+  "running",
+  "waiting_approval",
+  "completed",
+  "failed",
+  "cancelled"
+] as const;
+export type TaskStatus = (typeof taskStatuses)[number];
+
+export const taskActions = ["read_project", "create_worktree", "run_tests", "push", "merge", "deploy"] as const;
+export type TaskAction = (typeof taskActions)[number];
+
+export interface LocalProject {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
+export interface ControlRoomTask {
+  id: string;
+  projectId: string;
+  title: string;
+  prompt: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  kind: TaskKind;
+  worktreePath: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ExecutionStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
+
+export interface TaskExecution {
+  id: string;
+  taskId: string;
+  provider: ProviderName | null;
+  status: ExecutionStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  summary: string | null;
+}
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+export interface ExecutionLog {
+  id: string;
+  executionId: string;
+  level: LogLevel;
+  message: string;
+  createdAt: string;
+}
+
+export interface DelegationCandidate {
+  provider: ProviderName;
+  score: number;
+  reasons: readonly string[];
+}
+
+export interface DelegationDecision {
+  id: string;
+  taskId: string;
+  selectedProvider: ProviderName | null;
+  reason: string;
+  candidates: readonly DelegationCandidate[];
+  requestedActions: readonly TaskAction[];
+  createdAt: string;
+}
+
+export interface TaskTransition {
+  id: string;
+  taskId: string;
+  fromStatus: TaskStatus;
+  toStatus: TaskStatus;
+  actor: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface NewProject {
+  name: string;
+  path: string;
+}
+
+export interface NewTask {
+  projectId: string;
+  title: string;
+  prompt: string;
+  priority?: TaskPriority;
+  kind?: TaskKind;
+}
+
+export interface ControlRoomStore {
+  createProject(project: LocalProject): void;
+  getProject(id: string): LocalProject | null;
+  listProjects(): LocalProject[];
+  createTask(task: ControlRoomTask): void;
+  getTask(id: string): ControlRoomTask | null;
+  listTasks(projectId?: string): ControlRoomTask[];
+  updateTask(task: ControlRoomTask): void;
+  createExecution(execution: TaskExecution): void;
+  getExecution(id: string): TaskExecution | null;
+  updateExecution(execution: TaskExecution): void;
+  listExecutions(taskId: string): TaskExecution[];
+  appendLog(log: ExecutionLog): void;
+  listLogs(executionId: string): ExecutionLog[];
+  recordDelegation(decision: DelegationDecision): void;
+  listDelegations(taskId: string): DelegationDecision[];
+  recordTransition(transition: TaskTransition): void;
+  listTransitions(taskId: string): TaskTransition[];
+}
+
+const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
+  queued: ["planning", "cancelled"],
+  planning: ["queued", "running", "waiting_approval", "failed", "cancelled"],
+  running: ["waiting_approval", "completed", "failed", "cancelled"],
+  waiting_approval: ["planning", "running", "cancelled"],
+  completed: [],
+  failed: ["queued", "cancelled"],
+  cancelled: []
+};
+
+export function assertValidTransition(from: TaskStatus, to: TaskStatus): void {
+  if (!transitions[from].includes(to)) {
+    throw new Error(`Transicao invalida: ${from} -> ${to}`);
+  }
+}
+
+export function assertSafeTaskActions(actions: readonly TaskAction[]): void {
+  const unknown = actions.filter((action) => !taskActions.includes(action));
+  if (unknown.length > 0) {
+    throw new Error(`Acao de despacho desconhecida: ${unknown.join(", ")}`);
+  }
+  const prohibited = actions.filter((action) => action === "push" || action === "merge" || action === "deploy");
+  if (prohibited.length > 0) {
+    throw new Error(`Acao requer aprovacao explicita e nao pode ser despachada: ${prohibited.join(", ")}`);
+  }
+}
