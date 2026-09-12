@@ -17,7 +17,7 @@ Este repositorio contem o primeiro nucleo funcional:
 - diagnostico de instalacao e autenticacao;
 - testes unitarios que nao consomem modelos ou creditos.
 
-O projeto ainda esta em fase inicial. Persistencia, painel visual, worktrees, execucao paralela e revisao cruzada fazem parte das proximas etapas.
+O projeto ainda esta em fase inicial. Persistencia, integracao do painel visual, worktrees de execucao, execucao paralela e revisao cruzada fazem parte das proximas etapas.
 
 ## Requisitos
 
@@ -74,3 +74,14 @@ Use `--json` em qualquer comando para obter saida legivel por outras ferramentas
 
 - [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk)
 - [Antigravity CLI headless mode](https://antigravity.google/docs/cli/headless/)
+
+## Control Room local
+
+A interface React + Vite + TypeScript está em `apps/control-room`, com serviço de demonstração tipado em memória e independente do núcleo. Para iniciar:
+
+```powershell
+npm ci --prefix apps/control-room
+npm run dev --prefix apps/control-room
+```
+
+Abra http://127.0.0.1:5173. Use `npm run check --prefix apps/control-room` para validar a UI. Consulte [o guia da interface](docs/control-room.md) para os fluxos, contratos, requisitos e notas de integração. Os comandos CLI existentes permanecem iguais.
