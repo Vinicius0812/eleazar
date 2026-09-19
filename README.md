@@ -15,9 +15,10 @@ Este repositorio contem o primeiro nucleo funcional:
 - adaptador Codex pelo SDK oficial;
 - adaptador Antigravity pelo modo headless JSON;
 - diagnostico de instalacao e autenticacao;
-- testes unitarios que nao consomem modelos ou creditos.
+- testes unitarios que nao consomem modelos ou creditos;
+- fundacao local do **Control Room**: projetos, tarefas, execucoes, logs, transicoes e decisoes de delegacao persistidos em SQLite.
 
-O projeto ainda esta em fase inicial. Persistencia, painel visual, worktrees, execucao paralela e revisao cruzada fazem parte das proximas etapas.
+O painel visual e a execucao paralela ainda sao proximas etapas. A camada de dominio atual e independente de React e de provedores, pronta para ser consumida por uma interface local.
 
 ## Requisitos
 
@@ -62,6 +63,22 @@ npm run dev -- run "Pesquise alternativas" --provider antigravity
 ```
 
 Use `--json` em qualquer comando para obter saida legivel por outras ferramentas.
+
+## Control Room local
+
+A API e a persistencia podem ser compostas por uma aplicacao local, sem inicializar provedores ou modelos:
+
+```ts
+import { createControlRoomServer, ControlRoomService, GitWorktreeProvisioner, SqliteControlRoomStore } from "eleazar";
+
+const store = new SqliteControlRoomStore("C:/meu-projeto/.eleazar/control-room.sqlite");
+const service = new ControlRoomService(store, new GitWorktreeProvisioner());
+createControlRoomServer(service).listen(4317, "127.0.0.1");
+```
+
+Rotas JSON locais: `GET/POST /api/control-room/projects`, `GET/POST /api/control-room/tasks`, `POST /api/control-room/tasks/:id/transition` e `POST /api/control-room/tasks/:id/dispatch`. Mutacoes aceitam somente conexoes, `Host` e (quando presente) `Origin` loopback, com `Content-Type: application/json`.
+
+Tarefas que solicitam `create_worktree` recebem uma worktree isolada em `.eleazar/worktrees/<taskId>-<lease>`, independentemente da classificacao textual. Cada despacho recebe um lease persistido: uma tentativa antiga nao pode gravar conclusao ou falha depois que a tarefa e reenfileirada, e worktrees de tentativas antigas nunca bloqueiam a proxima tentativa. O Eleazar nao remove worktrees automaticamente; a limpeza e uma operacao manual segura ou responsabilidade de um reconciliador futuro. O subprocesso Git usa um `core.hooksPath` temporario e vazio, portanto hooks fornecidos pelo projeto nao executam durante o provisionamento. O banco e as worktrees ficam em `.eleazar/`, ja ignorado pelo Git. O despacho permite apenas leitura, criacao de worktree e testes; `push`, `merge` e `deploy` sao bloqueados pela camada de dominio e exigem um fluxo de aprovacao futuro.
 
 ## Seguranca
 
