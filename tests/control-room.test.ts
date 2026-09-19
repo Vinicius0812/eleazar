@@ -315,6 +315,21 @@ describe("Git worktree isolation", () => {
 });
 
 describe("local Control Room API", () => {
+  it("exposes a single persisted snapshot for the loopback UI", async () => {
+    const { service, store } = await fixture();
+    const project = service.registerProject({ name: "Local", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Snapshot", prompt: "Read state", priority: "high" });
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+    const response = await send(address.port, "/api/control-room/snapshot", [], { host: `127.0.0.1:${address.port}`, origin: "http://127.0.0.1:5173" }, "GET");
+    expect(response.status).toBe(200);
+    expect(response.body.projects).toEqual([expect.objectContaining({ id: project.id })]);
+    expect(response.body.tasks).toEqual([expect.objectContaining({ id: task.id, priority: "high" })]);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  });
+
   it("aceita JSON Unicode dividido entre chunks somente de host loopback", async () => {
     const { service, store } = await fixture();
     const server = createControlRoomServer(service);

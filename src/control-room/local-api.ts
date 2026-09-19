@@ -21,7 +21,14 @@ async function route(service: ControlRoomService, request: IncomingMessage, resp
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
+  setLocalCors(response, request.headers.origin);
+  if (method === "OPTIONS") {
+    response.writeHead(204, { "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type" });
+    response.end();
+    return;
+  }
   if (method !== "GET" && method !== "HEAD") assertJsonMutation(request);
+  if (method === "GET" && url.pathname === "/api/control-room/snapshot") return json(response, 200, service.snapshot());
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {
@@ -91,6 +98,12 @@ function assertJsonMutation(request: IncomingMessage): void {
     (error as Error & { statusCode?: number }).statusCode = 415;
     throw error;
   }
+}
+
+function setLocalCors(response: ServerResponse, origin: string | undefined): void {
+  if (!origin) return;
+  response.setHeader("access-control-allow-origin", origin);
+  response.setHeader("vary", "Origin");
 }
 
 function isLoopbackHost(host: string | undefined): boolean {

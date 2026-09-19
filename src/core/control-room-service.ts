@@ -129,6 +129,17 @@ export class ControlRoomService {
   listTasks(projectId?: string): ControlRoomTask[] { return this.store.listTasks(projectId); }
   getTask(id: string): ControlRoomTask | null { return this.store.getTask(id); }
 
+  snapshot(): import("./control-room.js").ControlRoomSnapshot {
+    const tasks = this.store.listTasks();
+    const executions = tasks.flatMap((task) => this.store.listExecutions(task.id));
+    return {
+      projects: this.store.listProjects(),
+      tasks,
+      executions,
+      logs: executions.flatMap((execution) => this.store.listLogs(execution.id))
+    };
+  }
+
   private requireTask(id: string): ControlRoomTask {
     const task = this.store.getTask(id);
     if (!task) throw new Error("Tarefa nao encontrada.");

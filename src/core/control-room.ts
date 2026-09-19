@@ -96,6 +96,14 @@ export interface DispatchAttempt {
   execution: TaskExecution;
 }
 
+/** Read-only aggregate exposed by the local HTTP API. */
+export interface ControlRoomSnapshot {
+  projects: LocalProject[];
+  tasks: ControlRoomTask[];
+  executions: TaskExecution[];
+  logs: ExecutionLog[];
+}
+
 export interface NewProject {
   name: string;
   path: string;
