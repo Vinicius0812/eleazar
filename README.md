@@ -56,6 +56,28 @@ O painel mostra somente estado persistido: projetos e tarefas reais, execucoes r
 
 Consulte [o guia do Control Room](docs/control-room.md) para detalhes do transporte e operacao local.
 
+## Projetos com vários diretórios
+
+Um projeto pode agrupar checkouts locais relacionados, em uma ordem explícita. Cada entrada tem ID, rótulo, caminho absoluto, instante de cadastro e indicação de Git. Cadastros antigos com apenas `path` são migrados automaticamente para um único diretório, sem perder tarefas: a tarefa passa a apontar para esse diretório.
+
+Pela API, o novo formato é:
+
+```json
+{
+  "name": "Produto",
+  "directories": [
+    { "name": "API", "path": "C:\\Projetos\\produto-api" },
+    { "name": "Web", "path": "C:\\Projetos\\produto-web" }
+  ]
+}
+```
+
+Ao criar uma tarefa, envie `targetDirectoryId` retornado no projeto. A versão atual define uma tarefa como de **um** diretório; por isso um projeto composto não gera aprovação por si só. Um futuro escopo que selecionar mais de um diretório deverá ir a `waiting_approval` antes do despacho.
+
+### Modo sem worktrees
+
+`ControlRoomService` aceita `{ useWorktrees: false }`. Nesse modo, `create_worktree` é recusada, o serviço não usa `GitWorktreeProvisioner` e a persistência impede dois despachos `planning`/`running` diretos para o mesmo `targetDirectoryId`. Despachos para diretórios diferentes continuam independentes. O modo é apropriado quando cada tarefa opera diretamente no checkout selecionado e requer que o operador mantenha o escopo correto.
+
 ## Seguranca
 
 - O Eleazar nunca tenta extrair credenciais dos provedores.

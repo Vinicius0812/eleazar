@@ -20,8 +20,19 @@ export type TaskAction = (typeof taskActions)[number];
 export interface LocalProject {
   id: string;
   name: string;
+  /** Primary directory kept for callers that only understand the original format. */
+  path: string;
+  directories: LocalProjectDirectory[];
+  createdAt: string;
+}
+
+/** A local checkout which belongs to a project, ordered by `position`. */
+export interface LocalProjectDirectory {
+  id: string;
+  name: string;
   path: string;
   createdAt: string;
+  isGitRepository: boolean;
 }
 
 export interface ControlRoomTask {
@@ -32,6 +43,9 @@ export interface ControlRoomTask {
   priority: TaskPriority;
   status: TaskStatus;
   kind: TaskKind;
+  /** Directory selected by the operator. Null only represents an unmigrated legacy row. */
+  targetDirectoryId: string | null;
+  usesWorktree: boolean;
   worktreePath: string | null;
   dispatchLease: string | null;
   createdAt: string;
@@ -91,6 +105,8 @@ export interface TaskTransition {
 
 export interface DispatchAttempt {
   leaseId: string;
+  /** A worktree isolates writes, so only direct-directory dispatches need a directory lock. */
+  usesWorktree: boolean;
   transition: TaskTransition;
   decision: DelegationDecision;
   execution: TaskExecution;
@@ -106,6 +122,13 @@ export interface ControlRoomSnapshot {
 
 export interface NewProject {
   name: string;
+  /** Legacy single-directory input. New callers should use directories. */
+  path?: string;
+  directories?: readonly NewProjectDirectory[];
+}
+
+export interface NewProjectDirectory {
+  name?: string;
   path: string;
 }
 
@@ -115,12 +138,15 @@ export interface NewTask {
   prompt: string;
   priority?: TaskPriority;
   kind?: TaskKind;
+  /** Defaults to the project's first directory for legacy callers. */
+  targetDirectoryId?: string;
 }
 
 export interface ControlRoomStore {
   createProject(project: LocalProject): void;
   getProject(id: string): LocalProject | null;
   listProjects(): LocalProject[];
+  hasActiveDispatchForDirectory(directoryId: string, excludingTaskId?: string): boolean;
   createTask(task: ControlRoomTask): void;
   getTask(id: string): ControlRoomTask | null;
   listTasks(projectId?: string): ControlRoomTask[];
@@ -142,7 +168,7 @@ export interface ControlRoomStore {
 }
 
 const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
-  queued: ["planning", "cancelled"],
+  queued: ["planning", "waiting_approval", "cancelled"],
   planning: ["queued", "running", "waiting_approval", "failed", "cancelled"],
   running: ["waiting_approval", "completed", "failed", "cancelled"],
   waiting_approval: ["planning", "running", "cancelled"],

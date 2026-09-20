@@ -9,6 +9,7 @@ import type {
   DelegationDecision,
   ExecutionLog,
   LocalProject,
+  LocalProjectDirectory,
   TaskExecution,
   TaskTransition
 } from "../core/control-room.js";
@@ -33,17 +34,32 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   }
 
   createProject(project: LocalProject): void {
-    this.#db.prepare("INSERT INTO projects (id, name, path, created_at) VALUES (@id, @name, @path, @createdAt)").run(project);
+    this.#db.transaction(() => {
+      this.#db.prepare("INSERT INTO projects (id, name, path, created_at) VALUES (@id, @name, @path, @createdAt)").run(project);
+      const insertDirectory = this.#db.prepare(`INSERT INTO project_directories (id, project_id, name, path, position, is_git_repository, created_at)
+        VALUES (@id, @projectId, @name, @path, @position, @isGitRepository, @createdAt)`);
+      project.directories.forEach((directory, position) => insertDirectory.run({ ...directory, projectId: project.id, position, isGitRepository: directory.isGitRepository ? 1 : 0 }));
+    })();
   }
   getProject(id: string): LocalProject | null {
-    return mapProject(this.#db.prepare("SELECT * FROM projects WHERE id = ?").get(id));
+    const row = this.#db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
+    return mapProject(row, row ? this.#directoriesFor(id) : []);
   }
   listProjects(): LocalProject[] {
-    return this.#db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all().map(mapProject).filter(isPresent);
+    return this.#db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all().map((row) => {
+      const item = row as Row;
+      return mapProject(row, this.#directoriesFor(stringValue(item, "id")));
+    }).filter(isPresent);
+  }
+  hasActiveDispatchForDirectory(directoryId: string, excludingTaskId?: string): boolean {
+    const row = this.#db.prepare(`SELECT 1 FROM tasks WHERE target_directory_id = @directoryId
+      AND uses_worktree = 0 AND status IN ('planning', 'running') ${excludingTaskId ? "AND id <> @excludingTaskId" : ""} LIMIT 1`)
+      .get({ directoryId, excludingTaskId });
+    return Boolean(row);
   }
   createTask(task: ControlRoomTask): void {
-    this.#db.prepare(`INSERT INTO tasks (id, project_id, title, prompt, priority, status, kind, worktree_path, dispatch_lease, created_at, updated_at)
-      VALUES (@id, @projectId, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @createdAt, @updatedAt)`).run(task);
+    this.#db.prepare(`INSERT INTO tasks (id, project_id, target_directory_id, uses_worktree, title, prompt, priority, status, kind, worktree_path, dispatch_lease, created_at, updated_at)
+      VALUES (@id, @projectId, @targetDirectoryId, @usesWorktree, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @createdAt, @updatedAt)`).run({ ...task, usesWorktree: task.usesWorktree ? 1 : 0 });
   }
   getTask(id: string): ControlRoomTask | null { return mapTask(this.#db.prepare("SELECT * FROM tasks WHERE id = ?").get(id)); }
   listTasks(projectId?: string): ControlRoomTask[] {
@@ -53,8 +69,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return rows.map(mapTask).filter(isPresent);
   }
   updateTask(task: ControlRoomTask): void {
-    const result = this.#db.prepare(`UPDATE tasks SET title = @title, prompt = @prompt, priority = @priority, status = @status,
-      kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt WHERE id = @id`).run(task);
+    const result = this.#db.prepare(`UPDATE tasks SET target_directory_id = @targetDirectoryId, uses_worktree = @usesWorktree, title = @title, prompt = @prompt, priority = @priority, status = @status,
+      kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt WHERE id = @id`).run({ ...task, usesWorktree: task.usesWorktree ? 1 : 0 });
     if (result.changes !== 1) throw new Error("Tarefa nao encontrada para atualizacao.");
   }
   transitionTask(task: ControlRoomTask, transition: TaskTransition): ControlRoomTask | null {
@@ -62,11 +78,11 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       const previous = this.getTask(task.id);
       if (!previous) return null;
       const fromDispatchLease = transition.fromDispatchLease;
-      const result = this.#db.prepare(`UPDATE tasks SET title = @title, prompt = @prompt, priority = @priority, status = @status,
+      const result = this.#db.prepare(`UPDATE tasks SET target_directory_id = @targetDirectoryId, uses_worktree = @usesWorktree, title = @title, prompt = @prompt, priority = @priority, status = @status,
         kind = @kind, worktree_path = @worktreePath, dispatch_lease = @dispatchLease, updated_at = @updatedAt
         WHERE id = @id AND status = @fromStatus
           AND ((@fromDispatchLease IS NULL AND dispatch_lease IS NULL) OR dispatch_lease = @fromDispatchLease)`).run({
-        ...task, fromStatus: transition.fromStatus, fromDispatchLease
+        ...task, usesWorktree: task.usesWorktree ? 1 : 0, fromStatus: transition.fromStatus, fromDispatchLease
       });
       if (result.changes !== 1) return null;
       this.recordTransition(transition);
@@ -81,9 +97,10 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return this.#db.transaction(() => {
       const current = this.getTask(taskId);
       if (!current || current.status !== "queued") return null;
-      const claimed = { ...current, status: "planning" as const, dispatchLease: attempt.leaseId, updatedAt: attempt.transition.createdAt };
-      const result = this.#db.prepare(`UPDATE tasks SET status = @status, dispatch_lease = @dispatchLease, updated_at = @updatedAt
-        WHERE id = @id AND status = 'queued' AND dispatch_lease IS NULL`).run(claimed);
+      if (!attempt.usesWorktree && current.targetDirectoryId && this.hasActiveDispatchForDirectory(current.targetDirectoryId, taskId)) return null;
+      const claimed = { ...current, status: "planning" as const, usesWorktree: attempt.usesWorktree, dispatchLease: attempt.leaseId, updatedAt: attempt.transition.createdAt };
+      const result = this.#db.prepare(`UPDATE tasks SET status = @status, uses_worktree = @usesWorktree, dispatch_lease = @dispatchLease, updated_at = @updatedAt
+        WHERE id = @id AND status = 'queued' AND dispatch_lease IS NULL`).run({ ...claimed, usesWorktree: claimed.usesWorktree ? 1 : 0 });
       if (result.changes !== 1) return null;
       this.recordTransition(attempt.transition);
       this.recordDelegation(attempt.decision);
@@ -161,6 +178,9 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   #migrate(): void {
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS project_directories (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL,
+        path TEXT NOT NULL, position INTEGER NOT NULL, is_git_repository INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+        UNIQUE(project_id, path), UNIQUE(project_id, position));
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
         prompt TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL, worktree_path TEXT, dispatch_lease TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -174,8 +194,29 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         to_status TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL);
     `);
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
+    this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
+    this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
     this.#addColumnIfMissing("task_transitions", "from_lease", "TEXT");
+    this.#migrateLegacyProjectDirectories();
+    this.#db.exec(`UPDATE tasks SET target_directory_id = (
+      SELECT id FROM project_directories WHERE project_id = tasks.project_id ORDER BY position LIMIT 1
+    ) WHERE target_directory_id IS NULL`);
+  }
+
+  #directoriesFor(projectId: string): LocalProjectDirectory[] {
+    return this.#db.prepare("SELECT * FROM project_directories WHERE project_id = ? ORDER BY position").all(projectId).map(mapDirectory).filter(isPresent);
+  }
+
+  #migrateLegacyProjectDirectories(): void {
+    const legacyProjects = this.#db.prepare(`SELECT p.* FROM projects p WHERE NOT EXISTS (
+      SELECT 1 FROM project_directories d WHERE d.project_id = p.id
+    )`).all() as Row[];
+    const insert = this.#db.prepare(`INSERT INTO project_directories (id, project_id, name, path, position, is_git_repository, created_at)
+      VALUES (@id, @projectId, @name, @path, 0, 0, @createdAt)`);
+    for (const project of legacyProjects) {
+      insert.run({ id: `legacy-${stringValue(project, "id")}`, projectId: stringValue(project, "id"), name: stringValue(project, "name"), path: stringValue(project, "path"), createdAt: stringValue(project, "created_at") });
+    }
   }
 
   #addColumnIfMissing(table: "tasks" | "executions" | "task_transitions", column: string, definition: string): void {
@@ -189,13 +230,17 @@ const isPresent = <T>(value: T | null): value is T => value !== null;
 const stringValue = (row: Row, key: string): string => String(row[key]);
 const nullableString = (row: Row, key: string): string | null => row[key] === null ? null : String(row[key]);
 
-function mapProject(row: unknown): LocalProject | null {
+function mapProject(row: unknown, directories: LocalProjectDirectory[]): LocalProject | null {
   if (!row) return null; const item = row as Row;
-  return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), createdAt: stringValue(item, "created_at") };
+  return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), directories, createdAt: stringValue(item, "created_at") };
+}
+function mapDirectory(row: unknown): LocalProjectDirectory | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), createdAt: stringValue(item, "created_at"), isGitRepository: Boolean(item.is_git_repository) };
 }
 function mapTask(row: unknown): ControlRoomTask | null {
   if (!row) return null; const item = row as Row;
-  return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
+  return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), targetDirectoryId: nullableString(item, "target_directory_id"), usesWorktree: Boolean(item.uses_worktree), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
     kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), dispatchLease: nullableString(item, "dispatch_lease"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }

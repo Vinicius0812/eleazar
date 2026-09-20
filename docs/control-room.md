@@ -27,6 +27,10 @@ O cliente HTTP usa um snapshot consistente para leitura e mutacoes confirmadas p
 
 A interface nao inicia provedores nem despacha tarefas automaticamente. O endpoint de dispatch continua sujeito aos limites do dominio: `push`, `merge` e `deploy` sao bloqueados.
 
+Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e `path` absoluto; o servidor devolve o ID, a ordem e a detecção de Git. A UI permite adicionar, remover e reordenar entradas, e exige a escolha de `targetDirectoryId` ao criar uma tarefa. Seus contratos ficam em `apps/control-room/src/services/contracts.ts`, sem import de Node, SQLite ou do núcleo.
+
+O modo sem worktrees é configurado pelo host ao construir `ControlRoomService` com `{ useWorktrees: false }`. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida por diretório-alvo. Uma tarefa v1 tem um único alvo; aprovação adicional é reservada para um futuro pedido que represente escopo multi-diretório real.
+
 ## Limite de rede
 
 A API escuta exclusivamente em `127.0.0.1`. Ela exige conexao e Host loopback, restringe Origin quando presente e exige `Content-Type: application/json` para mutacoes. Nao exponha a porta por proxy reverso, tunel ou interface de rede.

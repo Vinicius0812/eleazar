@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -92,6 +93,75 @@ describe("Control Room SQLite persistence", () => {
     expect(store.claimDispatch(task.id, newAttempt)?.dispatchLease).toBe("new-lease");
     expect(store.transitionTask(stale, { id: "stale", taskId: task.id, fromStatus: "planning", fromDispatchLease: "old-lease", toStatus: "cancelled", actor: "test", reason: null, createdAt: stale.updatedAt })).toBeNull();
     expect(store.getTask(task.id)).toMatchObject({ status: "planning", dispatchLease: "new-lease" });
+    store.close();
+  });
+
+  it("migra um projeto legado de path unico para seu primeiro diretorio sem perder tarefas", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-legacy-")); temporaryDirectories.push(directory);
+    const databasePath = join(directory, "control-room.sqlite");
+    const legacy = new Database(databasePath);
+    legacy.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL, prompt TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL, worktree_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE executions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, provider TEXT, status TEXT NOT NULL, started_at TEXT, finished_at TEXT, summary TEXT);
+      CREATE TABLE execution_logs (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE delegation_decisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, selected_provider TEXT, reason TEXT NOT NULL, candidates_json TEXT NOT NULL, actions_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL);`);
+    legacy.prepare("INSERT INTO projects VALUES (?, ?, ?, ?)").run("legacy-project", "Legado", process.cwd(), "2026-01-01T00:00:00.000Z");
+    legacy.prepare("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-task", "legacy-project", "Tarefa", "Prompt", "normal", "queued", "planning", null, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
+    legacy.close();
+    const store = new SqliteControlRoomStore(databasePath);
+    expect(store.getProject("legacy-project")).toMatchObject({ path: process.cwd(), directories: [{ id: "legacy-legacy-project", path: process.cwd(), name: "Legado" }] });
+    expect(store.getTask("legacy-task")?.targetDirectoryId).toBe("legacy-legacy-project");
+    store.close();
+  });
+
+  it("registra diretorios ordenados, rejeita invalidos ou duplicados e vincula a tarefa ao alvo escolhido", async () => {
+    const { service, store } = await fixture();
+    const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra);
+    const project = service.registerProject({ name: "Composto", directories: [{ name: "Núcleo", path: process.cwd() }, { name: "Web", path: extra }] });
+    expect(project.directories.map((directory) => directory.name)).toEqual(["Núcleo", "Web"]);
+    const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, title: "Interface", prompt: "Implemente a interface" });
+    expect(task.targetDirectoryId).toBe(project.directories[1]!.id);
+    expect(() => service.registerProject({ name: "Duplicado", directories: [{ path: process.cwd() }, { path: process.cwd() }] })).toThrow("duplicados");
+    expect(() => service.registerProject({ name: "Invalido", directories: [{ path: join(extra, "ausente") }] })).toThrow("nao existe");
+    store.close();
+  });
+
+  it("permite despacho de escopo unico em qualquer diretorio de projeto composto", async () => {
+    const { store } = await fixture();
+    const service = new ControlRoomService(store, undefined, { useWorktrees: false });
+    const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra);
+    const project = service.registerProject({ name: "Composto", directories: [{ path: process.cwd() }, { path: extra }] });
+    const task = service.createTask({ projectId: project.id, title: "Coordene", prompt: "Planeje a integracao" });
+    await expect(service.dispatch(task.id, { selectedProvider: "codex", reason: "teste", candidates: [], requestedActions: [] })).resolves.toMatchObject({ status: "running", usesWorktree: false });
+    expect(store.listExecutions(task.id)).toMatchObject([{ status: "running" }]);
+    store.close();
+  });
+
+  it("bloqueia despachos diretos concorrentes no mesmo diretorio, mas permite diretorios distintos", async () => {
+    const { service, store } = await fixture();
+    const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra);
+    const project = service.registerProject({ name: "Composto", directories: [{ path: process.cwd() }, { path: extra }] });
+    const first = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, title: "A", prompt: "Planeje A" });
+    const same = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, title: "B", prompt: "Planeje B" });
+    const other = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, title: "C", prompt: "Planeje C" });
+    expect(store.claimDispatch(first.id, dispatchAttempt(first.id, "lease-a", "decision-a", "execution-a"))).not.toBeNull();
+    expect(store.claimDispatch(same.id, dispatchAttempt(same.id, "lease-b", "decision-b", "execution-b"))).toBeNull();
+    expect(store.claimDispatch(other.id, dispatchAttempt(other.id, "lease-c", "decision-c", "execution-c"))).not.toBeNull();
+    store.close();
+  });
+
+  it("no modo sem worktrees nao depende de provisionador e serializa o mesmo diretorio", async () => {
+    const { store } = await fixture();
+    const worktrees = new FakeWorktrees();
+    const service = new ControlRoomService(store, worktrees, { useWorktrees: false });
+    const project = service.registerProject({ name: "Direto", path: process.cwd() });
+    const first = service.createTask({ projectId: project.id, title: "A", prompt: "Planeje A" });
+    const second = service.createTask({ projectId: project.id, title: "B", prompt: "Planeje B" });
+    await expect(service.dispatch(first.id, { selectedProvider: "codex", reason: "direto", candidates: [], requestedActions: [] })).resolves.toMatchObject({ status: "running", worktreePath: null });
+    await expect(service.dispatch(second.id, { selectedProvider: "codex", reason: "direto", candidates: [], requestedActions: [] })).rejects.toThrow("reservada");
+    expect(worktrees.calls).toBe(0);
+    await expect(service.dispatch(second.id, { selectedProvider: "codex", reason: "invalido", candidates: [], requestedActions: ["create_worktree"] })).rejects.toThrow("modo sem worktrees");
     store.close();
   });
 });
@@ -298,14 +368,14 @@ describe("Git worktree isolation", () => {
       await mkdir(args.at(-1)!, { recursive: true });
       return "";
     });
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
-    await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" }, task);
+    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
+    await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, directories: [], createdAt: "now" }, task);
     expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", "task-1-lease-1")]);
   });
 
   it("usa destino distinto por lease e nunca remove worktree antiga", async () => {
     const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
-    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
+    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
     const newTask = { ...oldTask, dispatchLease: "new-lease" };
     const commands: readonly string[][] = [];
     const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
@@ -313,7 +383,7 @@ describe("Git worktree isolation", () => {
       if (args.includes("add")) { await mkdir(args.at(-1)!, { recursive: true }); return ""; }
       throw new Error("comando inesperado");
     });
-    const project = { id: "project-1", name: "Project", path: projectDirectory, createdAt: "now" };
+    const project = { id: "project-1", name: "Project", path: projectDirectory, directories: [], createdAt: "now" };
     const oldTarget = await provisioner.prepare(project, oldTask);
     const newTarget = await provisioner.prepare(project, newTask);
     expect(oldTarget).toBe(join(projectDirectory, ".eleazar", "worktrees", "task-1-old-lease"));
@@ -352,6 +422,24 @@ describe("local Control Room API", () => {
     store.close();
   });
 
+  it("aceita colecao de diretorios e o alvo explicito pela API local", async () => {
+    const { service, store } = await fixture();
+    const extra = await mkdtemp(join(tmpdir(), "eleazar-api-directory-")); temporaryDirectories.push(extra);
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+    const headers = { "content-type": "application/json", origin: `http://127.0.0.1:${address.port}` };
+    const projectResponse = await send(address.port, "/api/control-room/projects", [Buffer.from(JSON.stringify({ name: "Produto", directories: [{ name: "API", path: process.cwd() }, { name: "Web", path: extra }] }))], headers);
+    expect(projectResponse.status).toBe(201);
+    const directories = projectResponse.body.directories as Array<{ id: string; name: string }>;
+    expect(directories.map((directory) => directory.name)).toEqual(["API", "Web"]);
+    const taskResponse = await send(address.port, "/api/control-room/tasks", [Buffer.from(JSON.stringify({ projectId: projectResponse.body.id, targetDirectoryId: directories[1]!.id, title: "Tela", prompt: "Implemente", priority: "normal" }))], headers);
+    expect(taskResponse.status).toBe(201);
+    expect(taskResponse.body.targetDirectoryId).toBe(directories[1]!.id);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  });
+
   it("recusa mutacoes sem host loopback ou Content-Type JSON", async () => {
     const { service, store } = await fixture();
     const server = createControlRoomServer(service);
@@ -382,6 +470,7 @@ function dispatchAttempt(taskId: string, leaseId: string, decisionId: string, ex
   const execution: TaskExecution = { id: executionId, taskId, leaseId, provider: "codex", status: "planned", startedAt: null, finishedAt: null, summary: null };
   return {
     leaseId,
+    usesWorktree: false,
     transition: { id: `transition-${leaseId}`, taskId, fromStatus: "queued", fromDispatchLease: null, toStatus: "planning", actor: "test", reason: null, createdAt },
     decision: { id: decisionId, taskId, selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [], createdAt },
     execution

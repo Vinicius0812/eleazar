@@ -102,6 +102,9 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [query, setQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
   const [active, setActive] = useState("overview");
+  const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
+  const [taskProjectId, setTaskProjectId] = useState("");
+  const [taskDirectoryId, setTaskDirectoryId] = useState("");
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!dialog && !busy && focusTrigger.current) {
@@ -129,6 +132,12 @@ export function App({ client }: { client: ControlRoomClient }) {
   function open(next: DialogState) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
+    if (next?.kind === "project") setProjectDirectories([{ name: "", path: "" }]);
+    if (next?.kind === "task") {
+      const projectId = projectFilter !== "all" ? projectFilter : projects[0]?.id ?? "";
+      setTaskProjectId(projectId);
+      setTaskDirectoryId(projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "");
+    }
     setDialog(next);
   }
   async function refresh() {
@@ -172,7 +181,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       () =>
         client.registerProject({
           name: String(fields.get("name")),
-          path: String(fields.get("path")),
+          directories: projectDirectories,
         }),
       "Projeto cadastrado. Ele já está disponível para novas tarefas.",
     );
@@ -183,6 +192,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     void mutate(async () => {
       const task = await client.createTask({
         projectId: String(fields.get("projectId")),
+        targetDirectoryId: String(fields.get("targetDirectoryId")),
         title: String(fields.get("title")),
         prompt: String(fields.get("prompt")),
         priority: String(fields.get("priority")) as Priority,
@@ -210,6 +220,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   const projectName = (id: string) =>
     projects.find((project) => project.id === id)?.name ??
     "Projeto indisponível";
+  const projectForTask = projects.find((project) => project.id === taskProjectId);
+  const directoryName = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.find((directory) => directory.id === task.targetDirectoryId)?.name ?? "Diretório indisponível";
   return (
     <div className="shell">
       <a className="skip-link" href="#main">
@@ -409,7 +421,14 @@ export function App({ client }: { client: ControlRoomClient }) {
                           </span>
                           <span className="project-name">{project.name}</span>
                           <span className="project-path" title={project.path}>
-                            {project.path}
+                            {project.directories.length} diretório{project.directories.length === 1 ? "" : "s"}
+                          </span>
+                          <span className="project-directories" aria-label={`Diretórios de ${project.name}`}>
+                            {project.directories.map((directory) => (
+                              <span key={directory.id} title={directory.path}>
+                                {directory.name}{directory.isGitRepository ? " · Git" : ""}
+                              </span>
+                            ))}
                           </span>
                           <span className="project-footer">
                             <span>
@@ -478,6 +497,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                           <tr>
                             <th>Tarefa</th>
                             <th>Projeto</th>
+                            <th>Diretório</th>
                             <th>Prioridade</th>
                             <th>Status</th>
                             <th>
@@ -500,6 +520,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                               <td className="project-cell">
                                 {projectName(task.projectId)}
                               </td>
+                              <td>{directoryName(task)}</td>
                               <td>
                                 <span className={`priority ${task.priority}`}>
                                   <span className="dot" />
@@ -759,7 +780,7 @@ export function App({ client }: { client: ControlRoomClient }) {
           {dialog.kind === "project" && (
             <form onSubmit={submitProject}>
               <p className="form-intro">
-                Informe o diretório do projeto. O núcleo local valida e
+                Informe um ou mais diretórios do projeto. O núcleo local valida e
                 persiste o cadastro antes de a interface ser atualizada.
               </p>
               <label>
@@ -772,19 +793,39 @@ export function App({ client }: { client: ControlRoomClient }) {
                   placeholder="Meu projeto"
                 />
               </label>
-              <label>
-                Caminho local absoluto
-                <input
-                  name="path"
-                  required
-                  maxLength={500}
-                  placeholder="C:\Projetos\meu-projeto"
-                />
-                <small>
-                  O caminho deve ser absoluto. A validação é feita pelo núcleo
-                  local.
-                </small>
-              </label>
+              <fieldset className="directory-fields">
+                <legend>Diretórios locais</legend>
+                {projectDirectories.map((directory, index) => (
+                  <div className="directory-field" key={index}>
+                    <label>
+                      Rótulo do diretório
+                      <input
+                        value={directory.name}
+                        maxLength={100}
+                        placeholder={`Diretório ${index + 1}`}
+                        onChange={(event) => setProjectDirectories((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))}
+                      />
+                    </label>
+                    <label>
+                      Caminho local absoluto
+                      <input
+                        required
+                        value={directory.path}
+                        maxLength={500}
+                        placeholder="C:\Projetos\meu-projeto"
+                        onChange={(event) => setProjectDirectories((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, path: event.target.value } : item))}
+                      />
+                    </label>
+                    <div className="directory-actions" aria-label={`Ações para diretório ${index + 1}`}>
+                      <button type="button" className="secondary" disabled={busy || index === 0} onClick={() => setProjectDirectories((current) => current.map((item, itemIndex) => itemIndex === index - 1 ? current[index]! : itemIndex === index ? current[index - 1]! : item))}>Subir</button>
+                      <button type="button" className="secondary" disabled={busy || index === projectDirectories.length - 1} onClick={() => setProjectDirectories((current) => current.map((item, itemIndex) => itemIndex === index + 1 ? current[index]! : itemIndex === index ? current[index + 1]! : item))}>Descer</button>
+                      <button type="button" className="secondary danger" disabled={busy || projectDirectories.length === 1} onClick={() => setProjectDirectories((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remover</button>
+                    </div>
+                  </div>
+                ))}
+                <button type="button" className="text-button" disabled={busy} onClick={() => setProjectDirectories((current) => [...current, { name: "", path: "" }])}><Plus size={15} /> Adicionar diretório</button>
+                <small>Os caminhos devem existir, ser absolutos e não podem se repetir.</small>
+              </fieldset>
               <div className="form-actions">
                 <button
                   type="button"
@@ -811,9 +852,12 @@ export function App({ client }: { client: ControlRoomClient }) {
                 <select
                   name="projectId"
                   required
-                  defaultValue={
-                    projectFilter !== "all" ? projectFilter : projects[0]?.id
-                  }
+                  value={taskProjectId}
+                  onChange={(event) => {
+                    const projectId = event.target.value;
+                    setTaskProjectId(projectId);
+                    setTaskDirectoryId(projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "");
+                  }}
                 >
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
@@ -821,6 +865,15 @@ export function App({ client }: { client: ControlRoomClient }) {
                     </option>
                   ))}
                 </select>
+              </label>
+              <label>
+                Diretório-alvo
+                <select name="targetDirectoryId" required value={taskDirectoryId} onChange={(event) => setTaskDirectoryId(event.target.value)}>
+                  {projectForTask?.directories.map((directory) => (
+                    <option key={directory.id} value={directory.id}>{directory.name} · {directory.path}</option>
+                  ))}
+                </select>
+                <small>Toda tarefa é vinculada a um diretório específico.</small>
               </label>
               <label>
                 Título
@@ -881,6 +934,8 @@ export function App({ client }: { client: ControlRoomClient }) {
               </div>
               <h4>Prompt</h4>
               <p className="prompt-text">{dialog.task.prompt}</p>
+              <h4>Diretório-alvo</h4>
+              <p>{directoryName(dialog.task)}</p>
               <small>
                 Criada em{" "}
                 {new Date(dialog.task.createdAt).toLocaleString("pt-BR")}

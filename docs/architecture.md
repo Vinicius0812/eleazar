@@ -39,6 +39,27 @@ Traduzem o contrato interno para a interface oficial de cada agente:
 
 Eleazar nao possui um cofre de senhas. Cada adaptador depende da autenticacao oficial do seu CLI/SDK e retorna somente o estado necessario para diagnostico.
 
+## Control Room e projetos compostos
+
+```text
+React (DTO JSON sem Node/SQLite)
+        |
+        | POST /projects { name, directories[] }
+        | POST /tasks { projectId, targetDirectoryId, ... }
+        v
+API loopback
+        v
+ControlRoomService (validação, seleção e política)
+        v
+SQLite: projects -> project_directories <- tasks.target_directory_id
+```
+
+`project_directories` é uma lista ordenada e contém `id`, `name`, `path`, `createdAt` e `isGitRepository`. A tabela é criada e recebe um diretório sintético para cada projeto legado que só possui `projects.path`; tarefas legadas são então vinculadas a esse diretório. O campo `projects.path` permanece como diretório principal apenas para compatibilidade.
+
+Cada tarefa v1 tem um único `targetDirectoryId`. Isso torna explícito que um projeto com vários checkouts não significa que toda tarefa tocará todos eles. Caso o domínio passe a aceitar vários alvos numa tarefa, esse escopo composto deve transicionar para `waiting_approval` antes de qualquer claim de despacho.
+
+No modo `useWorktrees: false`, o núcleo não invoca nem precisa de `GitWorktreeProvisioner`. O claim SQLite funciona como lock por `targetDirectoryId`: duas tarefas diretas não podem ficar em `planning` ou `running` no mesmo checkout, enquanto diretórios diferentes podem continuar em paralelo. A opção com worktree continua isolando a execução e não ocupa esse lock direto.
+
 ## Proximos marcos
 
 1. Persistir tarefas, execucoes e metricas em SQLite.

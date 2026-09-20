@@ -33,13 +33,18 @@ async function route(service: ControlRoomService, request: IncomingMessage, resp
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {
     const body = await readBody(request);
-    return json(response, 201, service.registerProject({ name: stringField(body, "name"), path: stringField(body, "path") }));
+    const directories = optionalDirectories(body.directories);
+    return json(response, 201, service.registerProject({
+      name: stringField(body, "name"),
+      ...(directories ? { directories } : { path: stringField(body, "path") })
+    }));
   }
   if (method === "POST" && url.pathname === "/api/control-room/tasks") {
     const body = await readBody(request); const priority = optionalString(body, "priority"); const kind = optionalString(body, "kind");
     if (priority && !isTaskPriority(priority)) throw new Error("Prioridade invalida.");
     if (kind && !taskKinds.includes(kind as typeof taskKinds[number])) throw new Error("Tipo de tarefa invalido.");
-    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}) }));
+    const targetDirectoryId = optionalString(body, "targetDirectoryId");
+    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}), ...(targetDirectoryId ? { targetDirectoryId } : {}) }));
   }
   const transitionMatch = /^\/api\/control-room\/tasks\/([^/]+)\/transition$/.exec(url.pathname);
   if (method === "POST" && transitionMatch?.[1]) {
@@ -74,6 +79,18 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
 }
 function stringField(body: Record<string, unknown>, name: string): string { const value = optionalString(body, name); if (!value) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function optionalString(body: Record<string, unknown>, name: string): string | undefined { const value = body[name]; return typeof value === "string" ? value.trim() : undefined; }
+function optionalDirectories(value: unknown): Array<{ name?: string; path: string }> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.length) throw new Error("Campo directories deve conter ao menos um diretorio.");
+  return value.map((directory) => {
+    if (!directory || typeof directory !== "object" || Array.isArray(directory)) throw new Error("Diretorio invalido.");
+    const item = directory as Record<string, unknown>;
+    const path = typeof item.path === "string" ? item.path.trim() : "";
+    const name = typeof item.name === "string" ? item.name.trim() : undefined;
+    if (!path) throw new Error("Cada diretorio exige path.");
+    return { path, ...(name ? { name } : {}) };
+  });
+}
 function arrayOfStrings(value: unknown, name: string): string[] { if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function json(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(body)); }
 

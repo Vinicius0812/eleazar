@@ -438,6 +438,20 @@ h1 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+
+.project-directories {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.project-directories span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .project-card {
   text-align: left;
   background: white;
@@ -1040,6 +1054,28 @@ form small {
   padding-top: 18px;
   margin-top: 22px;
   border-top: 1px solid #e8ebf2;
+}
+
+.directory-fields {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+
+.directory-field {
+  display: grid;
+  gap: 0.55rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.directory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 .danger {
   color: #a14a4a;
