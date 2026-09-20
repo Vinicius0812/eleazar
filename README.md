@@ -52,7 +52,7 @@ Use `--json` em qualquer comando para obter saida legivel por outras ferramentas
 
 A UI conversa somente com `GET /api/control-room/snapshot`, `GET/POST /api/control-room/projects`, `GET/POST /api/control-room/tasks`, `POST /api/control-room/tasks/:id/transition` e `POST /api/control-room/tasks/:id/dispatch`. Os DTOs HTTP espelham os contratos de `src/core/control-room.ts`, mas ficam no pacote da UI sem importar Node, SQLite ou SDKs de provedores.
 
-O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retoma `planning` e rejeitar faz a transicao para `cancelled`. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo nucleo.
+O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo nucleo.
 
 Consulte [o guia do Control Room](docs/control-room.md) para detalhes do transporte e operacao local.
 
@@ -72,11 +72,11 @@ Pela API, o novo formato é:
 }
 ```
 
-Ao criar uma tarefa, envie `targetDirectoryId` retornado no projeto. A versão atual define uma tarefa como de **um** diretório; por isso um projeto composto não gera aprovação por si só. Um futuro escopo que selecionar mais de um diretório deverá ir a `waiting_approval` antes do despacho.
+Ao criar uma tarefa, envie `targetDirectoryId` e `directoryIds`. O alvo principal sempre integra o escopo. Tarefas de um diretório entram na fila; tarefas que selecionam mais de um checkout são persistidas em `waiting_approval` e só voltam a `queued` após a aprovação do operador. Projetos antigos continuam com um escopo de um diretório após a migração.
 
 ### Modo sem worktrees
 
-`ControlRoomService` aceita `{ useWorktrees: false }`. Nesse modo, `create_worktree` é recusada, o serviço não usa `GitWorktreeProvisioner` e a persistência impede dois despachos `planning`/`running` diretos para o mesmo `targetDirectoryId`. Despachos para diretórios diferentes continuam independentes. O modo é apropriado quando cada tarefa opera diretamente no checkout selecionado e requer que o operador mantenha o escopo correto.
+O host local do Control Room inicia com `{ useWorktrees: false }`. Nesse modo, `create_worktree` é recusada, o serviço não usa `GitWorktreeProvisioner` e a persistência impede dois despachos `planning`/`running` diretos cujos escopos tenham qualquer diretório em comum. Escopos disjuntos continuam independentes.
 
 ## Seguranca
 

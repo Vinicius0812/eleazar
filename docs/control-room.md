@@ -23,13 +23,13 @@ O cliente HTTP usa um snapshot consistente para leitura e mutacoes confirmadas p
 - `GET /api/control-room/snapshot` retorna projetos, tarefas, execucoes e logs persistidos.
 - `POST /projects` e `POST /tasks` registram estado no nucleo.
 - `POST /tasks/:id/transition` aplica uma transicao valida.
-- Tarefas em `waiting_approval` viram aprovacoes no painel. Aprovar as leva para `planning`; rejeitar as leva para `cancelled`.
+- Tarefas em `waiting_approval` viram aprovacoes no painel. Aprovar as leva para `queued`; rejeitar as leva para `cancelled`.
 
 A interface nao inicia provedores nem despacha tarefas automaticamente. O endpoint de dispatch continua sujeito aos limites do dominio: `push`, `merge` e `deploy` sao bloqueados.
 
-Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e `path` absoluto; o servidor devolve o ID, a ordem e a detecção de Git. A UI permite adicionar, remover e reordenar entradas, e exige a escolha de `targetDirectoryId` ao criar uma tarefa. Seus contratos ficam em `apps/control-room/src/services/contracts.ts`, sem import de Node, SQLite ou do núcleo.
+Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e `path` absoluto; o servidor devolve o ID, a ordem e a detecção de Git (incluindo metadata `.git` como arquivo de worktree). A UI permite adicionar, remover e reordenar entradas, e exige `targetDirectoryId` e `directoryIds` ao criar uma tarefa. O alvo precisa estar no escopo; diretórios repetidos ou de outro projeto são rejeitados. Escopos com mais de um diretório aparecem em `waiting_approval` até que o operador os mova para `queued`.
 
-O modo sem worktrees é configurado pelo host ao construir `ControlRoomService` com `{ useWorktrees: false }`. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida por diretório-alvo. Uma tarefa v1 tem um único alvo; aprovação adicional é reservada para um futuro pedido que represente escopo multi-diretório real.
+O host de produção do Control Room cria `ControlRoomService` com `{ useWorktrees: false }` e sem provisionador Git. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida para qualquer interseção de `directoryIds`.
 
 ## Limite de rede
 

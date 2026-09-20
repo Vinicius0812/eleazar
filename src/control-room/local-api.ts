@@ -44,7 +44,8 @@ async function route(service: ControlRoomService, request: IncomingMessage, resp
     if (priority && !isTaskPriority(priority)) throw new Error("Prioridade invalida.");
     if (kind && !taskKinds.includes(kind as typeof taskKinds[number])) throw new Error("Tipo de tarefa invalido.");
     const targetDirectoryId = optionalString(body, "targetDirectoryId");
-    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}), ...(targetDirectoryId ? { targetDirectoryId } : {}) }));
+    const directoryIds = optionalArrayOfStrings(body.directoryIds, "directoryIds");
+    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}), ...(targetDirectoryId ? { targetDirectoryId } : {}), ...(directoryIds ? { directoryIds } : {}) }));
   }
   const transitionMatch = /^\/api\/control-room\/tasks\/([^/]+)\/transition$/.exec(url.pathname);
   if (method === "POST" && transitionMatch?.[1]) {
@@ -90,6 +91,11 @@ function optionalDirectories(value: unknown): Array<{ name?: string; path: strin
     if (!path) throw new Error("Cada diretorio exige path.");
     return { path, ...(name ? { name } : {}) };
   });
+}
+function optionalArrayOfStrings(value: unknown, name: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string" && item.trim())) throw new Error(`Campo invalido: ${name}`);
+  return value.map((item) => item.trim());
 }
 function arrayOfStrings(value: unknown, name: string): string[] { if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function json(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(body)); }

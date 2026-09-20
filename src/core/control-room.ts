@@ -45,6 +45,8 @@ export interface ControlRoomTask {
   kind: TaskKind;
   /** Directory selected by the operator. Null only represents an unmigrated legacy row. */
   targetDirectoryId: string | null;
+  /** Ordered execution scope. The primary target is always its first member. */
+  directoryIds: string[];
   usesWorktree: boolean;
   worktreePath: string | null;
   dispatchLease: string | null;
@@ -140,13 +142,15 @@ export interface NewTask {
   kind?: TaskKind;
   /** Defaults to the project's first directory for legacy callers. */
   targetDirectoryId?: string;
+  /** Additional directories affected by the task, in execution-scope order. */
+  directoryIds?: readonly string[];
 }
 
 export interface ControlRoomStore {
   createProject(project: LocalProject): void;
   getProject(id: string): LocalProject | null;
   listProjects(): LocalProject[];
-  hasActiveDispatchForDirectory(directoryId: string, excludingTaskId?: string): boolean;
+  hasActiveDispatchForDirectories(directoryIds: readonly string[], excludingTaskId?: string): boolean;
   createTask(task: ControlRoomTask): void;
   getTask(id: string): ControlRoomTask | null;
   listTasks(projectId?: string): ControlRoomTask[];
@@ -171,7 +175,7 @@ const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   queued: ["planning", "waiting_approval", "cancelled"],
   planning: ["queued", "running", "waiting_approval", "failed", "cancelled"],
   running: ["waiting_approval", "completed", "failed", "cancelled"],
-  waiting_approval: ["planning", "running", "cancelled"],
+  waiting_approval: ["queued", "cancelled"],
   completed: [],
   failed: ["queued", "cancelled"],
   cancelled: []

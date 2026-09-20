@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { ControlRoomService, type WorktreeProvisioner } from "../src/core/contro
 import type { ControlRoomTask, DispatchAttempt, LocalProject, TaskExecution } from "../src/core/control-room.js";
 import { GitWorktreeProvisioner } from "../src/core/git-worktree-provisioner.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
+import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
 
 const temporaryDirectories: string[] = [];
@@ -111,7 +112,7 @@ describe("Control Room SQLite persistence", () => {
     legacy.close();
     const store = new SqliteControlRoomStore(databasePath);
     expect(store.getProject("legacy-project")).toMatchObject({ path: process.cwd(), directories: [{ id: "legacy-legacy-project", path: process.cwd(), name: "Legado" }] });
-    expect(store.getTask("legacy-task")?.targetDirectoryId).toBe("legacy-legacy-project");
+    expect(store.getTask("legacy-task")).toMatchObject({ targetDirectoryId: "legacy-legacy-project", directoryIds: ["legacy-legacy-project"] });
     store.close();
   });
 
@@ -120,8 +121,11 @@ describe("Control Room SQLite persistence", () => {
     const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra);
     const project = service.registerProject({ name: "Composto", directories: [{ name: "Núcleo", path: process.cwd() }, { name: "Web", path: extra }] });
     expect(project.directories.map((directory) => directory.name)).toEqual(["Núcleo", "Web"]);
-    const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, title: "Interface", prompt: "Implemente a interface" });
-    expect(task.targetDirectoryId).toBe(project.directories[1]!.id);
+    const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, directoryIds: [project.directories[1]!.id], title: "Interface", prompt: "Implemente a interface" });
+    expect(task).toMatchObject({ targetDirectoryId: project.directories[1]!.id, directoryIds: [project.directories[1]!.id], status: "queued" });
+    expect(() => service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: [project.directories[1]!.id], title: "Inválida", prompt: "Teste" })).toThrow("alvo");
+    expect(() => service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: [project.directories[0]!.id, project.directories[0]!.id], title: "Duplicada", prompt: "Teste" })).toThrow("duplicados");
+    expect(() => service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: [project.directories[0]!.id, "diretorio-externo"], title: "Externa", prompt: "Teste" })).toThrow("pertencer");
     expect(() => service.registerProject({ name: "Duplicado", directories: [{ path: process.cwd() }, { path: process.cwd() }] })).toThrow("duplicados");
     expect(() => service.registerProject({ name: "Invalido", directories: [{ path: join(extra, "ausente") }] })).toThrow("nao existe");
     store.close();
@@ -138,13 +142,27 @@ describe("Control Room SQLite persistence", () => {
     store.close();
   });
 
-  it("bloqueia despachos diretos concorrentes no mesmo diretorio, mas permite diretorios distintos", async () => {
-    const { service, store } = await fixture();
+  it("persiste escopo composto em waiting_approval e o libera para queued somente apos aprovacao", async () => {
+    const { store } = await fixture();
+    const service = new ControlRoomService(store, undefined, { useWorktrees: false });
     const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra);
     const project = service.registerProject({ name: "Composto", directories: [{ path: process.cwd() }, { path: extra }] });
-    const first = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, title: "A", prompt: "Planeje A" });
-    const same = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, title: "B", prompt: "Planeje B" });
-    const other = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, title: "C", prompt: "Planeje C" });
+    const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, directoryIds: [project.directories[0]!.id, project.directories[1]!.id], title: "Integração", prompt: "Coordene os dois diretórios" });
+    expect(task).toMatchObject({ status: "waiting_approval", targetDirectoryId: project.directories[1]!.id, directoryIds: [project.directories[1]!.id, project.directories[0]!.id] });
+    await expect(service.dispatch(task.id, { selectedProvider: "codex", reason: "antes", candidates: [], requestedActions: [] })).rejects.toThrow("pronta");
+    expect(service.transitionTask(task.id, "queued", "operator", "escopo aprovado").status).toBe("queued");
+    await expect(service.dispatch(task.id, { selectedProvider: "codex", reason: "depois", candidates: [], requestedActions: [] })).resolves.toMatchObject({ status: "running" });
+    store.close();
+  });
+
+  it("bloqueia despachos diretos concorrentes no mesmo diretorio, mas permite diretorios distintos", async () => {
+    const { service, store } = await fixture();
+    const extra = await mkdtemp(join(tmpdir(), "eleazar-directory-")); const third = await mkdtemp(join(tmpdir(), "eleazar-directory-")); temporaryDirectories.push(extra, third);
+    const project = service.registerProject({ name: "Composto", directories: [{ path: process.cwd() }, { path: extra }, { path: third }] });
+    const first = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: [project.directories[0]!.id, project.directories[1]!.id], title: "A", prompt: "Planeje A" });
+    const same = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[1]!.id, title: "B", prompt: "Planeje B" });
+    const other = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[2]!.id, title: "C", prompt: "Planeje C" });
+    service.transitionTask(first.id, "queued", "operator", "escopo aprovado");
     expect(store.claimDispatch(first.id, dispatchAttempt(first.id, "lease-a", "decision-a", "execution-a"))).not.toBeNull();
     expect(store.claimDispatch(same.id, dispatchAttempt(same.id, "lease-b", "decision-b", "execution-b"))).toBeNull();
     expect(store.claimDispatch(other.id, dispatchAttempt(other.id, "lease-c", "decision-c", "execution-c"))).not.toBeNull();
@@ -162,6 +180,18 @@ describe("Control Room SQLite persistence", () => {
     await expect(service.dispatch(second.id, { selectedProvider: "codex", reason: "direto", candidates: [], requestedActions: [] })).rejects.toThrow("reservada");
     expect(worktrees.calls).toBe(0);
     await expect(service.dispatch(second.id, { selectedProvider: "codex", reason: "invalido", candidates: [], requestedActions: ["create_worktree"] })).rejects.toThrow("modo sem worktrees");
+    store.close();
+  });
+
+  it("configura o host local sem provisionador Git e marca arquivo .git como repositorio", async () => {
+    const { store } = await fixture();
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-git-file-")); temporaryDirectories.push(directory);
+    await writeFile(join(directory, ".git"), "gitdir: ../metadata");
+    const service = createLocalControlRoomService(store);
+    const project = service.registerProject({ name: "Worktree Git", path: directory });
+    expect(project.directories[0]?.isGitRepository).toBe(true);
+    const task = service.createTask({ projectId: project.id, title: "Direta", prompt: "Planeje" });
+    await expect(service.dispatch(task.id, { selectedProvider: "codex", reason: "host", candidates: [], requestedActions: ["create_worktree"] })).rejects.toThrow("modo sem worktrees");
     store.close();
   });
 });
@@ -368,14 +398,14 @@ describe("Git worktree isolation", () => {
       await mkdir(args.at(-1)!, { recursive: true });
       return "";
     });
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
+    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
     await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, directories: [], createdAt: "now" }, task);
     expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", "task-1-lease-1")]);
   });
 
   it("usa destino distinto por lease e nunca remove worktree antiga", async () => {
     const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
-    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
+    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
     const newTask = { ...oldTask, dispatchLease: "new-lease" };
     const commands: readonly string[][] = [];
     const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
@@ -433,9 +463,9 @@ describe("local Control Room API", () => {
     expect(projectResponse.status).toBe(201);
     const directories = projectResponse.body.directories as Array<{ id: string; name: string }>;
     expect(directories.map((directory) => directory.name)).toEqual(["API", "Web"]);
-    const taskResponse = await send(address.port, "/api/control-room/tasks", [Buffer.from(JSON.stringify({ projectId: projectResponse.body.id, targetDirectoryId: directories[1]!.id, title: "Tela", prompt: "Implemente", priority: "normal" }))], headers);
+    const taskResponse = await send(address.port, "/api/control-room/tasks", [Buffer.from(JSON.stringify({ projectId: projectResponse.body.id, targetDirectoryId: directories[1]!.id, directoryIds: [directories[0]!.id, directories[1]!.id], title: "Tela", prompt: "Implemente", priority: "normal" }))], headers);
     expect(taskResponse.status).toBe(201);
-    expect(taskResponse.body.targetDirectoryId).toBe(directories[1]!.id);
+    expect(taskResponse.body).toMatchObject({ targetDirectoryId: directories[1]!.id, directoryIds: [directories[1]!.id, directories[0]!.id], status: "waiting_approval" });
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     store.close();
   });

@@ -45,7 +45,7 @@ Eleazar nao possui um cofre de senhas. Cada adaptador depende da autenticacao of
 React (DTO JSON sem Node/SQLite)
         |
         | POST /projects { name, directories[] }
-        | POST /tasks { projectId, targetDirectoryId, ... }
+        | POST /tasks { projectId, targetDirectoryId, directoryIds, ... }
         v
 API loopback
         v
@@ -54,11 +54,11 @@ ControlRoomService (validação, seleção e política)
 SQLite: projects -> project_directories <- tasks.target_directory_id
 ```
 
-`project_directories` é uma lista ordenada e contém `id`, `name`, `path`, `createdAt` e `isGitRepository`. A tabela é criada e recebe um diretório sintético para cada projeto legado que só possui `projects.path`; tarefas legadas são então vinculadas a esse diretório. O campo `projects.path` permanece como diretório principal apenas para compatibilidade.
+`project_directories` é uma lista ordenada e contém `id`, `name`, `path`, `createdAt` e `isGitRepository`. `task_directory_scopes` persiste a lista ordenada dos diretórios afetados por cada tarefa. As migrações criam um diretório sintético para cada projeto legado que só possui `projects.path` e vinculam cada tarefa antiga a um escopo de um diretório. O campo `projects.path` permanece como diretório principal apenas para compatibilidade.
 
-Cada tarefa v1 tem um único `targetDirectoryId`. Isso torna explícito que um projeto com vários checkouts não significa que toda tarefa tocará todos eles. Caso o domínio passe a aceitar vários alvos numa tarefa, esse escopo composto deve transicionar para `waiting_approval` antes de qualquer claim de despacho.
+Cada tarefa declara um `targetDirectoryId` principal e uma lista `directoryIds` que sempre o inclui. Isso torna explícito que um projeto com vários checkouts não significa que toda tarefa tocará todos eles. Um escopo com mais de um diretório nasce em `waiting_approval`; o operador aprova a transição para `queued` antes de qualquer claim de despacho.
 
-No modo `useWorktrees: false`, o núcleo não invoca nem precisa de `GitWorktreeProvisioner`. O claim SQLite funciona como lock por `targetDirectoryId`: duas tarefas diretas não podem ficar em `planning` ou `running` no mesmo checkout, enquanto diretórios diferentes podem continuar em paralelo. A opção com worktree continua isolando a execução e não ocupa esse lock direto.
+O host local usa `useWorktrees: false`, portanto não invoca nem precisa de `GitWorktreeProvisioner`. O claim SQLite funciona como lock por interseção de escopo: duas tarefas diretas não podem ficar em `planning` ou `running` se compartilharem qualquer checkout, enquanto escopos disjuntos podem continuar em paralelo. A opção programática com worktree continua isolando a execução e não ocupa esse lock direto.
 
 ## Proximos marcos
 

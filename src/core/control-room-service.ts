@@ -62,7 +62,7 @@ export class ControlRoomService {
         name: directory.name?.trim() || defaultDirectoryName(path),
         path,
         createdAt: now(),
-        isGitRepository: existsSync(join(path, ".git"))
+        isGitRepository: isGitRepository(path)
       };
     });
     if (directories.some((directory) => !directory.name)) throw new Error("O rotulo do diretorio e obrigatorio.");
@@ -87,6 +87,13 @@ export class ControlRoomService {
     if (!targetDirectoryId || !project.directories.some((directory) => directory.id === targetDirectoryId)) {
       throw new Error("Selecione um diretorio valido para a tarefa.");
     }
+    const requestedDirectoryIds = [...(input.directoryIds ?? [targetDirectoryId])];
+    if (!requestedDirectoryIds.includes(targetDirectoryId)) throw new Error("O diretorio-alvo deve fazer parte do escopo da tarefa.");
+    if (new Set(requestedDirectoryIds).size !== requestedDirectoryIds.length) throw new Error("O escopo da tarefa nao pode conter diretorios duplicados.");
+    if (!requestedDirectoryIds.every((directoryId) => project.directories.some((directory) => directory.id === directoryId))) {
+      throw new Error("Todos os diretorios do escopo devem pertencer ao projeto.");
+    }
+    const directoryIds = [targetDirectoryId, ...requestedDirectoryIds.filter((directoryId) => directoryId !== targetDirectoryId)];
     const createdAt = now();
     const task: ControlRoomTask = {
       id: randomUUID(),
@@ -96,8 +103,9 @@ export class ControlRoomService {
       priority: input.priority ?? "normal",
       kind: input.kind ?? classifyTask(input.prompt),
       targetDirectoryId,
+      directoryIds,
       usesWorktree: false,
-      status: "queued",
+      status: directoryIds.length > 1 ? "waiting_approval" : "queued",
       worktreePath: null,
       dispatchLease: null,
       createdAt,
@@ -210,6 +218,13 @@ function normalizeDirectoryPath(path: string): string {
 function defaultDirectoryName(path: string): string {
   const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts.at(-1) || path;
+}
+
+function isGitRepository(path: string): boolean {
+  try {
+    const metadata = statSync(join(path, ".git"));
+    return metadata.isDirectory() || metadata.isFile();
+  } catch { return false; }
 }
 
 export function isTaskPriority(value: string): value is TaskPriority {

@@ -1077,6 +1077,21 @@ form small {
   flex-wrap: wrap;
   gap: 0.45rem;
 }
+
+.task-scope {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+
+.scope-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
 .danger {
   color: #a14a4a;
 }

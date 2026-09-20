@@ -16,7 +16,7 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
       const approvals = snapshot.tasks.filter((task) => task.status === "waiting_approval").map((task): Approval => ({
         id: task.id, taskId: task.id, title: task.title,
         description: "A tarefa esta aguardando uma decisao do operador no nucleo local.",
-        action: "Retomar planejamento ou cancelar tarefa"
+        action: "Liberar para a fila ou cancelar tarefa"
       }));
       return { projects: snapshot.projects, tasks: snapshot.tasks, runs: snapshot.executions, logs: snapshot.logs, approvals,
         alerts: approvals.length ? [{ id: "waiting-approval", level: "warning" as const, title: "Decisao pendente", message: `${approvals.length} tarefa(s) aguardam revisao.` }] : [] } satisfies ControlRoomSnapshot;
@@ -24,7 +24,7 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     registerProject(input: RegisterProjectInput) { return request<Project>("/projects", { method: "POST", body: JSON.stringify(input) }); },
     createTask(input: CreateTaskInput) { return request<Task>("/tasks", { method: "POST", body: JSON.stringify(input) }); },
     async decideApproval(taskId, decision) {
-      await request<Task>(`/tasks/${encodeURIComponent(taskId)}/transition`, { method: "POST", body: JSON.stringify({ status: decision === "approve" ? "planning" : "cancelled", actor: "local-operator", reason: decision === "approve" ? "aprovada pelo operador" : "cancelada pelo operador" }) });
+      await request<Task>(`/tasks/${encodeURIComponent(taskId)}/transition`, { method: "POST", body: JSON.stringify({ status: decision === "approve" ? "queued" : "cancelled", actor: "local-operator", reason: decision === "approve" ? "aprovada pelo operador" : "cancelada pelo operador" }) });
     }
   };
 }

@@ -105,6 +105,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [taskProjectId, setTaskProjectId] = useState("");
   const [taskDirectoryId, setTaskDirectoryId] = useState("");
+  const [taskDirectoryIds, setTaskDirectoryIds] = useState<string[]>([]);
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!dialog && !busy && focusTrigger.current) {
@@ -136,7 +137,9 @@ export function App({ client }: { client: ControlRoomClient }) {
     if (next?.kind === "task") {
       const projectId = projectFilter !== "all" ? projectFilter : projects[0]?.id ?? "";
       setTaskProjectId(projectId);
-      setTaskDirectoryId(projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "");
+      const directoryId = projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "";
+      setTaskDirectoryId(directoryId);
+      setTaskDirectoryIds(directoryId ? [directoryId] : []);
     }
     setDialog(next);
   }
@@ -193,6 +196,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       const task = await client.createTask({
         projectId: String(fields.get("projectId")),
         targetDirectoryId: String(fields.get("targetDirectoryId")),
+        directoryIds: taskDirectoryIds,
         title: String(fields.get("title")),
         prompt: String(fields.get("prompt")),
         priority: String(fields.get("priority")) as Priority,
@@ -222,6 +226,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     "Projeto indisponível";
   const projectForTask = projects.find((project) => project.id === taskProjectId);
   const directoryName = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.find((directory) => directory.id === task.targetDirectoryId)?.name ?? "Diretório indisponível";
+  const directoryNames = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.filter((directory) => task.directoryIds.includes(directory.id)).map((directory) => directory.name).join(", ") ?? "Diretório indisponível";
   return (
     <div className="shell">
       <a className="skip-link" href="#main">
@@ -856,7 +861,9 @@ export function App({ client }: { client: ControlRoomClient }) {
                   onChange={(event) => {
                     const projectId = event.target.value;
                     setTaskProjectId(projectId);
-                    setTaskDirectoryId(projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "");
+                    const directoryId = projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "";
+                    setTaskDirectoryId(directoryId);
+                    setTaskDirectoryIds(directoryId ? [directoryId] : []);
                   }}
                 >
                   {projects.map((project) => (
@@ -868,13 +875,27 @@ export function App({ client }: { client: ControlRoomClient }) {
               </label>
               <label>
                 Diretório-alvo
-                <select name="targetDirectoryId" required value={taskDirectoryId} onChange={(event) => setTaskDirectoryId(event.target.value)}>
+                <select name="targetDirectoryId" required value={taskDirectoryId} onChange={(event) => {
+                  const directoryId = event.target.value;
+                  setTaskDirectoryId(directoryId);
+                  setTaskDirectoryIds((current) => [directoryId, ...current.filter((item) => item !== directoryId)]);
+                }}>
                   {projectForTask?.directories.map((directory) => (
                     <option key={directory.id} value={directory.id}>{directory.name} · {directory.path}</option>
                   ))}
                 </select>
                 <small>Toda tarefa é vinculada a um diretório específico.</small>
               </label>
+              <fieldset className="task-scope">
+                <legend>Diretórios adicionais afetados</legend>
+                {projectForTask?.directories.filter((directory) => directory.id !== taskDirectoryId).map((directory) => (
+                  <label key={directory.id} className="scope-option">
+                    <input type="checkbox" checked={taskDirectoryIds.includes(directory.id)} onChange={(event) => setTaskDirectoryIds((current) => event.target.checked ? [...current, directory.id] : current.filter((item) => item !== directory.id))} />
+                    {directory.name}
+                  </label>
+                ))}
+                <small>Mais de um diretório exige aprovação antes do despacho.</small>
+              </fieldset>
               <label>
                 Título
                 <input
@@ -935,7 +956,7 @@ export function App({ client }: { client: ControlRoomClient }) {
               <h4>Prompt</h4>
               <p className="prompt-text">{dialog.task.prompt}</p>
               <h4>Diretório-alvo</h4>
-              <p>{directoryName(dialog.task)}</p>
+              <p>{directoryNames(dialog.task)}{dialog.task.directoryIds.length > 1 ? " · Escopo composto" : ""}</p>
               <small>
                 Criada em{" "}
                 {new Date(dialog.task.createdAt).toLocaleString("pt-BR")}
@@ -954,7 +975,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                 {dialog.approval.action}
               </div>
               <p className="form-intro">
-                Aprovar retoma o planejamento da tarefa. Rejeitar a cancela.
+                Aprovar devolve a tarefa à fila. Rejeitar a cancela.
                 A decisão é gravada pelo núcleo local antes da atualização.
               </p>
               <div className="form-actions">
@@ -978,7 +999,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                     void mutate(
                       () =>
                         client.decideApproval(dialog.approval.id, "approve"),
-                      "Proposta aprovada. A tarefa voltou ao planejamento.",
+                      "Proposta aprovada. A tarefa voltou à fila.",
                     )
                   }
                 >
