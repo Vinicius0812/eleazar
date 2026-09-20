@@ -22,6 +22,14 @@ async function fixture(): Promise<{ service: ControlRoomService; store: SqliteCo
 }
 
 describe("Control Room SQLite persistence", () => {
+  it("permite cleanup idempotente do store", async () => {
+    const { store } = await fixture();
+    expect(() => {
+      store.close();
+      store.close();
+    }).not.toThrow();
+  });
+
   it("persiste projetos, tarefas e historico de transicoes", async () => {
     const { service, store } = await fixture();
     const project = service.registerProject({ name: "Core", path: process.cwd() });

@@ -16,6 +16,7 @@ import type {
 /** SQLite persistence for the local Control Room. Database paths normally live under .eleazar/. */
 export class SqliteControlRoomStore implements ControlRoomStore {
   readonly #db: Database.Database;
+  #closed = false;
 
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true });
@@ -25,7 +26,11 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#migrate();
   }
 
-  close(): void { this.#db.close(); }
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#db.close();
+  }
 
   createProject(project: LocalProject): void {
     this.#db.prepare("INSERT INTO projects (id, name, path, created_at) VALUES (@id, @name, @path, @createdAt)").run(project);
