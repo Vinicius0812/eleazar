@@ -77,7 +77,16 @@ export class ControlRoomService {
   transitionTask(taskId: string, toStatus: TaskStatus, actor = "control-room", reason?: string): ControlRoomTask {
     const task = this.requireTask(taskId);
     assertValidTransition(task.status, toStatus);
-    const updated = { ...task, status: toStatus, dispatchLease: retainsLease(toStatus) ? task.dispatchLease : null, updatedAt: now() };
+    const updated = {
+      ...task,
+      status: toStatus,
+      // A queued task will receive a fresh dispatch lease. Keeping the old
+      // worktree here lets a later dispatch without create_worktree reuse an
+      // artifact that belongs to the previous attempt.
+      worktreePath: toStatus === "queued" ? null : task.worktreePath,
+      dispatchLease: retainsLease(toStatus) ? task.dispatchLease : null,
+      updatedAt: now()
+    };
     const transitioned = this.store.transitionTask(updated, {
       id: randomUUID(), taskId, fromStatus: task.status, fromDispatchLease: task.dispatchLease, toStatus, actor,
       reason: reason?.trim() || null, createdAt: updated.updatedAt
