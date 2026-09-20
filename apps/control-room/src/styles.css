@@ -977,6 +977,7 @@ progress::-webkit-progress-value {
 dialog {
   width: min(520px, calc(100% - 32px));
   max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   border: 1px solid #e0e3ec;
   border-radius: 12px;
   padding: 25px;
