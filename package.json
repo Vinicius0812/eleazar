@@ -25,7 +25,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.118.0",
+    "@openai/codex-sdk": "^0.155.1",
     "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {

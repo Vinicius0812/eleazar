@@ -97,6 +97,21 @@ describe("Control Room SQLite persistence", () => {
     store.close();
   });
 
+  it("persiste a saida completa e os arquivos atribuidos a uma execucao", async () => {
+    const { store } = await fixture();
+    const service = new ControlRoomService(store, undefined, { useWorktrees: false });
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Resultado", prompt: "Retorne Markdown" });
+    const running = await service.dispatch(task.id, { selectedProvider: "codex", reason: "teste", candidates: [], requestedActions: [] });
+    const execution = store.listExecutions(task.id)[0]!;
+    service.finishProviderRun(task.id, running.dispatchLease!, { provider: "codex", status: "success", response: "# Resultado\n\nConteúdo completo.", durationMs: 10 }, [{ id: "file-1", executionId: execution.id, directoryId: project.directories[0]!.id, path: "README.md", kind: "modified", additions: 3, deletions: 1 }]);
+    const detail = service.executionDetail(execution.id)!;
+    expect(detail.execution).toMatchObject({ output: "# Resultado\n\nConteúdo completo.", summary: "# Resultado\n\nConteúdo completo." });
+    expect(detail.files).toMatchObject([{ path: "README.md", additions: 3, deletions: 1 }]);
+    expect(detail.history).toHaveLength(1);
+    store.close();
+  });
+
   it("migra um projeto legado de path unico para seu primeiro diretorio sem perder tarefas", async () => {
     const directory = await mkdtemp(join(tmpdir(), "eleazar-legacy-")); temporaryDirectories.push(directory);
     const databasePath = join(directory, "control-room.sqlite");
@@ -448,6 +463,24 @@ describe("local Control Room API", () => {
     const response = await send(address.port, "/api/control-room/projects", [body.subarray(0, split), body.subarray(split)], { "content-type": "application/json", origin: `http://127.0.0.1:${address.port}` });
     expect(response.status).toBe(201);
     expect(response.body.name).toBe("Ação local");
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store.close();
+  });
+
+  it("retorna o detalhe de uma execucao com seu historico", async () => {
+    const { store } = await fixture();
+    const service = new ControlRoomService(store, undefined, { useWorktrees: false });
+    const project = service.registerProject({ name: "Local", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Detalhe", prompt: "Read state" });
+    const running = await service.dispatch(task.id, { selectedProvider: "codex", reason: "teste", candidates: [], requestedActions: [] });
+    const execution = store.listExecutions(task.id)[0]!;
+    service.finishProviderRun(task.id, running.dispatchLease!, { provider: "codex", status: "success", response: "# Pronto", durationMs: 2 });
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+    const response = await send(address.port, `/api/control-room/executions/${execution.id}`, [], { host: `127.0.0.1:${address.port}`, origin: "http://127.0.0.1:5173" }, "GET");
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ execution: { id: execution.id, output: "# Pronto" }, task: { id: task.id }, history: [{ id: execution.id }] });
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     store.close();
   });

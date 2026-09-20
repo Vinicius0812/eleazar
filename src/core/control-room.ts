@@ -1,4 +1,4 @@
-import type { ProviderName, TaskKind } from "./contracts.js";
+import type { ProviderName, TaskKind, TokenUsage } from "./contracts.js";
 
 export const taskPriorities = ["low", "normal", "high", "critical"] as const;
 export type TaskPriority = (typeof taskPriorities)[number];
@@ -65,6 +65,51 @@ export interface TaskExecution {
   startedAt: string | null;
   finishedAt: string | null;
   summary: string | null;
+  /** Full provider output, capped before persistence to protect the local database. */
+  output?: string | null;
+  /** Provider-reported token figures; absent when a CLI does not expose them. */
+  usage?: TokenUsage | null;
+}
+
+export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
+export interface ProviderUsageStatus {
+  source: ProviderUsageSource;
+  usedPercent: number | null;
+  resetAt: string | null;
+  windowDurationMins: number | null;
+  totalTokens: number | null;
+  lifetimeTokens: number | null;
+  todayTokens: number | null;
+}
+export interface ProviderStatus {
+  provider: ProviderName;
+  available: boolean;
+  authenticated: boolean | null;
+  version: string | null;
+  detail: string;
+  fetchedAt: string;
+  usage: ProviderUsageStatus;
+}
+
+export type ExecutionFileChangeKind = "added" | "modified" | "deleted" | "untracked" | "preexisting";
+
+export interface ExecutionFileChange {
+  id: string;
+  executionId: string;
+  directoryId: string;
+  path: string;
+  kind: ExecutionFileChangeKind;
+  additions: number | null;
+  deletions: number | null;
+}
+
+export interface ExecutionDetail {
+  execution: TaskExecution;
+  task: ControlRoomTask;
+  project: LocalProject;
+  logs: ExecutionLog[];
+  files: ExecutionFileChange[];
+  history: TaskExecution[];
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -159,10 +204,12 @@ export interface ControlRoomStore {
   claimDispatch(taskId: string, attempt: DispatchAttempt): ControlRoomTask | null;
   completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null;
   failDispatchAttempt(taskId: string, leaseId: string, transition: TaskTransition, executionSummary: string, log: ExecutionLog): ControlRoomTask | null;
+  finishExecution(taskId: string, leaseId: string, provider: ProviderName, status: "completed" | "failed", transition: TaskTransition, summary: string, output: string, files: readonly ExecutionFileChange[], log: ExecutionLog, usage?: TokenUsage): ControlRoomTask | null;
   createExecution(execution: TaskExecution): void;
   getExecution(id: string): TaskExecution | null;
   updateExecution(execution: TaskExecution): void;
   listExecutions(taskId: string): TaskExecution[];
+  listExecutionFiles(executionId: string): ExecutionFileChange[];
   appendLog(log: ExecutionLog): void;
   listLogs(executionId: string): ExecutionLog[];
   recordDelegation(decision: DelegationDecision): void;

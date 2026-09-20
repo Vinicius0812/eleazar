@@ -3,12 +3,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
 import { taskActions, taskStatuses, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
 import { providerNames, taskKinds, type ProviderName } from "../core/contracts.js";
+import type { ControlRoomTaskExecutor } from "./task-executor.js";
+import type { ProviderStatusService } from "./provider-status.js";
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, request, response);
+      await route(service, executor, providers, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -17,7 +19,7 @@ export function createControlRoomServer(service: ControlRoomService): Server {
   });
 }
 
-async function route(service: ControlRoomService, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -29,6 +31,20 @@ async function route(service: ControlRoomService, request: IncomingMessage, resp
   }
   if (method !== "GET" && method !== "HEAD") assertJsonMutation(request);
   if (method === "GET" && url.pathname === "/api/control-room/snapshot") return json(response, 200, service.snapshot());
+  if (method === "GET" && url.pathname === "/api/control-room/providers/status") {
+    if (!providers) return json(response, 200, []);
+    return json(response, 200, await providers.list(url.searchParams.get("refresh") === "true"));
+  }
+  const executionMatch = /^\/api\/control-room\/executions\/([^/]+)$/.exec(url.pathname);
+  if (method === "GET" && executionMatch?.[1]) {
+    const detail = service.executionDetail(decodeURIComponent(executionMatch[1]));
+    if (!detail) {
+      const error = new Error("Execucao nao encontrada.");
+      (error as Error & { statusCode?: number }).statusCode = 404;
+      throw error;
+    }
+    return json(response, 200, detail);
+  }
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {
@@ -60,6 +76,14 @@ async function route(service: ControlRoomService, request: IncomingMessage, resp
     const actions = arrayOfStrings(body.requestedActions, "requestedActions") as TaskAction[];
     if (!actions.every((action) => taskActions.includes(action))) throw new Error("Acao de despacho invalida.");
     return json(response, 202, await service.dispatch(dispatchMatch[1], { selectedProvider: selectedProvider as ProviderName | null ?? null, reason: stringField(body, "reason"), candidates: [], requestedActions: actions }));
+  }
+  const executeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/execute$/.exec(url.pathname);
+  if (method === "POST" && executeMatch?.[1]) {
+    if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");
+    const body = await readBody(request);
+    const provider = optionalString(body, "provider") ?? "auto";
+    if (provider !== "auto" && !providerNames.includes(provider as ProviderName)) throw new Error("Provedor invalido.");
+    return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider as ProviderName));
   }
   json(response, 404, { error: "Rota nao encontrada." });
 }

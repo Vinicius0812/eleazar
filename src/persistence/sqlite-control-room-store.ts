@@ -8,6 +8,7 @@ import type {
   ControlRoomTask,
   DelegationDecision,
   ExecutionLog,
+  ExecutionFileChange,
   LocalProject,
   LocalProjectDirectory,
   TaskExecution,
@@ -152,17 +153,21 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     })();
   }
   createExecution(execution: TaskExecution): void {
-    this.#db.prepare(`INSERT INTO executions (id, task_id, lease_id, provider, status, started_at, finished_at, summary)
-      VALUES (@id, @taskId, @leaseId, @provider, @status, @startedAt, @finishedAt, @summary)`).run(execution);
+    this.#db.prepare(`INSERT INTO executions (id, task_id, lease_id, provider, status, started_at, finished_at, summary, output, usage_json)
+      VALUES (@id, @taskId, @leaseId, @provider, @status, @startedAt, @finishedAt, @summary, @output, @usageJson)`).run({ ...execution, output: execution.output ?? null, usageJson: execution.usage ? JSON.stringify(execution.usage) : null });
   }
   getExecution(id: string): TaskExecution | null { return mapExecution(this.#db.prepare("SELECT * FROM executions WHERE id = ?").get(id)); }
   updateExecution(execution: TaskExecution): void {
     const result = this.#db.prepare(`UPDATE executions SET lease_id = @leaseId, provider = @provider, status = @status, started_at = @startedAt,
-      finished_at = @finishedAt, summary = @summary WHERE id = @id`).run(execution);
+      finished_at = @finishedAt, summary = @summary, output = @output, usage_json = @usageJson WHERE id = @id`).run({ ...execution, output: execution.output ?? null, usageJson: execution.usage ? JSON.stringify(execution.usage) : null });
     if (result.changes !== 1) throw new Error("Execucao nao encontrada para atualizacao.");
   }
   listExecutions(taskId: string): TaskExecution[] {
     return this.#db.prepare("SELECT * FROM executions WHERE task_id = ? ORDER BY rowid DESC").all(taskId).map(mapExecution).filter(isPresent);
+  }
+  listExecutionFiles(executionId: string): ExecutionFileChange[] {
+    return this.#db.prepare("SELECT * FROM execution_file_changes WHERE execution_id = ? ORDER BY directory_id, path")
+      .all(executionId).map(mapExecutionFileChange).filter(isPresent);
   }
   appendLog(log: ExecutionLog): void {
     this.#db.prepare("INSERT INTO execution_logs (id, execution_id, level, message, created_at) VALUES (@id, @executionId, @level, @message, @createdAt)").run(log);
@@ -199,9 +204,12 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         prompt TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL, worktree_path TEXT, dispatch_lease TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS executions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), lease_id TEXT, provider TEXT,
-        status TEXT NOT NULL, started_at TEXT, finished_at TEXT, summary TEXT);
+        status TEXT NOT NULL, started_at TEXT, finished_at TEXT, summary TEXT, output TEXT, usage_json TEXT);
       CREATE TABLE IF NOT EXISTS execution_logs (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
         level TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS execution_file_changes (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
+        directory_id TEXT NOT NULL REFERENCES project_directories(id), path TEXT NOT NULL, kind TEXT NOT NULL,
+        additions INTEGER, deletions INTEGER, UNIQUE(execution_id, directory_id, path));
       CREATE TABLE IF NOT EXISTS delegation_decisions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), selected_provider TEXT,
         reason TEXT NOT NULL, candidates_json TEXT NOT NULL, actions_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), from_status TEXT NOT NULL, from_lease TEXT,
@@ -211,12 +219,36 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
     this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
+    this.#addColumnIfMissing("executions", "output", "TEXT");
+    this.#addColumnIfMissing("executions", "usage_json", "TEXT");
     this.#addColumnIfMissing("task_transitions", "from_lease", "TEXT");
     this.#migrateLegacyProjectDirectories();
     this.#db.exec(`UPDATE tasks SET target_directory_id = (
       SELECT id FROM project_directories WHERE project_id = tasks.project_id ORDER BY position LIMIT 1
     ) WHERE target_directory_id IS NULL`);
     this.#migrateLegacyTaskDirectoryScopes();
+  }
+  finishExecution(taskId: string, leaseId: string, provider: import("../core/contracts.js").ProviderName, status: "completed" | "failed", transition: TaskTransition, summary: string, output: string, files: readonly ExecutionFileChange[], log: ExecutionLog, usage: import("../core/contracts.js").TokenUsage | undefined = undefined): ControlRoomTask | null {
+    return this.#db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (!current || current.status !== "running" || current.dispatchLease !== leaseId) return null;
+      const finished = { ...current, status, dispatchLease: null, updatedAt: transition.createdAt };
+      const task = this.#db.prepare(`UPDATE tasks SET status = @status, dispatch_lease = NULL, updated_at = @updatedAt
+        WHERE id = @id AND status = 'running' AND dispatch_lease = @leaseId`).run({ ...finished, leaseId });
+      if (task.changes !== 1) return null;
+      const execution = this.#db.prepare(`UPDATE executions SET provider = @provider, status = @status, finished_at = @finishedAt, summary = @summary, output = @output, usage_json = @usageJson
+        WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'running'`).run({ taskId, leaseId, provider, status, finishedAt: transition.createdAt, summary, output, usageJson: usage ? JSON.stringify(usage) : null });
+      if (execution.changes !== 1) throw new Error("Execucao em andamento nao encontrada.");
+      const result = this.#db.prepare("SELECT id FROM executions WHERE task_id = ? AND lease_id = ?").get(taskId, leaseId) as Row;
+      const executionId = stringValue(result, "id");
+      const insertFile = this.#db.prepare(`INSERT OR REPLACE INTO execution_file_changes
+        (id, execution_id, directory_id, path, kind, additions, deletions)
+        VALUES (@id, @executionId, @directoryId, @path, @kind, @additions, @deletions)`);
+      for (const file of files) insertFile.run({ ...file, executionId });
+      this.recordTransition(transition);
+      this.appendLog(log);
+      return finished;
+    })();
   }
 
   #directoriesFor(projectId: string): LocalProjectDirectory[] {
@@ -280,7 +312,17 @@ function mapTask(row: unknown, directoryIds: string[]): ControlRoomTask | null {
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), leaseId: nullableString(item, "lease_id"), provider: nullableString(item, "provider") as TaskExecution["provider"],
-    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary") };
+    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary"), output: nullableString(item, "output"), usage: parseUsage(nullableString(item, "usage_json")) };
+}
+function parseUsage(value: string | null): import("../core/contracts.js").TokenUsage | null {
+  if (!value) return null;
+  try { const parsed: unknown = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as NonNullable<TaskExecution["usage"]> : null; }
+  catch { return null; }
+}
+function mapExecutionFileChange(row: unknown): ExecutionFileChange | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), executionId: stringValue(item, "execution_id"), directoryId: stringValue(item, "directory_id"), path: stringValue(item, "path"),
+    kind: stringValue(item, "kind") as ExecutionFileChange["kind"], additions: item.additions === null ? null : Number(item.additions), deletions: item.deletions === null ? null : Number(item.deletions) };
 }
 function mapLog(row: unknown): ExecutionLog | null {
   if (!row) return null; const item = row as Row;

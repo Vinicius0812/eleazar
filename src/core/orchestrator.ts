@@ -25,6 +25,11 @@ export class Orchestrator {
     return this.#router;
   }
 
+  /** Read-only provider diagnostics for local operator interfaces. */
+  async health(): Promise<import("./contracts.js").AgentHealth[]> {
+    return await Promise.all([...this.#adapters.values()].map((adapter) => adapter.health()));
+  }
+
   async run(request: AgentRunRequest, preferredProvider?: ProviderName): Promise<OrchestratorRun> {
     const route = await this.#router.route({
       prompt: request.prompt,

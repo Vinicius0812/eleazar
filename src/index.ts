@@ -8,4 +8,6 @@ export { GitWorktreeProvisioner } from "./core/git-worktree-provisioner.js";
 export { Orchestrator } from "./core/orchestrator.js";
 export { classifyTask, Router } from "./core/router.js";
 export { createControlRoomServer } from "./control-room/local-api.js";
+export { ControlRoomTaskExecutor } from "./control-room/task-executor.js";
+export { ProviderStatusService } from "./control-room/provider-status.js";
 export { SqliteControlRoomStore } from "./persistence/sqlite-control-room-store.js";

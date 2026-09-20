@@ -7,6 +7,8 @@ import {
   assertSafeTaskActions,
   assertValidTransition,
   type ControlRoomStore,
+  type ExecutionDetail,
+  type ExecutionFileChange,
   type ControlRoomTask,
   type DelegationCandidate,
   type DelegationDecision,
@@ -20,7 +22,7 @@ import {
   type TaskStatus,
   taskPriorities
 } from "./control-room.js";
-import { taskKinds, type ProviderName } from "./contracts.js";
+import { taskKinds, type AgentRunResult, type ProviderName } from "./contracts.js";
 
 export interface WorktreeProvisioner {
   prepare(project: LocalProject, task: ControlRoomTask): Promise<string>;
@@ -181,6 +183,39 @@ export class ControlRoomService {
 
   listTasks(projectId?: string): ControlRoomTask[] { return this.store.listTasks(projectId); }
   getTask(id: string): ControlRoomTask | null { return this.store.getTask(id); }
+  getProject(id: string): LocalProject | null { return this.store.getProject(id); }
+
+  executionDetail(executionId: string): ExecutionDetail | null {
+    const execution = this.store.getExecution(executionId);
+    if (!execution) return null;
+    const task = this.requireTask(execution.taskId);
+    const project = this.requireProject(task.projectId);
+    return { execution, task, project, logs: this.store.listLogs(execution.id), files: this.store.listExecutionFiles(execution.id), history: this.store.listExecutions(task.id) };
+  }
+
+  finishProviderRun(taskId: string, leaseId: string, result: AgentRunResult, files: readonly ExecutionFileChange[] = [], warnings: readonly string[] = []): ControlRoomTask {
+    const finishedAt = now();
+    const succeeded = result.status === "success";
+    const status = succeeded ? "completed" as const : "failed" as const;
+    const summary = summarizeProviderResult(result);
+    const completed = this.store.finishExecution(taskId, leaseId, result.provider, status, {
+      id: randomUUID(),
+      taskId,
+      fromStatus: "running",
+      fromDispatchLease: leaseId,
+      toStatus: status,
+      actor: "provider",
+      reason: succeeded ? "execucao concluida pelo provedor" : "execucao falhou no provedor",
+      createdAt: finishedAt
+    }, summary, providerOutput(result), files, {
+      id: randomUUID(),
+      executionId: this.requireExecutionId(taskId, leaseId),
+      level: succeeded ? "info" : "error",
+      message: [formatProviderLog(result), ...warnings.map((warning) => `[aviso Git] ${warning}`)].join("\n"),
+      createdAt: finishedAt
+    }, result.usage);
+    return completed ?? this.requireTask(taskId);
+  }
 
   snapshot(): import("./control-room.js").ControlRoomSnapshot {
     const tasks = this.store.listTasks();
@@ -205,10 +240,51 @@ export class ControlRoomService {
     return project;
   }
 
+  private requireExecutionId(taskId: string, leaseId: string): string {
+    const execution = this.store.listExecutions(taskId).find((item) => item.leaseId === leaseId);
+    if (!execution) throw new Error("Execucao reservada nao encontrada.");
+    return execution.id;
+  }
+
 }
 
 function now(): string { return new Date().toISOString(); }
 function retainsLease(status: TaskStatus): boolean { return status === "planning" || status === "running"; }
+
+function summarizeProviderResult(result: AgentRunResult): string {
+  const detail = result.status === "success" ? result.response : result.error ?? result.response;
+  const normalized = providerDetail(detail) || (result.status === "success" ? "Execucao concluida sem resposta textual." : "O provedor nao retornou detalhes do erro.");
+  return normalized.length > 4_000 ? `${normalized.slice(0, 3_997)}...` : normalized;
+}
+
+function providerOutput(result: AgentRunResult): string {
+  const detail = result.status === "success" ? result.response : result.error ?? result.response;
+  const normalized = providerDetail(detail) || (result.status === "success" ? "Execucao concluida sem resposta textual." : "O provedor nao retornou detalhes do erro.");
+  const maxLength = 100_000;
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 48)}\n\n[Saida truncada pelo Eleazar apos 100.000 caracteres.]` : normalized;
+}
+
+function formatProviderLog(result: AgentRunResult): string {
+  const usage = result.usage?.total ? `; ${result.usage.total} tokens` : "";
+  const outcome = result.status === "success" ? "concluiu" : "falhou";
+  const detail = result.status === "success" ? "" : ` Motivo: ${summarizeProviderResult(result)}`;
+  return `${result.provider} ${outcome} em ${result.durationMs} ms${usage}.${detail}`;
+}
+
+function providerDetail(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const item = parsed as Record<string, unknown>;
+      for (const key of ["detail", "error", "message"]) {
+        if (typeof item[key] === "string" && item[key].trim()) return item[key].trim();
+      }
+    }
+  } catch { /* The provider may return ordinary text. */ }
+  return trimmed;
+}
 
 function normalizeDirectoryPath(path: string): string {
   const normalized = resolve(path);

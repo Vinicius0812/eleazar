@@ -12,25 +12,34 @@ import {
   Check,
   ChevronRight,
   Clock3,
-  Command,
   FolderGit2,
   GitBranch,
   Layers3,
   LayoutDashboard,
   ListTodo,
+  Moon,
   Plus,
+  Play,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Search,
   ShieldCheck,
   Terminal,
+  Sun,
   X,
 } from "lucide-react";
 import { Modal } from "./components/Modal.js";
+import { ExecutionResultPage } from "./components/ExecutionResultPage.js";
 import type {
   Approval,
   ControlRoomClient,
   ControlRoomSnapshot,
+  ExecutionDetail,
+  ProviderStatus,
+  LogEntry,
   Priority,
+  Run,
   Task,
 } from "./services/contracts.js";
 import { priorityOrder } from "./services/contracts.js";
@@ -47,8 +56,8 @@ const statuses = {
 const navigation = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "projects", label: "Projetos", icon: FolderGit2 },
-  { id: "queue", label: "Fila de tarefas", icon: ListTodo },
-  { id: "runs", label: "Execuções", icon: Activity },
+  { id: "tasks", label: "Fila de tarefas", icon: ListTodo },
+  { id: "executions", label: "Execuções", icon: Activity },
   { id: "approvals", label: "Aprovações", icon: ShieldCheck },
   { id: "logs", label: "Logs", icon: Terminal },
 ];
@@ -56,6 +65,8 @@ type DialogState =
   | { kind: "project" }
   | { kind: "task" }
   | { kind: "detail"; task: Task }
+  | { kind: "execute"; task: Task }
+  | { kind: "related"; task: Task }
   | { kind: "approval"; approval: Approval }
   | null;
 function Panel({
@@ -91,6 +102,75 @@ function message(reason: unknown) {
     ? reason.message
     : "Não foi possível concluir a operação.";
 }
+function executionIdFromHash(): string | null {
+  const match = /^#\/executions\/([^/]+)$/.exec(window.location.hash);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+type PageRoute = "overview" | "projects" | "tasks" | "executions" | "approvals" | "logs" | "not-found";
+type Theme = "light" | "dark";
+
+function preferredTheme(): Theme {
+  const saved = window.localStorage.getItem("eleazar.theme");
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function pageFromHash(): PageRoute {
+  const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] || "overview";
+  return ["overview", "projects", "tasks", "executions", "approvals", "logs"].includes(value) ? value as PageRoute : "not-found";
+}
+function readableRunSummary(summary: string | null) {
+  if (!summary) return "O provedor não retornou detalhes adicionais.";
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const item = parsed as Record<string, unknown>;
+      for (const key of ["detail", "error", "message"]) {
+        if (typeof item[key] === "string" && item[key].trim()) return item[key].trim();
+      }
+    }
+  } catch { /* Entradas legadas podem conter texto simples. */ }
+  return summary;
+}
+function failureHint(summary: string | null) {
+  const detail = readableRunSummary(summary);
+  if (/requires a newer version of codex|vers[aã]o mais nova.*codex/i.test(detail)) {
+    return "Atualize o pacote @openai/codex-sdk usado pelo Eleazar e reinicie o Control Room; atualizar apenas o CLI global pode não atualizar o binário chamado pelo SDK.";
+  }
+  return "Consulte a mensagem e o log abaixo antes de reenfileirar a tarefa.";
+}
+function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry | undefined }) {
+  const failed = run.status === "failed";
+  return (
+    <section className={`execution-feedback ${failed ? "error" : ""}`} aria-label="Resultado da última execução">
+      <strong>{failed ? "Motivo da falha" : "Resultado da última execução"}</strong>
+      <p className="execution-summary">{readableRunSummary(run.summary)}</p>
+      {failed && <p className="execution-hint">{failureHint(run.summary)}</p>}
+      <dl>
+        <div><dt>Provedor</dt><dd>{run.provider ?? "Não informado"}</dd></div>
+        <div><dt>Encerrada</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString("pt-BR") : "Ainda em andamento"}</dd></div>
+      </dl>
+      {latestLog && <p className="execution-log"><strong>Último log:</strong> {latestLog.message}</p>}
+    </section>
+  );
+}
+function ProviderStatusPanel({ providers, loading, error, onRefresh }: { providers: ProviderStatus[]; loading: boolean; error: string; onRefresh(): void }) {
+  return <Panel id="providers" title="Provedores" eyebrow="CAPACIDADE LOCAL" action={<button className="text-button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} className={loading ? "spinning" : ""} /> Atualizar status</button>}>
+    {error && <div className="provider-note error">{error}</div>}
+    <div className="provider-list">
+      {providers.map((provider) => <article className="provider-row" key={provider.provider}>
+        <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}>{provider.provider === "codex" ? "C" : "A"}</span>
+        <div><strong>{provider.provider === "codex" ? "Codex" : "Antigravity"}</strong><small>{provider.detail}</small></div>
+        <div className="provider-usage">
+          {provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.provider}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
+        </div>
+        <span className={`dot ${provider.available ? "green" : ""}`} title={provider.available ? "Disponível" : "Indisponível"} />
+      </article>)}
+      {!providers.length && !loading && <div className="empty">Nenhum provedor respondeu ao diagnóstico local.</div>}
+    </div>
+    {providers[0] && <p className="provider-note">Dados atualizados em {new Date(providers[0].fetchedAt).toLocaleString("pt-BR")}. O saldo é exibido apenas quando o provedor o informa.</p>}
+  </Panel>;
+}
 export function App({ client }: { client: ControlRoomClient }) {
   const [data, setData] = useState<ControlRoomSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -101,11 +181,21 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [projectFilter, setProjectFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
-  const [active, setActive] = useState("overview");
+  const [active, setActive] = useState<PageRoute>(pageFromHash());
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [taskProjectId, setTaskProjectId] = useState("");
   const [taskDirectoryId, setTaskDirectoryId] = useState("");
   const [taskDirectoryIds, setTaskDirectoryIds] = useState<string[]>([]);
+  const [executionProvider, setExecutionProvider] = useState<"auto" | "codex" | "antigravity">("auto");
+  const [executionRoute, setExecutionRoute] = useState<string | null>(executionIdFromHash());
+  const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
+  const [executionLoading, setExecutionLoading] = useState(false);
+  const [executionError, setExecutionError] = useState("");
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState("");
+  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("eleazar.sidebarCollapsed") === "true");
+  const [theme, setTheme] = useState<Theme>(preferredTheme);
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!dialog && !busy && focusTrigger.current) {
@@ -130,6 +220,41 @@ export function App({ client }: { client: ControlRoomClient }) {
       alive = false;
     };
   }, [client]);
+  useEffect(() => {
+    const onHashChange = () => { setExecutionRoute(executionIdFromHash()); setActive(pageFromHash()); };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  useEffect(() => {
+    if (!executionRoute) { setExecutionDetail(null); return; }
+    let alive = true;
+    setExecutionLoading(true); setExecutionError(""); setExecutionDetail(null);
+    client.getExecutionDetail(executionRoute).then((detail) => { if (alive) setExecutionDetail(detail); })
+      .catch((reason) => { if (alive) setExecutionError(message(reason)); })
+      .finally(() => { if (alive) setExecutionLoading(false); });
+    return () => { alive = false; };
+  }, [client, executionRoute]);
+  useEffect(() => { window.localStorage.setItem("eleazar.sidebarCollapsed", String(collapsed)); }, [collapsed]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem("eleazar.theme", theme);
+  }, [theme]);
+  useEffect(() => {
+    if (active !== "overview") return;
+    let alive = true;
+    setProvidersLoading(true); setProvidersError("");
+    client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
+    return () => { alive = false; };
+  }, [active, client]);
+  const hasLiveTask = data?.tasks.some((task) => task.status === "planning" || task.status === "running") ?? false;
+  useEffect(() => {
+    if (!hasLiveTask) return;
+    const timer = window.setTimeout(() => {
+      client.getSnapshot().then(setData).catch((reason) => setError(message(reason)));
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [client, hasLiveTask, data?.tasks]);
   function open(next: DialogState) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
@@ -141,8 +266,13 @@ export function App({ client }: { client: ControlRoomClient }) {
       setTaskDirectoryId(directoryId);
       setTaskDirectoryIds(directoryId ? [directoryId] : []);
     }
+    if (next?.kind === "execute") setExecutionProvider("auto");
     setDialog(next);
   }
+  function navigate(next: PageRoute): void { window.location.hash = `/${next === "not-found" ? "overview" : next}`; }
+  function openExecution(executionId: string) { window.location.hash = `/executions/${encodeURIComponent(executionId)}`; }
+  function backToDashboard() { navigate("overview"); }
+  function refreshProviders(): void { setProvidersLoading(true); setProvidersError(""); client.getProviderStatuses(true).then(setProviders).catch((reason) => setProvidersError(message(reason))).finally(() => setProvidersLoading(false)); }
   async function refresh() {
     setBusy(true);
     setError("");
@@ -205,6 +335,16 @@ export function App({ client }: { client: ControlRoomClient }) {
       setQuery("");
     }, "Tarefa criada e adicionada à fila.");
   }
+  function submitRelatedTask(event: FormEvent<HTMLFormElement>, task: Task) {
+    event.preventDefault();
+    const targetDirectoryId = task.targetDirectoryId ?? task.directoryIds[0];
+    if (!targetDirectoryId) { setFormError("A tarefa original não possui um diretório válido para herdar."); return; }
+    const fields = new FormData(event.currentTarget);
+    void mutate(async () => {
+      await client.createTask({ projectId: task.projectId, targetDirectoryId, directoryIds: task.directoryIds.length ? task.directoryIds : [targetDirectoryId], title: String(fields.get("title")), prompt: String(fields.get("prompt")), priority: task.priority, kind: task.kind });
+      navigate("tasks");
+    }, "Tarefa relacionada criada com o mesmo contexto.");
+  }
   const projects = data?.projects ?? [];
   const tasks = data?.tasks ?? [];
   const approvals = data?.approvals ?? [];
@@ -227,20 +367,26 @@ export function App({ client }: { client: ControlRoomClient }) {
   const projectForTask = projects.find((project) => project.id === taskProjectId);
   const directoryName = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.find((directory) => directory.id === task.targetDirectoryId)?.name ?? "Diretório indisponível";
   const directoryNames = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.filter((directory) => task.directoryIds.includes(directory.id)).map((directory) => directory.name).join(", ") ?? "Diretório indisponível";
+  const latestRunForTask = (taskId: string) => data?.runs.find((run) => run.taskId === taskId);
+  const latestLogForRun = (runId: string) => data?.logs.filter((log) => log.executionId === runId).at(-1);
+  const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
+    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
+  };
   return (
-    <div className="shell">
-      <a className="skip-link" href="#main">
+    <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>
         Ir para o conteúdo
       </a>
       <aside className="sidebar">
-        <a className="brand" href="#overview">
+        <a className="brand" href="#/overview" title="Eleazar · Visão geral">
           <span className="brand-symbol">
-            <Command size={23} />
+            <Terminal size={23} />
           </span>
           <span>
-            eleazar<small>CONTROL ROOM</small>
+            Eleazar<small>CONTROL ROOM</small>
           </span>
         </a>
+        <button className="sidebar-toggle" aria-label={collapsed ? "Expandir menu" : "Recolher menu"} aria-pressed={collapsed} onClick={() => setCollapsed((value) => !value)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button>
         <div className="workspace">
           <span className="workspace-icon">E</span>
           <div>
@@ -253,10 +399,10 @@ export function App({ client }: { client: ControlRoomClient }) {
           {navigation.map((item) => (
             <a
               key={item.id}
-              href={`#${item.id}`}
+              href={`#/${item.id}`}
               className={active === item.id ? "active" : ""}
               aria-current={active === item.id ? "location" : undefined}
-              onClick={() => setActive(item.id)}
+              title={collapsed ? item.label : undefined}
             >
               <item.icon size={19} />
               <span>{item.label}</span>
@@ -266,6 +412,19 @@ export function App({ client }: { client: ControlRoomClient }) {
             </a>
           ))}
         </nav>
+        <div className="sidebar-actions">
+          <button
+            className="theme-toggle"
+            type="button"
+            aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
+            aria-pressed={theme === "dark"}
+            onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+            title={collapsed ? (theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro") : undefined}
+          >
+            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            <span>{theme === "dark" ? "Modo claro" : "Modo escuro"}</span>
+          </button>
+        </div>
         <div className="sidebar-bottom">
           <div className="local-indicator">
             <span className="dot green" />
@@ -288,19 +447,19 @@ export function App({ client }: { client: ControlRoomClient }) {
         <header className="topbar">
           <div>
             Workspace <ChevronRight size={14} />
-            <strong>Visão geral</strong>
+            <strong>{active === "not-found" ? "Página não encontrada" : navigation.find((item) => item.id === active)?.label ?? "Resultado da execução"}</strong>
           </div>
-          <span className="local-badge">● API LOCAL</span>
         </header>
-        <main id="main">
-          <div id="overview" className="page-heading">
+        {executionRoute ? <ExecutionResultPage detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" tabIndex={-1}>
+          {active === "not-found" ? <section className="route-not-found"><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
+          <div className="page-heading">
             <div>
               <div className="eyebrow">ELEAZAR / OPERAÇÕES</div>
               <h1>
-                Sala de controle
+                {pageTitle[active as Exclude<PageRoute, "not-found">]?.[0] ?? "Sala de controle"}
                 <span className="dot green" />
               </h1>
-              <p>Acompanhe o trabalho. Direcione o próximo passo.</p>
+              <p>{pageTitle[active as Exclude<PageRoute, "not-found">]?.[1] ?? "Acompanhe o trabalho. Direcione o próximo passo."}</p>
             </div>
             <div className="heading-actions">
               <button
@@ -321,13 +480,6 @@ export function App({ client }: { client: ControlRoomClient }) {
               </button>
             </div>
           </div>
-          <div className="announcement">
-            <ShieldCheck size={17} />
-            <span>
-              <strong>Ambiente local.</strong> Dados são persistidos pelo núcleo
-              e a API aceita somente conexões loopback.
-            </span>
-          </div>
           <div className="feedback" aria-live="polite" role="status">
             {notice}
           </div>
@@ -344,7 +496,7 @@ export function App({ client }: { client: ControlRoomClient }) {
             </div>
           ) : (
             <>
-              <section className="metrics" aria-label="Resumo de operações">
+              {active === "overview" && <section className="metrics" aria-label="Resumo de operações">
                 {[
                   {
                     label: "Projetos locais",
@@ -387,9 +539,48 @@ export function App({ client }: { client: ControlRoomClient }) {
                     <small>{metric.detail}</small>
                   </div>
                 ))}
-              </section>
-              <div className="dashboard-grid">
+              </section>}
+              <div className={`dashboard-grid page-${active}`}>
                 <div className="primary-column">
+                  {active === "overview" && <div className="executive-column">
+                    <Panel
+                      id="next-tasks"
+                      title="Próximas tarefas"
+                      eyebrow="FILA PRIORITÁRIA"
+                      action={<button className="text-button" onClick={() => navigate("tasks")}>Ver fila <ArrowRight size={15} /></button>}
+                    >
+                      <div className="executive-list">
+                        {filteredTasks.slice(0, 4).map((task) => (
+                          <button className="executive-row" key={task.id} onClick={() => latestRunForTask(task.id) ? openExecution(latestRunForTask(task.id)!.id) : open({ kind: "detail", task })}>
+                            <span className={`priority ${task.priority}`}><span className="dot" />{priorities[task.priority]}</span>
+                            <span className="executive-row-copy"><strong>{task.title}</strong><small>{projectName(task.projectId)} · {directoryName(task)}</small></span>
+                            <span className={`status ${task.status}`}>{statuses[task.status]}</span>
+                            <ChevronRight size={17} />
+                          </button>
+                        ))}
+                        {!filteredTasks.length && <div className="empty">Nenhuma tarefa pendente. Crie a próxima etapa quando estiver pronto.</div>}
+                      </div>
+                    </Panel>
+                    <Panel
+                      id="recent-executions"
+                      title="Execuções recentes"
+                      eyebrow="HISTÓRICO"
+                      action={<button className="text-button" onClick={() => navigate("executions")}>Ver execuções <ArrowRight size={15} /></button>}
+                    >
+                      <div className="executive-list">
+                        {[...data.runs].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")).slice(0, 4).map((run) => {
+                          const task = tasks.find((item) => item.id === run.taskId);
+                          return <button className="executive-row" key={run.id} onClick={() => openExecution(run.id)}>
+                            <span className={`status ${run.status}`}>{statuses[run.status as keyof typeof statuses] ?? run.status}</span>
+                            <span className="executive-row-copy"><strong>{task?.title ?? "Tarefa indisponível"}</strong><small>{run.provider ?? "Provedor não informado"} · {run.finishedAt ? new Date(run.finishedAt).toLocaleString("pt-BR") : "Em andamento"}</small></span>
+                            <ChevronRight size={17} />
+                          </button>;
+                        })}
+                        {!data.runs.length && <div className="empty">Ainda não há execuções registradas.</div>}
+                      </div>
+                    </Panel>
+                  </div>}
+                  {active === "projects" &&
                   <Panel
                     id="projects"
                     title="Seus projetos"
@@ -412,13 +603,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                           className={`project-card ${projectFilter === project.id ? "selected" : ""}`}
                           aria-pressed={projectFilter === project.id}
                           onClick={() => {
-                            setProjectFilter(
-                              projectFilter === project.id ? "all" : project.id,
-                            );
-                            document.getElementById("queue")?.scrollIntoView({
-                              block: "start",
-                              behavior: "smooth",
-                            });
+                            setProjectFilter(project.id);
+                            navigate("tasks");
                           }}
                         >
                           <span className="project-icon purple">
@@ -460,7 +646,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                         Cadastre seu primeiro projeto local para começar.
                       </div>
                     )}
-                  </Panel>
+                  </Panel>}
+                  {active === "tasks" &&
                   <Panel
                     id="queue"
                     title="Fila de tarefas"
@@ -506,7 +693,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                             <th>Prioridade</th>
                             <th>Status</th>
                             <th>
-                              <span className="sr-only">Detalhes</span>
+                              <span className="sr-only">Ações</span>
                             </th>
                           </tr>
                         </thead>
@@ -517,7 +704,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                                 <span className="task-id">{task.id}</span>
                                 <button
                                   className="task-title"
-                                  onClick={() => open({ kind: "detail", task })}
+                                  onClick={() => latestRunForTask(task.id) ? openExecution(latestRunForTask(task.id)!.id) : open({ kind: "detail", task })}
                                 >
                                   {task.title}
                                 </button>
@@ -541,13 +728,23 @@ export function App({ client }: { client: ControlRoomClient }) {
                                 </span>
                               </td>
                               <td>
-                                <button
-                                  className="icon-button"
-                                  aria-label={`Ver ${task.title}`}
-                                  onClick={() => open({ kind: "detail", task })}
-                                >
-                                  <ChevronRight size={17} />
-                                </button>
+                                {task.status === "queued" ? (
+                                  <button className="text-button" aria-label={`Executar ${task.title}`} disabled={busy} onClick={() => open({ kind: "execute", task })}>
+                                    <Play size={14} /> Executar
+                                  </button>
+                                ) : task.status === "failed" ? (
+                                  <button className="text-button danger" aria-label={`Ver erro de ${task.title}`} onClick={() => latestRunForTask(task.id) && openExecution(latestRunForTask(task.id)!.id)}>
+                                    Ver erro
+                                  </button>
+                                ) : task.status === "completed" && latestRunForTask(task.id) ? (
+                                  <button className="text-button" aria-label={`Ver resultado de ${task.title}`} onClick={() => openExecution(latestRunForTask(task.id)!.id)}>
+                                    Ver resultado
+                                  </button>
+                                ) : (
+                                  <button className="icon-button" aria-label={`Ver ${task.title}`} onClick={() => open({ kind: "detail", task })}>
+                                    <ChevronRight size={17} />
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -567,7 +764,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                         <Clock3 size={13} /> Estado atual
                       </span>
                     </div>
-                  </Panel>
+                  </Panel>}
+                  {active === "executions" &&
                   <Panel
                     id="runs"
                     title="Execuções ativas"
@@ -585,7 +783,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                           (item) => item.id === run.taskId,
                         );
                         return (
-                          <article className="run-card" key={run.id}>
+                          <article className={`run-card ${run.status === "failed" ? "failed" : ""}`} key={run.id}>
                             <div className="run-top">
                               <span>
                                 <Activity size={15} />
@@ -615,6 +813,10 @@ export function App({ client }: { client: ControlRoomClient }) {
                                 ? `Iniciada em ${new Date(run.startedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
                                 : "Ainda não iniciada"}
                             </small>
+                            {run.status === "failed" && (
+                              <ExecutionFeedback run={run} latestLog={latestLogForRun(run.id)} />
+                            )}
+                            {(run.status === "completed" || run.status === "failed") && <button className={`text-button ${run.status === "failed" ? "danger" : ""}`} onClick={() => openExecution(run.id)}>{run.status === "failed" ? "Ver erro detalhado" : "Abrir resultado"}</button>}
                           </article>
                         );
                       })}
@@ -622,7 +824,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                     {!data.runs.length && (
                       <div className="empty">Nenhuma execução ativa.</div>
                     )}
-                  </Panel>
+                  </Panel>}
+                  {active === "logs" &&
                   <Panel
                     id="logs"
                     title="Atividade recente"
@@ -664,9 +867,11 @@ export function App({ client }: { client: ControlRoomClient }) {
                         (log) => logLevel === "all" || log.level === logLevel,
                       ) && <div className="empty">Nenhum log neste nível.</div>}
                     </div>
-                  </Panel>
+                  </Panel>}
                 </div>
-                <div className="secondary-column">
+                {(active === "overview" || active === "approvals") && <div className="secondary-column">
+                  {active === "overview" && <ProviderStatusPanel providers={providers} loading={providersLoading} error={providersError} onRefresh={refreshProviders} />}
+                  {active === "approvals" &&
                   <Panel
                     id="approvals"
                     title="Suas aprovações"
@@ -676,7 +881,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       </span>
                     }
                   >
-                    {approvals.map((approval) => (
+                      {approvals.map((approval) => (
                       <article className="approval-card" key={approval.id}>
                         <span className="approval-label">
                           <ShieldCheck size={14} />
@@ -711,7 +916,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                         <span>Nenhuma aprovação pendente.</span>
                       </div>
                     )}
-                  </Panel>
+                  </Panel>}
+                  {active === "overview" &&
                   <Panel
                     id="alerts"
                     title="Alertas"
@@ -734,26 +940,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                         <div className="empty">Nenhum alerta.</div>
                       )}
                     </div>
-                  </Panel>
-                  <div className="control-note">
-                    <span className="note-symbol">
-                      <Command size={25} />
-                    </span>
-                    <h3>Você dirige a orquestra.</h3>
-                    <p>
-                      Projetos, agentes e decisões em um único lugar. O próximo
-                      movimento começa com uma tarefa.
-                    </p>
-                    <button
-                      className="text-button"
-                      onClick={() => open({ kind: "task" })}
-                      disabled={!projects.length || busy}
-                    >
-                      Criar uma tarefa
-                      <ArrowRight size={15} />
-                    </button>
-                  </div>
-                </div>
+                  </Panel>}
+                </div>}
               </div>
               <footer className="page-footer">
                 <span>ELEAZAR CONTROL ROOM</span>
@@ -761,7 +949,8 @@ export function App({ client }: { client: ControlRoomClient }) {
               </footer>
             </>
           )}
-        </main>
+          </>}
+        </main>}
       </div>
       {dialog && (
         <Modal
@@ -772,7 +961,11 @@ export function App({ client }: { client: ControlRoomClient }) {
                 ? "Criar tarefa"
                 : dialog.kind === "detail"
                   ? "Detalhes da tarefa"
-                  : "Revisar aprovação"
+                : dialog.kind === "execute"
+                    ? "Executar tarefa"
+                  : dialog.kind === "related"
+                    ? "Criar tarefa relacionada"
+                    : "Revisar aprovação"
           }
           onClose={() => setDialog(null)}
           busy={busy}
@@ -957,10 +1150,66 @@ export function App({ client }: { client: ControlRoomClient }) {
               <p className="prompt-text">{dialog.task.prompt}</p>
               <h4>Diretório-alvo</h4>
               <p>{directoryNames(dialog.task)}{dialog.task.directoryIds.length > 1 ? " · Escopo composto" : ""}</p>
+              {latestRunForTask(dialog.task.id) && <div className="form-actions"><button className="secondary" onClick={() => openExecution(latestRunForTask(dialog.task.id)!.id)}>Abrir resultado da última execução</button></div>}
               <small>
                 Criada em{" "}
                 {new Date(dialog.task.createdAt).toLocaleString("pt-BR")}
               </small>
+              {dialog.task.status === "queued" && (
+                <div className="form-actions">
+                  <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: dialog.task })}>
+                    <Play size={16} /> Executar tarefa
+                  </button>
+                </div>
+              )}
+              {dialog.task.status === "failed" && (
+                <div className="form-actions">
+                  <button className="secondary" disabled={busy} onClick={() => void mutate(() => client.retryTask(dialog.task.id), "Tarefa reenfileirada. Revise o erro e execute novamente quando estiver pronto.")}>
+                    <RefreshCw size={16} /> {busy ? "Reenfileirando…" : "Reenfileirar tarefa"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {dialog.kind === "related" && (
+            <form onSubmit={(event) => submitRelatedTask(event, dialog.task)}>
+              <p className="form-intro">Esta tarefa herdará projeto, diretório, escopo, prioridade e tipo de <strong>{dialog.task.title}</strong>.</p>
+              <label>
+                Título
+                <input name="title" required maxLength={160} placeholder="Próximo passo relacionado" autoFocus />
+              </label>
+              <label>
+                Prompt
+                <textarea name="prompt" required maxLength={20000} rows={6} placeholder="Descreva o trabalho que deve continuar neste mesmo contexto…" />
+              </label>
+              <div className="form-actions">
+                <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>
+                <button className="primary" disabled={busy}>{busy ? "Criando…" : "Criar tarefa"}</button>
+              </div>
+            </form>
+          )}
+          {dialog.kind === "execute" && (
+            <div className="task-detail">
+              <span className="task-id">{dialog.task.id} · {projectName(dialog.task.projectId)}</span>
+              <h3>{dialog.task.title}</h3>
+              <p className="form-intro">
+                Esta ação usa uma sessão já autenticada do provedor selecionado e executa o prompt no diretório-alvo. O resultado e os logs ficarão no histórico desta tarefa.
+              </p>
+              <label>
+                Provedor
+                <select value={executionProvider} onChange={(event) => setExecutionProvider(event.target.value as "auto" | "codex" | "antigravity")} disabled={busy}>
+                  <option value="auto">Automático (recomendado)</option>
+                  <option value="codex">Codex</option>
+                  <option value="antigravity">Antigravity</option>
+                </select>
+              </label>
+              <small>Push, merge, deploy, publicação e manipulação de credenciais continuam bloqueados neste fluxo.</small>
+              <div className="form-actions">
+                <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>
+                <button className="primary" disabled={busy} onClick={() => void mutate(() => client.executeTask(dialog.task.id, executionProvider), "Execução iniciada. O painel atualizará enquanto o provedor trabalha.")}>
+                  <Play size={16} /> {busy ? "Iniciando…" : "Executar agora"}
+                </button>
+              </div>
             </div>
           )}
           {dialog.kind === "approval" && (
