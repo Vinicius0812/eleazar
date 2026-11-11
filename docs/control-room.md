@@ -34,7 +34,11 @@ Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e
 
 O host de produção do Control Room cria `ControlRoomService` com `{ useWorktrees: false }` e sem provisionador Git. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida para qualquer interseção de `directoryIds`.
 
-A execução comum do Codex usa o transporte ACP por stdio. `ELEAZAR_CODEX_PATH` pode apontar para um executável nativo do Codex; sem override, o adaptador procura a instalação desktop compatível e depois o binário da dependência ACP. Pedidos de permissão são negados quando não há callback do operador. A interface ainda usa snapshots: apresentação dos updates por SSE e controles por sessão permanecem pendentes.
+A execução comum do Codex usa o transporte ACP por stdio. `ELEAZAR_CODEX_PATH` pode apontar para um executável nativo do Codex; sem override, o adaptador procura a instalação desktop compatível e depois o binário da dependência ACP. Sem callback, o pedido de permissão é negado. O backend agora persiste eventos e permissões por execução, enquanto a apresentação e os controles por sessão na interface permanecem pendentes.
+
+`GET /api/control-room/providers/codex/config?directoryId=...` consulta o catálogo operacional de modelos e configurações sem enviar prompt, com cache breve por diretório. `POST /tasks/:id/execute` aceita `model` e `sessionId` opcionais para Codex; o modelo deve estar anunciado e a sessão anterior deve pertencer ao mesmo projeto e escopo. `GET /executions/:id/events` transmite SSE ordenado com replay por `Last-Event-ID`. `POST /executions/:id/permissions/:permissionId` recebe `{ "optionId": "..." }`; `POST /executions/:id/cancel` recebe `{}`. Permissões ACP pausam a execução no mesmo lease e são distintas da aprovação inicial de escopo. Reiniciar o host marca execuções em andamento como falhas, invalida permissões pendentes e exige retry manual.
+
+O adaptador força `workspace-write`, `on-request` e rede de ferramentas desabilitada, sem expor modo full access. `allow_always` e pedidos com indicação explícita de ampliação de raiz, rede ou sandbox são recusados; `allow_once` exige resposta do operador. O sandbox do Codex é o limite efetivo para ações de ferramenta: metadados ACP podem não descrever todos os efeitos de um comando, então o bloqueio de push, merge, deploy e publicação no texto da tarefa e na decisão de despacho não substitui inspeção de cada comando executado.
 
 ## Limite de rede
 

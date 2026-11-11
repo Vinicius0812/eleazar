@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import * as acp from "@agentclientprotocol/sdk";
 
@@ -12,6 +13,7 @@ export interface CodexAcpSessionInfo {
   agentName: string | null;
   capabilities: acp.AgentCapabilities;
   sessionId: string;
+  modes: acp.SessionModeState | null;
   configOptions: acp.SessionConfigOption[];
 }
 
@@ -26,7 +28,13 @@ export class CodexAcpClient {
     return this.withConnection({ cwd, prompt: "", ...(sessionId ? { sessionId } : {}) }, async (agent, state, setActiveSession) => {
       const session = await openSession(agent, state.capabilities, cwd, sessionId);
       setActiveSession(session.sessionId);
-      return { ...state, sessionId: session.sessionId, configOptions: session.configOptions ?? [] };
+      try {
+        return { ...state, sessionId: session.sessionId, modes: session.modes ?? null, configOptions: session.configOptions ?? [] };
+      } finally {
+        if (!sessionId && state.capabilities.sessionCapabilities?.close) {
+          await agent.request(acp.methods.agent.session.close, { sessionId: session.sessionId }).catch(() => {});
+        }
+      }
     });
   }
 
@@ -36,9 +44,15 @@ export class CodexAcpClient {
     let response = "";
     try {
       const result = await this.withConnection(request, async (agent, state, setActiveSession) => {
-        const session = await openSession(agent, state.capabilities, request.cwd, request.sessionId);
+        const session = await openSession(agent, state.capabilities, request.cwd, request.sessionId, request.additionalDirectories);
         sessionId = session.sessionId;
         setActiveSession(sessionId);
+        if (!session.modes?.availableModes.some((mode) => mode.id === "workspace-write")) {
+            throw new Error("Codex ACP nao anuncia modo workspace-write.");
+        }
+        if (session.modes.currentModeId !== "workspace-write") {
+          await agent.request(acp.methods.agent.session.setMode, { sessionId, modeId: "workspace-write" });
+        }
         let options = session.configOptions ?? [];
         if (request.model) {
           const model = options.find((item) => item.type === "select" && (item.category === "model" || item.id === "model"));
@@ -48,6 +62,10 @@ export class CodexAcpClient {
           options = (await agent.request(acp.methods.agent.session.setConfigOption, {
             sessionId, configId: model.id, value: request.model
           })).configOptions;
+          const selected = options.find((item) => item.id === model.id);
+          if (!selected || selected.type !== "select" || selected.currentValue !== request.model) {
+            throw new Error(`Agente ACP nao confirmou o modelo solicitado: ${request.model}`);
+          }
         }
         request.onUpdate?.({ sessionId, kind: "session_ready", payload: {
           protocolVersion: state.protocolVersion, agentName: state.agentName,
@@ -76,7 +94,7 @@ export class CodexAcpClient {
 
   private async withConnection<T>(
     request: AgentRunRequest,
-    operation: (agent: acp.ClientContext, state: Omit<CodexAcpSessionInfo, "sessionId" | "configOptions">, setActiveSession: (id: string) => void) => Promise<T>,
+    operation: (agent: acp.ClientContext, state: Omit<CodexAcpSessionInfo, "sessionId" | "configOptions" | "modes">, setActiveSession: (id: string) => void) => Promise<T>,
     onUpdate?: (notification: acp.SessionNotification) => void
   ): Promise<T> {
     const runtime = await this.deps.resolveRuntime();
@@ -89,8 +107,13 @@ export class CodexAcpClient {
       .onNotification(acp.methods.client.session.update, ({ params }) => onUpdate?.(params))
       .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
         const options = params.options.map((item) => ({ id: item.optionId, name: item.name, kind: item.kind }));
+        const locations = (params.toolCall.locations ?? []).slice(0, 20).map((item) => item.path.slice(0, 500));
+        const requiresElevation = permissionRequiresElevation(params.toolCall, locations,
+          [request.cwd, ...(request.additionalDirectories ?? [])]);
         const choice = await request.onPermission?.({ sessionId: params.sessionId,
-          toolCallId: params.toolCall.toolCallId, title: params.toolCall.title ?? "Ferramenta", options });
+          toolCallId: params.toolCall.toolCallId, title: (params.toolCall.title ?? "Ferramenta").slice(0, 300),
+          ...(params.toolCall.kind ? { toolKind: params.toolCall.kind } : {}),
+          ...(params.toolCall.name ? { toolName: params.toolCall.name } : {}), locations, requiresElevation, options });
         return choice && options.some((item) => item.id === choice)
           ? { outcome: { outcome: "selected" as const, optionId: choice } }
           : { outcome: { outcome: "cancelled" as const } };
@@ -136,13 +159,36 @@ export class CodexAcpClient {
   }
 }
 
+function permissionRequiresElevation(tool: acp.ToolCallUpdate, locations: string[], roots: string[]): boolean {
+  if (tool.kind === "fetch") return true;
+  if (locations.some((path) => !isAbsolute(path) || !roots.some((root) => {
+    const offset = relative(resolve(root), resolve(path));
+    return offset === "" || (offset !== ".." && !offset.startsWith(`..\\`) && !offset.startsWith("../") && !isAbsolute(offset));
+  }))) return true;
+  for (const value of [tool.rawInput, tool._meta]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const fields = value as Record<string, unknown>;
+    if (fields.sandbox_permissions === "require_escalated" || fields.sandboxPermissions === "require_escalated" ||
+      fields.sandboxMode === "danger-full-access" || fields.sandbox_mode === "danger-full-access" ||
+      fields.networkAccess === true || fields.network_access === true || fields.requiresElevation === true) return true;
+    const policy = fields.sandboxPolicy;
+    if (policy && typeof policy === "object" && !Array.isArray(policy) &&
+      "type" in policy && (policy.type === "dangerFullAccess" || policy.type === "danger-full-access")) return true;
+  }
+  return false;
+}
+
 function flattenOptions(options: acp.SessionConfigSelectOptions): string[] {
   return options.flatMap((item) => "value" in item ? [item.value] : item.options.map((choice) => choice.value));
 }
 
-async function openSession(agent: acp.ClientContext, capabilities: acp.AgentCapabilities, cwd: string, sessionId?: string): Promise<acp.NewSessionResponse> {
-  if (!sessionId) return agent.request(acp.methods.agent.session.new, { cwd, mcpServers: [] });
+async function openSession(agent: acp.ClientContext, capabilities: acp.AgentCapabilities, cwd: string, sessionId?: string, additionalDirectories: string[] = []): Promise<acp.NewSessionResponse> {
+  if (additionalDirectories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
+    throw new Error("Codex ACP nao suporta escopo com diretorios adicionais.");
+  }
+  const roots = additionalDirectories.length ? { additionalDirectories } : {};
+  if (!sessionId) return agent.request(acp.methods.agent.session.new, { cwd, mcpServers: [], ...roots });
   if (!capabilities.loadSession) throw new Error("Agente ACP nao suporta session/load.");
-  const loaded = await agent.request(acp.methods.agent.session.load, { cwd, sessionId, mcpServers: [] });
+  const loaded = await agent.request(acp.methods.agent.session.load, { cwd, sessionId, mcpServers: [], ...roots });
   return { ...loaded, sessionId };
 }

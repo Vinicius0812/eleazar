@@ -22,12 +22,14 @@ function handle(message) {
     reply(message.id, { protocolVersion: message.params.protocolVersion, agentInfo: { name: "fake-acp", version: "1" },
       agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } } });
   } else if (message.method === "session/new") {
-    reply(message.id, { sessionId: "fake-session", configOptions: [model] });
+    reply(message.id, { sessionId: "fake-session", modes: { currentModeId: "workspace-write", availableModes: [{ id: "workspace-write", name: "Workspace write" }] }, configOptions: [model] });
   } else if (message.method === "session/load") {
-    reply(message.id, { configOptions: [model] });
+    reply(message.id, { modes: { currentModeId: "workspace-write", availableModes: [{ id: "workspace-write", name: "Workspace write" }] }, configOptions: [model] });
   } else if (message.method === "session/set_config_option") {
     model.currentValue = message.params.value;
     reply(message.id, { configOptions: [model] });
+  } else if (message.method === "session/close") {
+    reply(message.id, {});
   } else if (message.method === "session/prompt") {
     const text = message.params.prompt[0].text;
     if (text === "EXIT") { process.exit(3); return; }

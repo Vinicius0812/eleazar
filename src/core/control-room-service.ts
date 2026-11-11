@@ -9,6 +9,9 @@ import {
   type ControlRoomStore,
   type ExecutionDetail,
   type ExecutionFileChange,
+  type ExecutionEvent,
+  type ExecutionPermission,
+  type TaskExecution,
   type ControlRoomTask,
   type DelegationCandidate,
   type DelegationDecision,
@@ -22,7 +25,7 @@ import {
   type TaskStatus,
   taskPriorities
 } from "./control-room.js";
-import { taskKinds, type AgentRunResult, type ProviderName } from "./contracts.js";
+import { taskKinds, type AgentPermissionRequest, type AgentRunResult, type AgentUpdate, type ProviderName } from "./contracts.js";
 
 export interface WorktreeProvisioner {
   prepare(project: LocalProject, task: ControlRoomTask): Promise<string>;
@@ -40,6 +43,7 @@ export interface ControlRoomDispatchOptions { useWorktrees?: boolean; }
 
 export class ControlRoomService {
   private readonly useWorktrees: boolean;
+  private readonly eventListeners = new Map<string, Set<(event: ExecutionEvent) => void>>();
 
   constructor(
     readonly store: ControlRoomStore,
@@ -119,6 +123,7 @@ export class ControlRoomService {
 
   transitionTask(taskId: string, toStatus: TaskStatus, actor = "control-room", reason?: string): ControlRoomTask {
     const task = this.requireTask(taskId);
+    if (task.status === "waiting_approval" && task.dispatchLease) throw new Error("Permissao ACP ativa exige resposta pela rota da execucao.");
     assertValidTransition(task.status, toStatus);
     const updated = {
       ...task,
@@ -190,7 +195,65 @@ export class ControlRoomService {
     if (!execution) return null;
     const task = this.requireTask(execution.taskId);
     const project = this.requireProject(task.projectId);
-    return { execution, task, project, logs: this.store.listLogs(execution.id), files: this.store.listExecutionFiles(execution.id), history: this.store.listExecutions(task.id) };
+    return { execution, task, project, logs: this.store.listLogs(execution.id), files: this.store.listExecutionFiles(execution.id), history: this.store.listExecutions(task.id),
+      events: this.store.listExecutionEvents(execution.id), permissions: this.store.listExecutionPermissions(execution.id) };
+  }
+
+  onExecutionEvent(executionId: string, listener: (event: ExecutionEvent) => void): () => void {
+    const listeners = this.eventListeners.get(executionId) ?? new Set();
+    listeners.add(listener);
+    this.eventListeners.set(executionId, listeners);
+    return () => { listeners.delete(listener); if (!listeners.size) this.eventListeners.delete(executionId); };
+  }
+  listExecutionEvents(executionId: string, afterSequence = 0): ExecutionEvent[] {
+    return this.store.listExecutionEvents(executionId, afterSequence);
+  }
+  setExecutionMetadata(executionId: string, leaseId: string, transport: "acp" | "legacy", model: string | null, sessionId?: string): boolean {
+    return this.store.setExecutionMetadata(executionId, leaseId, transport, model, sessionId);
+  }
+  recordAgentUpdate(executionId: string, leaseId: string, update: AgentUpdate): void {
+    if (update.kind === "session_ready") {
+      const options = update.payload.configOptions;
+      const model = Array.isArray(options) ? options.find((item: unknown) => item && typeof item === "object" &&
+        "id" in item && (item.id === "model" || ("category" in item && item.category === "model"))) as { currentValue?: unknown } | undefined : undefined;
+      this.store.setExecutionMetadata(executionId, leaseId, "acp", typeof model?.currentValue === "string" ? model.currentValue : null, update.sessionId);
+    }
+    const payload = visibleAgentPayload(update);
+    if (!payload) return;
+    const event = this.store.appendExecutionEvent(executionId, leaseId, update.kind, payload);
+    if (event) this.publish(event);
+  }
+  requestAgentPermission(executionId: string, leaseId: string, request: AgentPermissionRequest): ExecutionPermission | null {
+    const permission: ExecutionPermission = { id: randomUUID(), executionId, leaseId, toolCallId: request.toolCallId,
+      title: request.title, toolKind: request.toolKind ?? null, toolName: request.toolName ?? null,
+      locations: request.locations ?? [], requiresElevation: request.requiresElevation ?? false,
+      options: request.options, status: "pending", selectedOptionId: null,
+      createdAt: now(), resolvedAt: null };
+    const event = this.store.requestExecutionPermission(permission);
+    if (!event) return null;
+    this.publish(event);
+    return permission;
+  }
+  decideAgentPermission(permissionId: string, optionId: string): ExecutionPermission {
+    const requested = this.store.getExecutionPermission(permissionId);
+    const selected = requested?.options.find((option) => option.id === optionId);
+    if (selected?.kind === "allow_always" || (selected?.kind === "allow_once" && requested?.requiresElevation)) {
+      throw conflict("Elevacao de escopo ou permissao persistente nao pode ser aprovada neste fluxo.");
+    }
+    const decision = this.store.decideExecutionPermission(permissionId, optionId);
+    if (!decision) throw conflict("Permissao ausente, opcao invalida ou execucao encerrada.");
+    this.publish(decision.event);
+    return decision.permission;
+  }
+  cancelExecution(executionId: string): TaskExecution {
+    const result = this.store.cancelActiveExecution(executionId, "Cancelada pelo operador.");
+    if (!result) throw conflict("Execucao nao esta ativa para cancelamento.");
+    this.publish(result.event);
+    return result.execution;
+  }
+
+  private publish(event: ExecutionEvent): void {
+    for (const listener of this.eventListeners.get(event.executionId) ?? []) listener(event);
   }
 
   finishProviderRun(taskId: string, leaseId: string, result: AgentRunResult, files: readonly ExecutionFileChange[] = [], warnings: readonly string[] = []): ControlRoomTask {
@@ -198,10 +261,11 @@ export class ControlRoomService {
     const succeeded = result.status === "success";
     const status = succeeded ? "completed" as const : "failed" as const;
     const summary = summarizeProviderResult(result);
+    const current = this.requireTask(taskId);
     const completed = this.store.finishExecution(taskId, leaseId, result.provider, status, {
       id: randomUUID(),
       taskId,
-      fromStatus: "running",
+      fromStatus: current.status,
       fromDispatchLease: leaseId,
       toStatus: status,
       actor: "provider",
@@ -214,6 +278,10 @@ export class ControlRoomService {
       message: [formatProviderLog(result), ...warnings.map((warning) => `[aviso Git] ${warning}`)].join("\n"),
       createdAt: finishedAt
     }, result.usage);
+    if (completed) {
+      const event = this.store.listExecutionEvents(this.requireExecutionId(taskId, leaseId)).at(-1);
+      if (event && (event.kind === "completed" || event.kind === "failed")) this.publish(event);
+    }
     return completed ?? this.requireTask(taskId);
   }
 
@@ -223,7 +291,7 @@ export class ControlRoomService {
     return {
       projects: this.store.listProjects(),
       tasks,
-      executions,
+      executions: executions.map(({ output: _output, ...execution }) => execution),
       logs: executions.flatMap((execution) => this.store.listLogs(execution.id))
     };
   }
@@ -249,6 +317,37 @@ export class ControlRoomService {
 }
 
 function now(): string { return new Date().toISOString(); }
+function conflict(message: string): Error {
+  return Object.assign(new Error(message), { statusCode: 409 });
+}
+function visibleAgentPayload(update: AgentUpdate): Record<string, unknown> | null {
+  const value = update.payload;
+  if (update.kind === "agent_message_chunk" || update.kind === "user_message_chunk") {
+    const content = value.content;
+    if (content && typeof content === "object" && "type" in content && content.type === "text" && "text" in content && typeof content.text === "string") {
+      return { text: content.text };
+    }
+    return null;
+  }
+  if (update.kind === "tool_call" || update.kind === "tool_call_update") {
+    return { toolCallId: typeof value.toolCallId === "string" ? value.toolCallId : "",
+      title: typeof value.title === "string" ? value.title : null,
+      name: typeof value.name === "string" ? value.name : null,
+      toolKind: typeof value.kind === "string" ? value.kind : null,
+      status: typeof value.status === "string" ? value.status : null,
+      locations: Array.isArray(value.locations) ? value.locations.slice(0, 20)
+        .flatMap((item) => item && typeof item === "object" && "path" in item && typeof item.path === "string"
+          ? [item.path.slice(0, 500)] : []) : [] };
+  }
+  if (update.kind === "session_ready") {
+    return { sessionId: update.sessionId, protocolVersion: value.protocolVersion,
+      agentName: value.agentName, runtimeVersion: value.runtimeVersion };
+  }
+  if (update.kind === "usage_update") {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => typeof item === "number" && Number.isFinite(item)));
+  }
+  return null;
+}
 function retainsLease(status: TaskStatus): boolean { return status === "planning" || status === "running"; }
 
 function summarizeProviderResult(result: AgentRunResult): string {

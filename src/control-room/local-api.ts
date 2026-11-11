@@ -30,7 +30,7 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
   assertSafeLocalRequest(request);
   setLocalCors(response, request.headers.origin);
   if (method === "OPTIONS") {
-    response.writeHead(204, { "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type" });
+    response.writeHead(204, { "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type, last-event-id" });
     response.end();
     return;
   }
@@ -39,6 +39,33 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
   if (method === "GET" && url.pathname === "/api/control-room/providers/status") {
     if (!providers) return json(response, 200, []);
     return json(response, 200, await providers.list(url.searchParams.get("refresh") === "true"));
+  }
+  if (method === "GET" && url.pathname === "/api/control-room/providers/codex/config") {
+    if (!executor) throw new Error("Executor Codex nao configurado.");
+    const directoryId = url.searchParams.get("directoryId");
+    if (!directoryId) throw new Error("Informe directoryId para o catalogo Codex.");
+    return json(response, 200, await executor.codexConfig(directoryId));
+  }
+  const eventsMatch = /^\/api\/control-room\/executions\/([^/]+)\/events$/.exec(url.pathname);
+  if (method === "GET" && eventsMatch?.[1]) {
+    return streamExecutionEvents(service, decodeURIComponent(eventsMatch[1]), request, response);
+  }
+  const cancelMatch = /^\/api\/control-room\/executions\/([^/]+)\/cancel$/.exec(url.pathname);
+  if (method === "POST" && cancelMatch?.[1]) {
+    if (!executor) throw new Error("Executor nao configurado.");
+    await readBody(request);
+    const executionId = decodeURIComponent(cancelMatch[1]);
+    executor.cancel(executionId);
+    return json(response, 200, service.executionDetail(executionId)?.execution);
+  }
+  const permissionMatch = /^\/api\/control-room\/executions\/([^/]+)\/permissions\/([^/]+)$/.exec(url.pathname);
+  if (method === "POST" && permissionMatch?.[1] && permissionMatch[2]) {
+    if (!executor) throw new Error("Executor nao configurado.");
+    const body = await readBody(request);
+    const executionId = decodeURIComponent(permissionMatch[1]);
+    const permissionId = decodeURIComponent(permissionMatch[2]);
+    executor.respondPermission(executionId, permissionId, stringField(body, "optionId"));
+    return json(response, 200, service.store.getExecutionPermission(permissionId));
   }
   const executionMatch = /^\/api\/control-room\/executions\/([^/]+)$/.exec(url.pathname);
   if (method === "GET" && executionMatch?.[1]) {
@@ -88,10 +115,52 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     const body = await readBody(request);
     const provider = optionalString(body, "provider") ?? "auto";
     if (provider !== "auto" && !isProviderName(provider)) throw new Error("Provedor invalido.");
-    return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider));
+    const model = optionalString(body, "model");
+    const sessionId = optionalString(body, "sessionId");
+    return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider, model, sessionId));
   }
   json(response, 404, { error: "Rota nao encontrada." });
 }
+
+function streamExecutionEvents(service: ControlRoomService, executionId: string, request: IncomingMessage, response: ServerResponse): void {
+  const execution = service.store.getExecution(executionId);
+  if (!execution) {
+    const error = new Error("Execucao nao encontrada.");
+    (error as Error & { statusCode?: number }).statusCode = 404;
+    throw error;
+  }
+  const lastId = request.headers["last-event-id"];
+  let cursor = 0;
+  if (lastId) {
+    const match = new RegExp(`^${escapeRegExp(executionId)}:(\\d+)$`).exec(Array.isArray(lastId) ? lastId[0] ?? "" : lastId);
+    if (!match) throw new Error("Last-Event-ID invalido para esta execucao.");
+    cursor = Number(match[1]);
+    if (!Number.isSafeInteger(cursor)) throw new Error("Last-Event-ID invalido.");
+  }
+  response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+  response.write(": connected\n\n");
+  let closed = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe = () => {};
+  const cleanup = () => { if (closed) return; closed = true; if (heartbeat) clearInterval(heartbeat); unsubscribe(); };
+  const deliver = (event: import("../core/control-room.js").ExecutionEvent) => {
+    if (closed || event.sequence <= cursor) return;
+    cursor = event.sequence;
+    const writable = response.write(`id: ${event.id}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
+    if (!writable) { cleanup(); response.end(); return; }
+    if (["completed", "failed", "cancelled", "interrupted"].includes(event.kind)) { cleanup(); response.end(); }
+  };
+  response.on("close", cleanup);
+  unsubscribe = service.onExecutionEvent(executionId, deliver);
+  for (const event of service.listExecutionEvents(executionId, cursor)) deliver(event);
+  if (closed) return;
+  if (["completed", "failed", "cancelled"].includes(service.store.getExecution(executionId)?.status ?? "")) {
+    cleanup(); response.end(); return;
+  }
+  heartbeat = setInterval(() => { if (!closed) response.write(": heartbeat\n\n"); }, 15_000);
+  heartbeat.unref();
+}
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
 async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   let text = "";

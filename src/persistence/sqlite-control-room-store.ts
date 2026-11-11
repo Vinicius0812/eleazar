@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -9,6 +10,8 @@ import type {
   DelegationDecision,
   ExecutionLog,
   ExecutionFileChange,
+  ExecutionEvent,
+  ExecutionPermission,
   LocalProject,
   LocalProjectDirectory,
   TaskExecution,
@@ -57,7 +60,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     const placeholders = directoryIds.map(() => "?").join(", ");
     const exclusion = excludingTaskId ? "AND t.id <> ?" : "";
     const row = this.#db.prepare(`SELECT 1 FROM tasks t JOIN task_directory_scopes scope ON scope.task_id = t.id
-      WHERE scope.directory_id IN (${placeholders}) AND t.uses_worktree = 0 AND t.status IN ('planning', 'running') ${exclusion} LIMIT 1`)
+      WHERE scope.directory_id IN (${placeholders}) AND t.uses_worktree = 0
+      AND (t.status IN ('planning', 'running') OR (t.status = 'waiting_approval' AND t.dispatch_lease IS NOT NULL)) ${exclusion} LIMIT 1`)
       .get(...directoryIds, ...(excludingTaskId ? [excludingTaskId] : []));
     return Boolean(row);
   }
@@ -192,6 +196,125 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return this.#db.prepare("SELECT * FROM task_transitions WHERE task_id = ? ORDER BY rowid").all(taskId).map(mapTransition).filter(isPresent);
   }
 
+  setExecutionMetadata(executionId: string, leaseId: string, transport: TaskExecution["transport"], model: string | null, sessionId: string | null = null): boolean {
+    const result = this.#db.prepare(`UPDATE executions SET transport = @transport, model = COALESCE(@model, model),
+      session_id = COALESCE(@sessionId, session_id) WHERE id = @executionId AND lease_id = @leaseId
+      AND status IN ('planned', 'running')`).run({ executionId, leaseId, transport: transport ?? null, model, sessionId });
+    return result.changes === 1;
+  }
+  appendExecutionEvent(executionId: string, leaseId: string, kind: string, payload: Record<string, unknown>): ExecutionEvent | null {
+    return this.#db.transaction(() => {
+      const active = this.#db.prepare(`SELECT 1 FROM executions e JOIN tasks t ON t.id = e.task_id
+        WHERE e.id = ? AND e.lease_id = ? AND t.dispatch_lease = ? AND e.status = 'running'
+        AND t.status IN ('running', 'waiting_approval')`).get(executionId, leaseId, leaseId);
+      return active ? this.#insertEvent(executionId, kind, payload) : null;
+    })();
+  }
+  listExecutionEvents(executionId: string, afterSequence = 0): ExecutionEvent[] {
+    return this.#db.prepare("SELECT * FROM execution_events WHERE execution_id = ? AND sequence > ? ORDER BY sequence")
+      .all(executionId, afterSequence).map(mapEvent).filter(isPresent);
+  }
+  requestExecutionPermission(permission: ExecutionPermission): ExecutionEvent | null {
+    return this.#db.transaction(() => {
+      const row = this.#db.prepare(`SELECT e.task_id, t.status FROM executions e JOIN tasks t ON t.id = e.task_id
+        WHERE e.id = ? AND e.lease_id = ? AND e.status = 'running' AND t.dispatch_lease = ?
+        AND t.status IN ('running', 'waiting_approval')`).get(permission.executionId, permission.leaseId, permission.leaseId) as { task_id: string; status: string } | undefined;
+      if (!row) return null;
+      this.#db.prepare(`INSERT INTO execution_permissions (id, execution_id, lease_id, tool_call_id, title, tool_kind, tool_name, locations_json, requires_elevation, options_json, status, selected_option_id, created_at, resolved_at)
+        VALUES (@id, @executionId, @leaseId, @toolCallId, @title, @toolKind, @toolName, @locationsJson, @requiresElevation, @optionsJson, 'pending', NULL, @createdAt, NULL)`)
+        .run({ ...permission, locationsJson: JSON.stringify(permission.locations), requiresElevation: permission.requiresElevation ? 1 : 0,
+          optionsJson: JSON.stringify(permission.options) });
+      this.#db.prepare("UPDATE tasks SET status = 'waiting_approval', updated_at = ? WHERE id = ? AND dispatch_lease = ?")
+        .run(permission.createdAt, row.task_id, permission.leaseId);
+      if (row.status === "running") this.recordTransition({ id: randomUUID(), taskId: row.task_id, fromStatus: "running", fromDispatchLease: permission.leaseId,
+        toStatus: "waiting_approval", actor: "acp-permission", reason: "aguardando decisao de ferramenta", createdAt: permission.createdAt });
+      return this.#insertEvent(permission.executionId, "permission_requested", { permissionId: permission.id, toolCallId: permission.toolCallId,
+        title: permission.title, toolKind: permission.toolKind, toolName: permission.toolName,
+        locations: permission.locations, requiresElevation: permission.requiresElevation, options: permission.options });
+    })();
+  }
+  getExecutionPermission(permissionId: string): ExecutionPermission | null {
+    return mapPermission(this.#db.prepare("SELECT * FROM execution_permissions WHERE id = ?").get(permissionId));
+  }
+  listExecutionPermissions(executionId: string): ExecutionPermission[] {
+    return this.#db.prepare("SELECT * FROM execution_permissions WHERE execution_id = ? ORDER BY rowid")
+      .all(executionId).map(mapPermission).filter(isPresent);
+  }
+  decideExecutionPermission(permissionId: string, optionId: string): { permission: ExecutionPermission; event: ExecutionEvent } | null {
+    return this.#db.transaction(() => {
+      const permission = this.getExecutionPermission(permissionId);
+      if (!permission || permission.status !== "pending" || !permission.options.some((item) => item.id === optionId)) return null;
+      const row = this.#db.prepare(`SELECT e.task_id FROM executions e JOIN tasks t ON t.id = e.task_id
+        WHERE e.id = ? AND e.lease_id = ? AND e.status = 'running' AND t.dispatch_lease = ? AND t.status = 'waiting_approval'`)
+        .get(permission.executionId, permission.leaseId, permission.leaseId) as { task_id: string } | undefined;
+      if (!row) return null;
+      const resolvedAt = new Date().toISOString();
+      const changed = this.#db.prepare(`UPDATE execution_permissions SET status = 'selected', selected_option_id = ?, resolved_at = ?
+        WHERE id = ? AND status = 'pending'`).run(optionId, resolvedAt, permissionId);
+      if (changed.changes !== 1) return null;
+      const remaining = this.#db.prepare("SELECT 1 FROM execution_permissions WHERE execution_id = ? AND status = 'pending' LIMIT 1")
+        .get(permission.executionId);
+      if (!remaining) {
+        this.#db.prepare("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ? AND dispatch_lease = ?")
+          .run(resolvedAt, row.task_id, permission.leaseId);
+        this.recordTransition({ id: randomUUID(), taskId: row.task_id, fromStatus: "waiting_approval", fromDispatchLease: permission.leaseId,
+          toStatus: "running", actor: "local-operator", reason: "permissao ACP respondida", createdAt: resolvedAt });
+      }
+      const event = this.#insertEvent(permission.executionId, "permission_resolved", { permissionId, optionId });
+      return { permission: { ...permission, status: "selected" as const, selectedOptionId: optionId, resolvedAt }, event };
+    })();
+  }
+  cancelActiveExecution(executionId: string, reason: string): { execution: TaskExecution; event: ExecutionEvent } | null {
+    return this.#db.transaction(() => {
+      const execution = this.getExecution(executionId);
+      if (!execution || !execution.leaseId || !["planned", "running"].includes(execution.status)) return null;
+      const task = this.getTask(execution.taskId);
+      if (!task || task.dispatchLease !== execution.leaseId || !["planning", "running", "waiting_approval"].includes(task.status)) return null;
+      const at = new Date().toISOString();
+      this.#db.prepare("UPDATE tasks SET status = 'cancelled', dispatch_lease = NULL, updated_at = ? WHERE id = ? AND dispatch_lease = ?")
+        .run(at, task.id, execution.leaseId);
+      this.#db.prepare("UPDATE executions SET status = 'cancelled', finished_at = ?, summary = ? WHERE id = ? AND lease_id = ?")
+        .run(at, reason, executionId, execution.leaseId);
+      this.#db.prepare("UPDATE execution_permissions SET status = 'cancelled', resolved_at = ? WHERE execution_id = ? AND status = 'pending'")
+        .run(at, executionId);
+      this.recordTransition({ id: randomUUID(), taskId: task.id, fromStatus: task.status, fromDispatchLease: execution.leaseId,
+        toStatus: "cancelled", actor: "local-operator", reason, createdAt: at });
+      const event = this.#insertEvent(executionId, "cancelled", { reason });
+      return { execution: { ...execution, status: "cancelled" as const, finishedAt: at, summary: reason }, event };
+    })();
+  }
+  recoverInterruptedExecutions(reason: string): number {
+    return this.#db.transaction(() => {
+      const active = this.#db.prepare("SELECT * FROM executions WHERE status IN ('planned', 'running')").all().map(mapExecution).filter(isPresent);
+      const at = new Date().toISOString();
+      for (const execution of active) {
+        this.#db.prepare("UPDATE executions SET status = 'failed', finished_at = ?, summary = ? WHERE id = ?")
+          .run(at, reason, execution.id);
+        const task = this.getTask(execution.taskId);
+        const changed = this.#db.prepare(`UPDATE tasks SET status = 'failed', dispatch_lease = NULL, updated_at = ?
+          WHERE id = ? AND (dispatch_lease = ? OR (dispatch_lease IS NULL AND ? IS NULL))
+          AND status IN ('planning', 'running', 'waiting_approval')`)
+          .run(at, execution.taskId, execution.leaseId, execution.leaseId);
+        if (task && changed.changes) this.recordTransition({ id: randomUUID(), taskId: task.id, fromStatus: task.status,
+          fromDispatchLease: execution.leaseId, toStatus: "failed", actor: "startup", reason, createdAt: at });
+        this.#db.prepare("UPDATE execution_permissions SET status = 'cancelled', resolved_at = ? WHERE execution_id = ? AND status = 'pending'")
+          .run(at, execution.id);
+        this.#insertEvent(execution.id, "interrupted", { reason });
+      }
+      return active.length;
+    })();
+  }
+
+  #insertEvent(executionId: string, kind: string, payload: Record<string, unknown>): ExecutionEvent {
+    const sequence = (this.#db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM execution_events WHERE execution_id = ?")
+      .get(executionId) as { next: number }).next;
+    const event: ExecutionEvent = { executionId, sequence, id: `${executionId}:${sequence}`, kind, payload, createdAt: new Date().toISOString() };
+    this.#db.prepare(`INSERT INTO execution_events (execution_id, sequence, kind, payload_json, created_at)
+      VALUES (@executionId, @sequence, @kind, @payloadJson, @createdAt)`)
+      .run({ ...event, payloadJson: JSON.stringify(payload) });
+    return event;
+  }
+
   #migrate(): void {
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
@@ -207,6 +330,12 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         status TEXT NOT NULL, started_at TEXT, finished_at TEXT, summary TEXT, output TEXT, usage_json TEXT);
       CREATE TABLE IF NOT EXISTS execution_logs (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
         level TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS execution_events (execution_id TEXT NOT NULL REFERENCES executions(id), sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(execution_id, sequence));
+      CREATE TABLE IF NOT EXISTS execution_permissions (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
+        lease_id TEXT NOT NULL, tool_call_id TEXT NOT NULL, title TEXT NOT NULL, tool_kind TEXT, tool_name TEXT,
+        locations_json TEXT NOT NULL DEFAULT '[]', requires_elevation INTEGER NOT NULL DEFAULT 0, options_json TEXT NOT NULL,
+        status TEXT NOT NULL, selected_option_id TEXT, created_at TEXT NOT NULL, resolved_at TEXT);
       CREATE TABLE IF NOT EXISTS execution_file_changes (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
         directory_id TEXT NOT NULL REFERENCES project_directories(id), path TEXT NOT NULL, kind TEXT NOT NULL,
         additions INTEGER, deletions INTEGER, UNIQUE(execution_id, directory_id, path));
@@ -221,6 +350,10 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
     this.#addColumnIfMissing("executions", "output", "TEXT");
     this.#addColumnIfMissing("executions", "usage_json", "TEXT");
+    this.#addColumnIfMissing("executions", "transport", "TEXT");
+    this.#addColumnIfMissing("executions", "model", "TEXT");
+    this.#addColumnIfMissing("executions", "session_id", "TEXT");
+    this.#db.exec("UPDATE executions SET transport = 'legacy' WHERE transport IS NULL AND provider IS NOT NULL");
     this.#addColumnIfMissing("task_transitions", "from_lease", "TEXT");
     this.#migrateLegacyProjectDirectories();
     this.#db.exec(`UPDATE tasks SET target_directory_id = (
@@ -231,10 +364,10 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   finishExecution(taskId: string, leaseId: string, provider: import("../core/contracts.js").ProviderName, status: "completed" | "failed", transition: TaskTransition, summary: string, output: string, files: readonly ExecutionFileChange[], log: ExecutionLog, usage: import("../core/contracts.js").TokenUsage | undefined = undefined): ControlRoomTask | null {
     return this.#db.transaction(() => {
       const current = this.getTask(taskId);
-      if (!current || current.status !== "running" || current.dispatchLease !== leaseId) return null;
+      if (!current || !["running", "waiting_approval"].includes(current.status) || current.dispatchLease !== leaseId) return null;
       const finished = { ...current, status, dispatchLease: null, updatedAt: transition.createdAt };
       const task = this.#db.prepare(`UPDATE tasks SET status = @status, dispatch_lease = NULL, updated_at = @updatedAt
-        WHERE id = @id AND status = 'running' AND dispatch_lease = @leaseId`).run({ ...finished, leaseId });
+        WHERE id = @id AND status IN ('running', 'waiting_approval') AND dispatch_lease = @leaseId`).run({ ...finished, leaseId });
       if (task.changes !== 1) return null;
       const execution = this.#db.prepare(`UPDATE executions SET provider = @provider, status = @status, finished_at = @finishedAt, summary = @summary, output = @output, usage_json = @usageJson
         WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'running'`).run({ taskId, leaseId, provider, status, finishedAt: transition.createdAt, summary, output, usageJson: usage ? JSON.stringify(usage) : null });
@@ -247,6 +380,9 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       for (const file of files) insertFile.run({ ...file, executionId });
       this.recordTransition(transition);
       this.appendLog(log);
+      this.#db.prepare("UPDATE execution_permissions SET status = 'cancelled', resolved_at = ? WHERE execution_id = ? AND status = 'pending'")
+        .run(transition.createdAt, executionId);
+      this.#insertEvent(executionId, status, { summary });
       return finished;
     })();
   }
@@ -312,7 +448,23 @@ function mapTask(row: unknown, directoryIds: string[]): ControlRoomTask | null {
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), leaseId: nullableString(item, "lease_id"), provider: nullableString(item, "provider") as TaskExecution["provider"],
-    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary"), output: nullableString(item, "output"), usage: parseUsage(nullableString(item, "usage_json")) };
+    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary"), output: nullableString(item, "output"), usage: parseUsage(nullableString(item, "usage_json")),
+    transport: nullableString(item, "transport") as "acp" | "legacy" | null, model: nullableString(item, "model"), sessionId: nullableString(item, "session_id") };
+}
+function mapEvent(row: unknown): ExecutionEvent | null {
+  if (!row) return null; const item = row as Row;
+  return { executionId: stringValue(item, "execution_id"), sequence: Number(item.sequence), id: `${stringValue(item, "execution_id")}:${Number(item.sequence)}`,
+    kind: stringValue(item, "kind"), payload: JSON.parse(stringValue(item, "payload_json")) as Record<string, unknown>, createdAt: stringValue(item, "created_at") };
+}
+function mapPermission(row: unknown): ExecutionPermission | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), executionId: stringValue(item, "execution_id"), leaseId: stringValue(item, "lease_id"),
+    toolCallId: stringValue(item, "tool_call_id"), title: stringValue(item, "title"),
+    toolKind: nullableString(item, "tool_kind"), toolName: nullableString(item, "tool_name"),
+    locations: JSON.parse(stringValue(item, "locations_json")) as string[], requiresElevation: Boolean(item.requires_elevation),
+    options: JSON.parse(stringValue(item, "options_json")) as ExecutionPermission["options"],
+    status: stringValue(item, "status") as ExecutionPermission["status"], selectedOptionId: nullableString(item, "selected_option_id"),
+    createdAt: stringValue(item, "created_at"), resolvedAt: nullableString(item, "resolved_at") };
 }
 function parseUsage(value: string | null): import("../core/contracts.js").TokenUsage | null {
   if (!value) return null;

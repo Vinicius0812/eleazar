@@ -69,6 +69,35 @@ export interface TaskExecution {
   output?: string | null;
   /** Provider-reported token figures; absent when a CLI does not expose them. */
   usage?: TokenUsage | null;
+  transport?: "acp" | "legacy" | null;
+  model?: string | null;
+  sessionId?: string | null;
+}
+
+export interface ExecutionEvent {
+  executionId: string;
+  sequence: number;
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ExecutionPermission {
+  id: string;
+  executionId: string;
+  leaseId: string;
+  toolCallId: string;
+  title: string;
+  toolKind: string | null;
+  toolName: string | null;
+  locations: string[];
+  requiresElevation: boolean;
+  options: Array<{ id: string; name: string; kind: string }>;
+  status: "pending" | "selected" | "cancelled";
+  selectedOptionId: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
@@ -110,6 +139,8 @@ export interface ExecutionDetail {
   logs: ExecutionLog[];
   files: ExecutionFileChange[];
   history: TaskExecution[];
+  events: ExecutionEvent[];
+  permissions: ExecutionPermission[];
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -216,6 +247,15 @@ export interface ControlRoomStore {
   listDelegations(taskId: string): DelegationDecision[];
   recordTransition(transition: TaskTransition): void;
   listTransitions(taskId: string): TaskTransition[];
+  setExecutionMetadata(executionId: string, leaseId: string, transport: TaskExecution["transport"], model: string | null, sessionId?: string | null): boolean;
+  appendExecutionEvent(executionId: string, leaseId: string, kind: string, payload: Record<string, unknown>): ExecutionEvent | null;
+  listExecutionEvents(executionId: string, afterSequence?: number): ExecutionEvent[];
+  requestExecutionPermission(permission: ExecutionPermission): ExecutionEvent | null;
+  getExecutionPermission(permissionId: string): ExecutionPermission | null;
+  listExecutionPermissions(executionId: string): ExecutionPermission[];
+  decideExecutionPermission(permissionId: string, optionId: string): { permission: ExecutionPermission; event: ExecutionEvent } | null;
+  cancelActiveExecution(executionId: string, reason: string): { execution: TaskExecution; event: ExecutionEvent } | null;
+  recoverInterruptedExecutions(reason: string): number;
 }
 
 const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {

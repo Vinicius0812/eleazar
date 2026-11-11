@@ -11,6 +11,7 @@ const port = Number(process.env.ELEAZAR_CONTROL_ROOM_PORT ?? "4317");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("ELEAZAR_CONTROL_ROOM_PORT deve ser uma porta valida.");
 
 const store = new SqliteControlRoomStore(join(process.cwd(), ".eleazar", "control-room.sqlite"));
+store.recoverInterruptedExecutions("Host local reiniciado; execucao interrompida. Reenfileire manualmente para tentar novamente.");
 const service = createLocalControlRoomService(store);
 const orchestrator = createEleazar();
 const executor = new ControlRoomTaskExecutor(service, orchestrator);

@@ -68,6 +68,9 @@ export function acpEnvironment(runtimePath: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const name of allowed) if (process.env[name] !== undefined) env[name] = process.env[name];
   env.CODEX_PATH = runtimePath;
+  env.INITIAL_AGENT_MODE = "workspace-write";
+  env.CODEX_CONFIG = JSON.stringify({ sandbox_mode: "workspace-write", approval_policy: "on-request", web_search: "disabled",
+    sandbox_workspace_write: { network_access: false } });
   return env;
 }
 

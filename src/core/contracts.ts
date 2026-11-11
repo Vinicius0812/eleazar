@@ -47,6 +47,7 @@ export interface AgentRunRequest {
   cwd: string;
   model?: string;
   sessionId?: string;
+  additionalDirectories?: string[];
   taskKind?: TaskKind;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -65,6 +66,10 @@ export interface AgentPermissionRequest {
   sessionId: string;
   toolCallId: string;
   title: string;
+  toolKind?: string;
+  toolName?: string;
+  locations?: string[];
+  requiresElevation?: boolean;
   options: Array<{ id: string; name: string; kind: string }>;
 }
 
