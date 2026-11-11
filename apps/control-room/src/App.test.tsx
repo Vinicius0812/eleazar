@@ -35,6 +35,101 @@ describe("Task workspace", () => {
     expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
   });
 
+  it("offers only the announced Codex models and sends the chosen one", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    const getCodexConfig = vi.spyOn(controlled, "getCodexConfig").mockResolvedValue({ directoryId: "directory-1", runtime: { path: "codex", version: "9.9.9", source: "path" }, protocolVersion: 1, settings: [], models: [{ id: "m-a", name: "Modelo A" }, { id: "m-b", name: "Modelo B" }], defaultModel: "m-a" });
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    expect(getCodexConfig).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    const model = await screen.findByLabelText("Modelo");
+    expect(getCodexConfig).toHaveBeenCalledWith("directory-1");
+    expect(within(model).getAllByRole("option").map((option) => option.textContent)).toEqual(["Padrão anunciado (Modelo A)", "Modelo A", "Modelo B"]);
+    expect(screen.getByText("9.9.9")).toBeInTheDocument();
+    await user.selectOptions(model, "m-b");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "codex", { model: "m-b" });
+  });
+
+  it("offers resuming the previous session only as an explicit opt-in and shows the API refusal", async () => {
+    window.location.hash = "#/tasks/task-2";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const previous = { ...snapshot.tasks[0]!, status: "completed" as const };
+    const queued = { ...previous, id: "task-2", status: "queued" as const };
+    const earlier = { ...snapshot.runs[0]!, transport: "acp" as const, sessionId: "sess-1" };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued, previous], runs: [earlier] });
+    const executeTask = vi.spyOn(controlled, "executeTask").mockRejectedValueOnce(new Error("Retomada nao suportada.")).mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    const resume = await screen.findByLabelText(/Tentar retomar a sessão anterior/);
+    expect(resume).not.toBeChecked();
+    await user.click(resume);
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "codex", { sessionId: "sess-1" });
+    expect(await screen.findByText("Retomada nao suportada.")).toBeInTheDocument();
+    await user.click(screen.getByLabelText(/Tentar retomar a sessão anterior/));
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenLastCalledWith(queued.id, "codex");
+  });
+
+  it("shows a catalog failure and runs Codex without inventing a model", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    vi.spyOn(controlled, "getCodexConfig").mockRejectedValue(new Error("Codex indisponivel"));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    expect(await screen.findByText(/Codex indisponivel/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "codex");
+  });
+
+  it("links approvals to a live execution that waits for an ACP permission without treating it as scope approval", async () => {
+    window.location.hash = "#/approvals";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const running = { ...snapshot.tasks[0]!, status: "running" as const, dispatchLease: "lease-1" };
+    const run = { ...snapshot.runs[0]!, status: "running" as const, finishedAt: null };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [running], runs: [run] });
+    const base = await controlled.getExecutionDetail("run-1");
+    vi.spyOn(controlled, "getExecutionDetail").mockResolvedValue({ ...base, execution: run, task: running, permissions: [{ id: "perm-1", executionId: "run-1", toolCallId: "t", title: "Executar npm test", toolKind: "execute", toolName: "shell", locations: [], requiresElevation: false, options: [], status: "pending", selectedOptionId: null, createdAt: run.startedAt!, resolvedAt: null } as never] });
+    render(<App client={controlled} />);
+    expect(await screen.findByText("Executar npm test")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Abrir sessão e decidir/ }));
+    expect(window.location.hash).toBe("#/executions/run-1");
+    expect(screen.queryByText("Revisar proposta")).not.toBeInTheDocument();
+  });
+
+  it("treats waiting_approval with a live lease as an ACP decision, and without one as scope approval", async () => {
+    window.location.hash = "#/approvals";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const waiting = { ...snapshot.tasks[0]!, status: "waiting_approval" as const, dispatchLease: "lease-1" };
+    const run = { ...snapshot.runs[0]!, status: "running" as const, finishedAt: null };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [waiting], runs: [run], approvals: [] });
+    const base = await controlled.getExecutionDetail("run-1");
+    vi.spyOn(controlled, "getExecutionDetail").mockResolvedValue({ ...base, execution: run, task: waiting, permissions: [{ id: "perm-1", executionId: "run-1", toolCallId: "t", title: "Gravar arquivo", toolKind: "edit", toolName: "patch", locations: [], requiresElevation: false, options: [], status: "pending", selectedOptionId: null, createdAt: run.startedAt!, resolvedAt: null } as never] });
+    render(<App client={controlled} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Abrir sessão e decidir/ }));
+    expect(window.location.hash).toBe("#/executions/run-1");
+  });
+
   it("creates a task from the sidebar composer and reports execution, failure, and retry", async () => {
     const controlled = client();
     let snapshot = await controlled.getSnapshot();
@@ -252,5 +347,5 @@ describe("Control Room routes", () => {
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, retryTask: async () => undefined, decideApproval: async () => undefined };
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined };
 }

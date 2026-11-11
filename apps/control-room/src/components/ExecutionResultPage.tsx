@@ -1,11 +1,13 @@
 import { ArrowLeft, FileCode2, History, Terminal } from "lucide-react";
 
-import { AgentMarkdown } from "./AgentMarkdown.js";
-import type { ExecutionDetail, ExecutionFileChange, Run, Task } from "../services/contracts.js";
+import { ExecutionSession } from "./ExecutionSession.js";
+import type { ControlRoomClient, ExecutionDetail, ExecutionFileChange, Run, Task } from "../services/contracts.js";
 
 const executionStatus: Record<Run["status"], string> = { planned: "Planejada", running: "Em execução", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada" };
 
-export function ExecutionResultPage({ detail, loading, error, onBack, onSelect, onCreateRelated }: {
+export function ExecutionResultPage({ client, onSessionChanged, detail, loading, error, onBack, onSelect, onCreateRelated }: {
+  client: ControlRoomClient;
+  onSessionChanged?: () => void;
   detail: ExecutionDetail | null;
   loading: boolean;
   error: string;
@@ -22,7 +24,6 @@ export function ExecutionResultPage({ detail, loading, error, onBack, onSelect, 
     groups.set(key, [...(groups.get(key) ?? []), file]);
     return groups;
   }, new Map());
-  const output = execution.output?.trim() || execution.summary?.trim() || "O provedor não retornou conteúdo para esta execução.";
   return (
     <main className="execution-page" id="main" tabIndex={-1}>
       <header className="execution-page-header">
@@ -30,7 +31,7 @@ export function ExecutionResultPage({ detail, loading, error, onBack, onSelect, 
         <div className="execution-heading">
           <span className="eyebrow">RESULTADO DA EXECUÇÃO</span>
           <h1>{task.title}</h1>
-          <p>{project.name} · {execution.provider ?? "Provedor não informado"}</p>
+          <p>{project.name} · {execution.provider ?? "Provedor não informado"}{execution.model ? ` · ${execution.model}` : ""}</p>
         </div>
         <span className={`status ${execution.status}`}>{executionStatus[execution.status]}</span>
       </header>
@@ -43,7 +44,7 @@ export function ExecutionResultPage({ detail, loading, error, onBack, onSelect, 
       <div className="execution-layout">
         <article className="result-document">
           <div className="result-document-heading"><Terminal size={17} /><h2>Retorno do agente</h2></div>
-          <AgentMarkdown>{output}</AgentMarkdown>
+          <ExecutionSession key={execution.id} client={client} executionId={execution.id} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />
           <section className="affected-files" aria-labelledby="affected-files-title">
             <div className="result-document-heading"><FileCode2 size={17} /><h2 id="affected-files-title">Arquivos afetados</h2></div>
             {grouped.size ? [...grouped].map(([directory, changed]) => <div className="file-group" key={directory}>

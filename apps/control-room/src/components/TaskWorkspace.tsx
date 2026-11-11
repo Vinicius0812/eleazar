@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { ArrowLeft, MessageSquare, Terminal } from "lucide-react";
 
-import { AgentMarkdown } from "./AgentMarkdown.js";
-import type { LogEntry, Run, Task } from "../services/contracts.js";
+import { ExecutionSession } from "./ExecutionSession.js";
+import { isLiveExecution, type ControlRoomClient, type LogEntry, type Run, type Task } from "../services/contracts.js";
 
 const statusCopy: Record<Task["status"], string> = {
   queued: "A tarefa está pronta para ser executada. Confirme quando quiser começar.",
@@ -14,7 +14,9 @@ const statusCopy: Record<Task["status"], string> = {
   cancelled: "A tarefa foi cancelada.",
 };
 
-export function TaskWorkspace({ task, statusLabel, projectName, directoryName, scopeNames, run, latestLog, failure, actions }: {
+export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, latestLog, failure, actions }: {
+  client: ControlRoomClient;
+  onSessionChanged?: () => void;
   task: Task;
   statusLabel: string;
   projectName: string;
@@ -25,9 +27,10 @@ export function TaskWorkspace({ task, statusLabel, projectName, directoryName, s
   failure: string | undefined;
   actions: ReactNode;
 }) {
-  const result = task.status === "completed" && run?.status === "completed" ? run.output?.trim() || run.summary?.trim() : null;
-  const showLog = task.status === "planning" || task.status === "running" || task.status === "failed";
-  const showProvider = showLog || task.status === "completed";
+  const awaitsAcpDecision = task.status === "waiting_approval" && run !== undefined && isLiveExecution(task, run);
+  const showSession = Boolean(run) && (awaitsAcpDecision || (task.status !== "queued" && task.status !== "waiting_approval"));
+  const showLog = (task.status === "planning" || task.status === "running" || task.status === "failed");
+  const showProvider = showLog || showSession;
 
   return (
     <>
@@ -55,7 +58,7 @@ export function TaskWorkspace({ task, statusLabel, projectName, directoryName, s
         </div>
         <div className="task-progress" role="status" aria-label="Status da tarefa" aria-atomic="true">
           <span className={`status ${task.status}`}>{statusLabel}</span>
-          <p>{statusCopy[task.status]}</p>
+          <p>{awaitsAcpDecision ? "O agente aguarda a sua decisão de permissão nesta sessão." : statusCopy[task.status]}</p>
         </div>
         {failure && <div className="task-failure"><strong>Motivo da falha</strong><p>{failure}</p></div>}
         {showLog && latestLog && (
@@ -65,7 +68,7 @@ export function TaskWorkspace({ task, statusLabel, projectName, directoryName, s
             <p>{latestLog.message}</p>
           </div>
         )}
-        {result && <AgentMarkdown>{result}</AgentMarkdown>}
+        {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={false} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
         <div className="task-next-actions">
           <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>
           {actions}

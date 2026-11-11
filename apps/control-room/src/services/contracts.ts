@@ -10,11 +10,28 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export interface TokenUsage { input?: number; output?: number; thinking?: number; cacheRead?: number; total?: number; }
 export interface ProjectDirectory { id: string; name: string; path: string; createdAt: string; isGitRepository: boolean; }
 export interface Project { id: string; name: string; path: string; directories: ProjectDirectory[]; createdAt: string; }
-export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; createdAt: string; updatedAt: string; }
-export interface Run { id: string; taskId: string; provider: string | null; status: ExecutionStatus; startedAt: string | null; finishedAt: string | null; summary: string | null; output?: string | null; usage?: TokenUsage | null; }
+export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; dispatchLease?: string | null; createdAt: string; updatedAt: string; }
+export interface Run { id: string; taskId: string; provider: string | null; status: ExecutionStatus; startedAt: string | null; finishedAt: string | null; summary: string | null; output?: string | null; usage?: TokenUsage | null; transport?: "acp" | "legacy" | null; model?: string | null; sessionId?: string | null; }
 export interface LogEntry { id: string; executionId: string; level: LogLevel; message: string; createdAt: string; }
 export interface ExecutionFileChange { id: string; executionId: string; directoryId: string; path: string; kind: "added" | "modified" | "deleted" | "untracked" | "preexisting"; additions: number | null; deletions: number | null; }
-export interface ExecutionDetail { execution: Run; task: Task; project: Project; logs: LogEntry[]; files: ExecutionFileChange[]; history: Run[]; }
+export interface ExecutionDetail { execution: Run; task: Task; project: Project; logs: LogEntry[]; files: ExecutionFileChange[]; history: Run[]; events?: ExecutionEvent[]; permissions?: ExecutionPermission[]; }
+export interface ExecutionEvent { executionId: string; sequence: number; id: string; kind: string; payload: Record<string, unknown>; createdAt: string; }
+export const terminalEventKinds: readonly string[] = ["completed", "failed", "cancelled", "interrupted"];
+/**
+ * A run is live while it is running and its task still holds a dispatch lease. The backend
+ * parks such a task in `waiting_approval` while an ACP permission awaits a decision, so that
+ * status alone does not mean scope approval. Legacy DTOs without `dispatchLease` fall back
+ * to the running run itself, since a scope-approval task never has one.
+ */
+export function isLiveExecution(task: Task, run: Run): boolean {
+  return run.taskId === task.id && run.status === "running" && task.dispatchLease !== null
+    && (task.status === "planning" || task.status === "running" || task.status === "waiting_approval");
+}
+export interface ExecutionPermissionOption { id: string; name: string; kind: string; }
+export interface ExecutionPermission { id: string; executionId: string; toolCallId: string; title: string; toolKind: string | null; toolName: string | null; locations: string[]; requiresElevation: boolean; options: ExecutionPermissionOption[]; status: "pending" | "selected" | "cancelled"; selectedOptionId: string | null; createdAt: string; resolvedAt: string | null; }
+export interface CodexConfig { directoryId: string; runtime: { path: string; version: string; source: string }; protocolVersion: number; settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean"; currentValue: string | boolean; options: Array<{ id: string; name: string }> }>; models: Array<{ id: string; name: string }>; defaultModel: string | null; }
+export interface ExecuteOptions { model?: string; sessionId?: string; }
+export interface EventStreamOptions { afterId?: string | undefined; signal: AbortSignal; onEvent(event: ExecutionEvent): void; }
 export interface Approval { id: string; taskId: string; title: string; description: string; action: string; }
 export interface Alert { id: string; level: "warning" | "info" | "error"; title: string; message: string; }
 export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
@@ -30,7 +47,12 @@ export interface ControlRoomClient {
   getProviderStatuses(refresh?: boolean): Promise<ProviderStatus[]>;
   registerProject(input: RegisterProjectInput): Promise<Project>;
   createTask(input: CreateTaskInput): Promise<Task>;
-  executeTask(taskId: string, provider: ExecutionProvider): Promise<Task>;
+  getCodexConfig(directoryId: string): Promise<CodexConfig>;
+  executeTask(taskId: string, provider: ExecutionProvider, options?: ExecuteOptions): Promise<Task>;
+  /** Resolves true when the stream ended after a terminal event, false on any other end. Rejects on network/HTTP failure or abort. */
+  streamExecutionEvents(executionId: string, options: EventStreamOptions): Promise<boolean>;
+  cancelExecution(executionId: string): Promise<void>;
+  respondPermission(executionId: string, permissionId: string, optionId: string): Promise<void>;
   retryTask(taskId: string): Promise<void>;
   decideApproval(taskId: string, decision: "approve" | "reject"): Promise<void>;
 }
