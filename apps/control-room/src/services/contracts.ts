@@ -19,11 +19,11 @@ export interface Approval { id: string; taskId: string; title: string; descripti
 export interface Alert { id: string; level: "warning" | "info" | "error"; title: string; message: string; }
 export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
 export interface ProviderUsageStatus { source: ProviderUsageSource; usedPercent: number | null; resetAt: string | null; windowDurationMins: number | null; totalTokens: number | null; lifetimeTokens: number | null; todayTokens: number | null; }
-export interface ProviderStatus { provider: "codex" | "antigravity"; available: boolean; authenticated: boolean | null; version: string | null; detail: string; fetchedAt: string; usage: ProviderUsageStatus; }
+export interface ProviderStatus { provider: "codex" | "antigravity" | "claude"; available: boolean; authenticated: boolean | null; version: string | null; detail: string; fetchedAt: string; usage: ProviderUsageStatus; }
 export interface ControlRoomSnapshot { projects: Project[]; tasks: Task[]; runs: Run[]; logs: LogEntry[]; approvals: Approval[]; alerts: Alert[]; }
 export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; }
 export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
-export type ExecutionProvider = "auto" | "codex" | "antigravity";
+export type ExecutionProvider = "auto" | ProviderStatus["provider"];
 export interface ControlRoomClient {
   getSnapshot(): Promise<ControlRoomSnapshot>;
   getExecutionDetail(executionId: string): Promise<ExecutionDetail>;

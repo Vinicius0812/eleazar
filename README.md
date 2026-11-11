@@ -27,7 +27,7 @@ Inicie API e interface com um unico comando:
 npm run control-room
 ```
 
-Abra http://127.0.0.1:5173. A API escuta em http://127.0.0.1:4317 e o banco fica em `.eleazar/control-room.sqlite` do diretorio corrente. Ambos os servidores ficam restritos ao loopback; a API tambem rejeita Host, Origin e mutacoes que nao sejam JSON de enderecos nao-loopback.
+Abra http://127.0.0.1:5173. A API escuta em http://127.0.0.1:4317 e o banco fica em `.eleazar/control-room.sqlite` do diretório corrente. Ambos os servidores ficam restritos ao loopback. A API verifica o Host, permite apenas as origens da interface local e exige JSON para mutações.
 
 Verifique a entrega:
 
@@ -48,11 +48,36 @@ npm run dev -- run "Revise o tratamento de erros" --cwd C:\caminho\do\projeto
 
 Use `--json` em qualquer comando para obter saida legivel por outras ferramentas.
 
+### Claude Code para revisão e planejamento
+
+Use o [CLI nativo do Claude Code](https://code.claude.com/docs/en/cli-reference) já instalado no `PATH` e autenticado. `npm run doctor` verifica o estado local sem consultar modelos.
+
+```powershell
+npm run dev -- plan "Planeje a arquitetura a partir deste resumo aprovado: ..." --provider claude
+npm run dev -- run "Revise este trecho aprovado: ..." --provider claude
+```
+
+`plan` verifica se a tarefa é elegível. `run` envia o texto informado ao Claude, por isso inclua somente o contexto que você aprova compartilhar com o provedor. O adaptador abre uma execução textual de um turno em um diretório temporário, com ferramentas do agente, MCP e Chrome desabilitados, sem retomada de sessão. A política gerenciada do Claude Code continua aplicável. Essa configuração controla o uso do agente e mantém o processo do CLI sob as permissões do usuário local.
+
+Claude exige seleção explícita na CLI e na Control Room. No painel, crie uma tarefa de revisão ou planejamento e selecione **Claude Code** ao confirmar a execução. O painel envia o título e a solicitação ao provedor para uma resposta textual.
+
+### Revisão cruzada no terminal
+
+```powershell
+npm run dev -- cross-review "Simplifique o tratamento de erros" --cwd "C:\Projetos\repo" --file src/servico.ts --file src/validacao.ts
+```
+
+O comando requer um terminal interativo, Codex e Claude Code autenticados e um checkout Git inicialmente limpo. Repita `--file` para indicar cada arquivo regular já rastreado, com o caminho relativo exato e barras `/`. O Codex implementa localmente em sandbox `workspace-write`, com pedidos de elevação, busca web e rede das ferramentas desabilitados. O verificador Git limita o material que pode sair do checkout. A orientação de editar só os arquivos listados não equivale a uma restrição de escrita por arquivo. Mudanças fora do escopo, alterações preparadas no índice, inclusões, exclusões, renomes, diffs binários e diffs acima de 32 KiB interrompem o envio.
+
+Após cada implementação, confira o objetivo e o diff exibidos no terminal. A prévia dobra barras invertidas e mostra controles como escapes visíveis. Só digite `SIM` se autorizar o compartilhamento desse material com o Claude. Os achados são dados do revisor e exigem uma segunda confirmação antes de uma rodada de correção. O fluxo termina após no máximo duas rodadas e deixa as alterações locais disponíveis para inspeção, inclusive se a revisão for recusada ou falhar. Arquivos ignorados pelo Git ficam fora do relatório.
+
+Com `--json`, o resultado final sai no stdout. Progresso, prévias e confirmações ficam no stderr, que deve continuar conectado ao terminal.
+
 ## Control Room local
 
 A UI conversa somente com `GET /api/control-room/snapshot`, `GET /api/control-room/providers/status`, `GET /api/control-room/executions/:id`, `GET/POST /api/control-room/projects`, `GET/POST /api/control-room/tasks`, `POST /api/control-room/tasks/:id/transition`, `POST /api/control-room/tasks/:id/dispatch` e `POST /api/control-room/tasks/:id/execute`. Os DTOs HTTP espelham os contratos de `src/core/control-room.ts`, mas ficam no pacote da UI sem importar Node, SQLite ou SDKs de provedores.
 
-O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar**: escolha roteamento automático, Codex ou Antigravity e confirme. A API verifica a disponibilidade já autenticada, inicia o provedor no diretório-alvo e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
+O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar** e confirme o provedor. Codex e Antigravity executam no diretório-alvo. Claude Code recebe somente o texto das tarefas compatíveis. A API verifica a disponibilidade e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
 
 Consulte [o guia do Control Room](docs/control-room.md) para detalhes do transporte e operacao local.
 

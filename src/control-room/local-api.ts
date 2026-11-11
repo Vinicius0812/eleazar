@@ -2,9 +2,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
 import { taskActions, taskStatuses, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
-import { providerNames, taskKinds, type ProviderName } from "../core/contracts.js";
+import { isAutomaticProvider, isProviderName, taskKinds } from "../core/contracts.js";
 import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
+
+const uiOrigins = new Set([
+  "http://127.0.0.1:5173", "http://localhost:5173",
+  "http://127.0.0.1:4173", "http://localhost:4173"
+]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
 export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService): Server {
@@ -72,18 +77,18 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
   const dispatchMatch = /^\/api\/control-room\/tasks\/([^/]+)\/dispatch$/.exec(url.pathname);
   if (method === "POST" && dispatchMatch?.[1]) {
     const body = await readBody(request); const selectedProvider = optionalString(body, "selectedProvider");
-    if (selectedProvider && !providerNames.includes(selectedProvider as ProviderName)) throw new Error("Provedor invalido.");
+    if (selectedProvider !== undefined && !isAutomaticProvider(selectedProvider)) throw new Error("Provedor invalido.");
     const actions = arrayOfStrings(body.requestedActions, "requestedActions") as TaskAction[];
     if (!actions.every((action) => taskActions.includes(action))) throw new Error("Acao de despacho invalida.");
-    return json(response, 202, await service.dispatch(dispatchMatch[1], { selectedProvider: selectedProvider as ProviderName | null ?? null, reason: stringField(body, "reason"), candidates: [], requestedActions: actions }));
+    return json(response, 202, await service.dispatch(dispatchMatch[1], { selectedProvider: selectedProvider ?? null, reason: stringField(body, "reason"), candidates: [], requestedActions: actions }));
   }
   const executeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/execute$/.exec(url.pathname);
   if (method === "POST" && executeMatch?.[1]) {
     if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");
     const body = await readBody(request);
     const provider = optionalString(body, "provider") ?? "auto";
-    if (provider !== "auto" && !providerNames.includes(provider as ProviderName)) throw new Error("Provedor invalido.");
-    return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider as ProviderName));
+    if (provider !== "auto" && !isProviderName(provider)) throw new Error("Provedor invalido.");
+    return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider));
   }
   json(response, 404, { error: "Rota nao encontrada." });
 }
@@ -125,14 +130,16 @@ function arrayOfStrings(value: unknown, name: string): string[] { if (!Array.isA
 function json(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { "content-type": "application/json; charset=utf-8" }); response.end(JSON.stringify(body)); }
 
 function assertSafeLocalRequest(request: IncomingMessage): void {
-  if (!isLoopbackAddress(request.socket.remoteAddress) || !isLoopbackHost(request.headers.host)) {
+  const host = loopbackHost(request.headers.host);
+  if (!isLoopbackAddress(request.socket.remoteAddress) || !host) {
     const error = new Error("A API local exige origem de rede e Host loopback.");
     (error as Error & { statusCode?: number }).statusCode = 403;
     throw error;
   }
   const origin = request.headers.origin;
-  if (origin && !isLoopbackOrigin(origin)) {
-    const error = new Error("Mutacoes locais exigem uma Origin loopback.");
+  const sameOrigin = origin === host.origin && Number(host.port || "80") === request.socket.localPort;
+  if (origin !== undefined && !sameOrigin && !uiOrigins.has(origin)) {
+    const error = new Error("Origin nao autorizada para a API local.");
     (error as Error & { statusCode?: number }).statusCode = 403;
     throw error;
   }
@@ -148,21 +155,13 @@ function assertJsonMutation(request: IncomingMessage): void {
 }
 
 function setLocalCors(response: ServerResponse, origin: string | undefined): void {
-  if (!origin) return;
-  response.setHeader("access-control-allow-origin", origin);
   response.setHeader("vary", "Origin");
+  if (origin) response.setHeader("access-control-allow-origin", origin);
 }
 
-function isLoopbackHost(host: string | undefined): boolean {
-  if (!host) return false;
-  try { return isLoopbackName(new URL(`http://${host}`).hostname); } catch { return false; }
-}
-function isLoopbackOrigin(origin: string): boolean {
-  try { return isLoopbackName(new URL(origin).hostname); } catch { return false; }
-}
-function isLoopbackName(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, "");
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+function loopbackHost(host: string | undefined): URL | undefined {
+  if (!host || !/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i.test(host)) return undefined;
+  try { return new URL(`http://${host}`); } catch { return undefined; }
 }
 function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";

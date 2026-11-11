@@ -1,7 +1,6 @@
 import { ArrowLeft, FileCode2, History, Terminal } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
+import { AgentMarkdown } from "./AgentMarkdown.js";
 import type { ExecutionDetail, ExecutionFileChange, Run, Task } from "../services/contracts.js";
 
 const executionStatus: Record<Run["status"], string> = { planned: "Planejada", running: "Em execução", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada" };
@@ -44,7 +43,7 @@ export function ExecutionResultPage({ detail, loading, error, onBack, onSelect, 
       <div className="execution-layout">
         <article className="result-document">
           <div className="result-document-heading"><Terminal size={17} /><h2>Retorno do agente</h2></div>
-          <div className="markdown-output"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{output}</ReactMarkdown></div>
+          <AgentMarkdown>{output}</AgentMarkdown>
           <section className="affected-files" aria-labelledby="affected-files-title">
             <div className="result-document-heading"><FileCode2 size={17} /><h2 id="affected-files-title">Arquivos afetados</h2></div>
             {grouped.size ? [...grouped].map(([directory, changed]) => <div className="file-group" key={directory}>

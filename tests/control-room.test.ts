@@ -517,6 +517,49 @@ describe("local Control Room API", () => {
     store.close();
   });
 
+  it("isola snapshots, mutacoes e preflights de outras origens loopback", async () => {
+    const { service, store } = await fixture();
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Endereco ausente");
+      const { port } = address;
+      const snapshot = "/api/control-room/snapshot";
+      const projects = "/api/control-room/projects";
+      const unknownHost = `127.0.0.1:${port === 65432 ? 65433 : 65432}`;
+      const unknownOrigin = `http://${unknownHost}`;
+      const payload = [Buffer.from(JSON.stringify({ name: "Local", path: process.cwd() }))];
+      const blocked = [
+        await send(port, snapshot, [], { origin: unknownOrigin }, "GET"),
+        await send(port, projects, payload, { origin: unknownOrigin, "content-type": "application/json" }),
+        await send(port, projects, [], { origin: unknownOrigin, "access-control-request-method": "POST" }, "OPTIONS"),
+        await send(port, snapshot, [], { origin: unknownOrigin, host: unknownHost }, "GET"),
+        await send(port, snapshot, [], { origin: "http://127.0.0.1:5173/" }, "GET"),
+        await send(port, snapshot, [], { origin: "https://127.0.0.1:5173" }, "GET"),
+      ];
+      for (const response of blocked) {
+        expect(response.status).toBe(403);
+        expect(response.corsOrigin).toBeUndefined();
+      }
+      expect(store.listProjects()).toHaveLength(0);
+
+      for (const origin of ["http://127.0.0.1:5173", "http://localhost:4173", `http://127.0.0.1:${port}`]) {
+        const response = await send(port, snapshot, [], { origin }, "GET");
+        expect(response).toMatchObject({ status: 200, corsOrigin: origin });
+      }
+      const origin = "http://localhost:5173";
+      const preflight = await send(port, projects, [], { origin, "access-control-request-method": "POST" }, "OPTIONS");
+      expect(preflight).toMatchObject({ status: 204, corsOrigin: origin });
+      const created = await send(port, projects, payload, { origin, "content-type": "application/json" });
+      expect(created).toMatchObject({ status: 201, corsOrigin: origin });
+      expect((await send(port, snapshot, [], {}, "GET")).status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      store.close();
+    }
+  });
+
   it("aceita leitura pela forma IPv6 loopback [::1]", async () => {
     const { service, store } = await fixture();
     const server = createControlRoomServer(service);
@@ -540,11 +583,11 @@ function dispatchAttempt(taskId: string, leaseId: string, decisionId: string, ex
   };
 }
 
-function send(port: number, path: string, chunks: readonly Buffer[], headers: Record<string, string> = {}, method = "POST", hostname = "127.0.0.1"): Promise<{ status: number; body: Record<string, unknown> }> {
+function send(port: number, path: string, chunks: readonly Buffer[], headers: Record<string, string> = {}, method = "POST", hostname = "127.0.0.1"): Promise<{ status: number; body: Record<string, unknown>; corsOrigin: string | undefined }> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({ hostname, port, path, method, headers }, (response) => {
       let text = ""; response.setEncoding("utf8"); response.on("data", (chunk: string) => { text += chunk; });
-      response.on("end", () => resolve({ status: response.statusCode ?? 0, body: JSON.parse(text) as Record<string, unknown> }));
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, body: text ? JSON.parse(text) as Record<string, unknown> : {}, corsOrigin: response.headers["access-control-allow-origin"] }));
     });
     request.once("error", reject); for (const chunk of chunks) request.write(chunk); request.end();
   });

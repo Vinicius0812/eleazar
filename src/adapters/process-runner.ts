@@ -12,6 +12,8 @@ export interface ProcessOptions {
   cwd?: string;
   timeoutMs?: number;
   stdin?: string;
+  env?: NodeJS.ProcessEnv;
+  maxOutputBytes?: number;
 }
 
 export async function runProcess(
@@ -24,7 +26,7 @@ export async function runProcess(
   return await new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       shell: false,
       stdio: "pipe",
       windowsHide: true
@@ -33,17 +35,31 @@ export async function runProcess(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let stdinError: Error | undefined;
+    let outputBytes = 0;
+    let outputTooLarge = false;
+
+    function acceptOutput(chunk: string): boolean {
+      if (!options.maxOutputBytes) return true;
+      if (outputTooLarge) return false;
+      outputBytes += Buffer.byteLength(chunk, "utf8");
+      if (outputBytes <= options.maxOutputBytes) return true;
+      outputTooLarge = true;
+      child.kill();
+      return false;
+    }
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      if (acceptOutput(chunk)) stdout += chunk;
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      if (acceptOutput(chunk)) stderr += chunk;
     });
 
     child.on("error", reject);
+    child.stdin.on("error", (error) => { stdinError = error; });
 
     const timeout = options.timeoutMs
       ? setTimeout(() => {
@@ -56,13 +72,18 @@ export async function runProcess(
       if (timeout) {
         clearTimeout(timeout);
       }
+      if (outputTooLarge) {
+        reject(new Error("O subprocesso excedeu o limite de saida."));
+        return;
+      }
+      if (stdinError && exitCode === 0) {
+        reject(stdinError);
+        return;
+      }
 
       resolve({ exitCode, stdout, stderr, durationMs: Date.now() - startedAt, timedOut });
     });
 
-    if (options.stdin) {
-      child.stdin.write(options.stdin);
-    }
-    child.stdin.end();
+    child.stdin.end(options.stdin);
   });
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   AgentAdapter,
@@ -88,5 +88,22 @@ describe("Router", () => {
     const decision = await router.route({ prompt: "Implemente uma funcionalidade" });
 
     expect(decision.selected).toBe("antigravity");
+  });
+
+  it("só seleciona Claude para uma tarefa compatível com seleção explícita e autenticação confirmada", async () => {
+    const claude: AgentAdapter = {
+      provider: "claude",
+      supportedTasks: new Set(["review", "planning"]),
+      health: vi.fn<() => Promise<AgentHealth>>().mockResolvedValue({ provider: "claude", available: true, authenticated: true, detail: "ok" }),
+      run: vi.fn<AgentAdapter["run"]>(),
+    };
+    const router = new Router([healthyCodex, healthyAntigravity, claude]);
+    expect((await router.route({ prompt: "Revise a mudança" })).selected).toBe("codex");
+    expect(claude.health).not.toHaveBeenCalled();
+    expect((await router.route({ prompt: "Revise a mudança", preferredProvider: "claude" })).selected).toBe("claude");
+    expect((await router.route({ prompt: "Implemente a mudança", preferredProvider: "claude" })).selected).toBeNull();
+    vi.mocked(claude.health).mockResolvedValueOnce({ provider: "claude", available: true, authenticated: null, detail: "indefinido" });
+    expect((await router.route({ prompt: "Planeje a mudança", preferredProvider: "claude" })).selected).toBeNull();
+    expect((await new Router([healthyCodex]).route({ prompt: "Revise a mudança", preferredProvider: "claude" })).selected).toBeNull();
   });
 });

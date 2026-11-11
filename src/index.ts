@@ -1,7 +1,9 @@
 export { AntigravityAdapter } from "./adapters/antigravity.js";
+export { ClaudeAdapter } from "./adapters/claude.js";
 export { CodexAdapter } from "./adapters/codex.js";
 export { createEleazar } from "./create-eleazar.js";
 export * from "./core/contracts.js";
+export * from "./core/cross-review.js";
 export * from "./core/control-room.js";
 export { ControlRoomService } from "./core/control-room-service.js";
 export { GitWorktreeProvisioner } from "./core/git-worktree-provisioner.js";

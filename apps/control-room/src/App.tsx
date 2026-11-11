@@ -14,7 +14,6 @@ import {
   Clock3,
   FolderGit2,
   GitBranch,
-  Layers3,
   LayoutDashboard,
   ListTodo,
   Moon,
@@ -31,14 +30,17 @@ import {
 } from "lucide-react";
 import { Modal } from "./components/Modal.js";
 import { ExecutionResultPage } from "./components/ExecutionResultPage.js";
+import { TaskComposer } from "./components/TaskComposer.js";
+import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import type {
   Approval,
   ControlRoomClient,
   ControlRoomSnapshot,
+  CreateTaskInput,
   ExecutionDetail,
+  ExecutionProvider,
   ProviderStatus,
   LogEntry,
-  Priority,
   Run,
   Task,
 } from "./services/contracts.js";
@@ -53,6 +55,12 @@ const statuses = {
   failed: "Falhou",
   cancelled: "Cancelada",
 };
+const runStatuses = { ...statuses, planned: "Planejada" };
+const providerLabels: Record<ProviderStatus["provider"], { name: string; symbol: string }> = {
+  codex: { name: "Codex", symbol: "C" },
+  antigravity: { name: "Antigravity", symbol: "A" },
+  claude: { name: "Claude Code", symbol: "Cl" },
+};
 const navigation = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "projects", label: "Projetos", icon: FolderGit2 },
@@ -63,8 +71,6 @@ const navigation = [
 ];
 type DialogState =
   | { kind: "project" }
-  | { kind: "task" }
-  | { kind: "detail"; task: Task }
   | { kind: "execute"; task: Task }
   | { kind: "related"; task: Task }
   | { kind: "approval"; approval: Approval }
@@ -102,12 +108,19 @@ function message(reason: unknown) {
     ? reason.message
     : "Não foi possível concluir a operação.";
 }
-function executionIdFromHash(): string | null {
-  const match = /^#\/executions\/([^/]+)$/.exec(window.location.hash);
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
+function routeId(hash: string, page: "executions" | "tasks"): string | null {
+  const [section, id, ...remaining] = hash.replace(/^#\/?/, "").split("/");
+  if (section !== page || !id || remaining.length) return null;
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return null;
+  }
 }
 type PageRoute = "overview" | "projects" | "tasks" | "executions" | "approvals" | "logs" | "not-found";
 type Theme = "light" | "dark";
+
+const narrowScreen = "(max-width: 760px)";
 
 function preferredTheme(): Theme {
   const saved = window.localStorage.getItem("eleazar.theme");
@@ -115,8 +128,8 @@ function preferredTheme(): Theme {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function pageFromHash(): PageRoute {
-  const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] || "overview";
+function pageFromHash(hash: string): PageRoute {
+  const value = hash.replace(/^#\/?/, "").split("/")[0] || "overview";
   return ["overview", "projects", "tasks", "executions", "approvals", "logs"].includes(value) ? value as PageRoute : "not-found";
 }
 function readableRunSummary(summary: string | null) {
@@ -159,8 +172,8 @@ function ProviderStatusPanel({ providers, loading, error, onRefresh }: { provide
     {error && <div className="provider-note error">{error}</div>}
     <div className="provider-list">
       {providers.map((provider) => <article className="provider-row" key={provider.provider}>
-        <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}>{provider.provider === "codex" ? "C" : "A"}</span>
-        <div><strong>{provider.provider === "codex" ? "Codex" : "Antigravity"}</strong><small>{provider.detail}</small></div>
+        <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}>{providerLabels[provider.provider].symbol}</span>
+        <div><strong>{providerLabels[provider.provider].name}</strong><small>{provider.detail}</small></div>
         <div className="provider-usage">
           {provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.provider}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
         </div>
@@ -181,26 +194,28 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [projectFilter, setProjectFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
-  const [active, setActive] = useState<PageRoute>(pageFromHash());
+  const [hash, setHash] = useState(() => window.location.hash);
+  const active = pageFromHash(hash);
+  const executionRoute = routeId(hash, "executions");
+  const taskRoute = routeId(hash, "tasks");
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
-  const [taskProjectId, setTaskProjectId] = useState("");
-  const [taskDirectoryId, setTaskDirectoryId] = useState("");
-  const [taskDirectoryIds, setTaskDirectoryIds] = useState<string[]>([]);
-  const [executionProvider, setExecutionProvider] = useState<"auto" | "codex" | "antigravity">("auto");
-  const [executionRoute, setExecutionRoute] = useState<string | null>(executionIdFromHash());
+  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("auto");
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState("");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState("");
-  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("eleazar.sidebarCollapsed") === "true");
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.(narrowScreen).matches ?? false);
+  const [narrowCollapsed, setNarrowCollapsed] = useState(true);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => window.localStorage.getItem("eleazar.sidebarCollapsed") === "true");
+  const collapsed = narrow ? narrowCollapsed : desktopCollapsed;
   const [theme, setTheme] = useState<Theme>(preferredTheme);
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!dialog && !busy && focusTrigger.current) {
       if (focusTrigger.current.isConnected) focusTrigger.current.focus();
-      else document.getElementById("approvals-title")?.focus();
+      else (document.getElementById("task-workspace-title") ?? document.getElementById("approvals-title"))?.focus();
       focusTrigger.current = null;
     }
   }, [dialog, busy]);
@@ -221,7 +236,10 @@ export function App({ client }: { client: ControlRoomClient }) {
     };
   }, [client]);
   useEffect(() => {
-    const onHashChange = () => { setExecutionRoute(executionIdFromHash()); setActive(pageFromHash()); };
+    const onHashChange = () => {
+      setHash(window.location.hash);
+      setNarrowCollapsed(true);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -234,7 +252,16 @@ export function App({ client }: { client: ControlRoomClient }) {
       .finally(() => { if (alive) setExecutionLoading(false); });
     return () => { alive = false; };
   }, [client, executionRoute]);
-  useEffect(() => { window.localStorage.setItem("eleazar.sidebarCollapsed", String(collapsed)); }, [collapsed]);
+  useEffect(() => {
+    const media = window.matchMedia?.(narrowScreen);
+    function onResize(event: MediaQueryListEvent) {
+      setNarrow(event.matches);
+      if (event.matches) setNarrowCollapsed(true);
+    }
+    media?.addEventListener?.("change", onResize);
+    return () => media?.removeEventListener?.("change", onResize);
+  }, []);
+  useEffect(() => { window.localStorage.setItem("eleazar.sidebarCollapsed", String(desktopCollapsed)); }, [desktopCollapsed]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
@@ -250,27 +277,33 @@ export function App({ client }: { client: ControlRoomClient }) {
   const hasLiveTask = data?.tasks.some((task) => task.status === "planning" || task.status === "running") ?? false;
   useEffect(() => {
     if (!hasLiveTask) return;
-    const timer = window.setTimeout(() => {
-      client.getSnapshot().then(setData).catch((reason) => setError(message(reason)));
-    }, 2_000);
-    return () => window.clearTimeout(timer);
+    let alive = true;
+    let timer: number;
+    async function poll() {
+      try {
+        const snapshot = await client.getSnapshot();
+        if (alive) {
+          setData(snapshot);
+          setError("");
+        }
+      } catch (reason) {
+        if (alive) setError(message(reason));
+      }
+      if (alive) timer = window.setTimeout(poll, 2_000);
+    }
+    timer = window.setTimeout(poll, 2_000);
+    return () => { alive = false; window.clearTimeout(timer); };
   }, [client, hasLiveTask, data?.tasks]);
   function open(next: DialogState) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
     if (next?.kind === "project") setProjectDirectories([{ name: "", path: "" }]);
-    if (next?.kind === "task") {
-      const projectId = projectFilter !== "all" ? projectFilter : projects[0]?.id ?? "";
-      setTaskProjectId(projectId);
-      const directoryId = projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "";
-      setTaskDirectoryId(directoryId);
-      setTaskDirectoryIds(directoryId ? [directoryId] : []);
-    }
     if (next?.kind === "execute") setExecutionProvider("auto");
     setDialog(next);
   }
   function navigate(next: PageRoute): void { window.location.hash = `/${next === "not-found" ? "overview" : next}`; }
   function openExecution(executionId: string) { window.location.hash = `/executions/${encodeURIComponent(executionId)}`; }
+  function openTask(taskId: string) { window.location.hash = `/tasks/${encodeURIComponent(taskId)}`; }
   function backToDashboard() { navigate("overview"); }
   function refreshProviders(): void { setProvidersLoading(true); setProvidersError(""); client.getProviderStatuses(true).then(setProviders).catch((reason) => setProvidersError(message(reason))).finally(() => setProvidersLoading(false)); }
   async function refresh() {
@@ -285,12 +318,12 @@ export function App({ client }: { client: ControlRoomClient }) {
       setBusy(false);
     }
   }
-  async function mutate(operation: () => Promise<unknown>, success: string) {
+  async function mutate<Result>(operation: () => Promise<Result>, success: string, onSuccess?: (result: Result) => void) {
     setBusy(true);
     setFormError("");
     setNotice("");
     try {
-      await operation();
+      const result = await operation();
       setDialog(null);
       setNotice(success);
       try {
@@ -301,6 +334,7 @@ export function App({ client }: { client: ControlRoomClient }) {
           "A ação foi concluída, mas o painel não pôde ser atualizado. Use Atualizar para carregar o estado atual.",
         );
       }
+      onSuccess?.(result);
     } catch (reason) {
       setFormError(message(reason));
     } finally {
@@ -319,35 +353,35 @@ export function App({ client }: { client: ControlRoomClient }) {
       "Projeto cadastrado. Ele já está disponível para novas tarefas.",
     );
   }
-  function submitTask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    void mutate(async () => {
-      const task = await client.createTask({
-        projectId: String(fields.get("projectId")),
-        targetDirectoryId: String(fields.get("targetDirectoryId")),
-        directoryIds: taskDirectoryIds,
-        title: String(fields.get("title")),
-        prompt: String(fields.get("prompt")),
-        priority: String(fields.get("priority")) as Priority,
-      });
+  function submitTask(input: CreateTaskInput) {
+    void mutate(() => client.createTask(input), "Tarefa criada.", (task) => {
       setProjectFilter(task.projectId);
       setQuery("");
-    }, "Tarefa criada e adicionada à fila.");
+      openTask(task.id);
+    });
   }
   function submitRelatedTask(event: FormEvent<HTMLFormElement>, task: Task) {
     event.preventDefault();
     const targetDirectoryId = task.targetDirectoryId ?? task.directoryIds[0];
     if (!targetDirectoryId) { setFormError("A tarefa original não possui um diretório válido para herdar."); return; }
     const fields = new FormData(event.currentTarget);
-    void mutate(async () => {
-      await client.createTask({ projectId: task.projectId, targetDirectoryId, directoryIds: task.directoryIds.length ? task.directoryIds : [targetDirectoryId], title: String(fields.get("title")), prompt: String(fields.get("prompt")), priority: task.priority, kind: task.kind });
-      navigate("tasks");
-    }, "Tarefa relacionada criada com o mesmo contexto.");
+    void mutate(
+      () => client.createTask({ projectId: task.projectId, targetDirectoryId, directoryIds: task.directoryIds.length ? task.directoryIds : [targetDirectoryId], title: String(fields.get("title")), prompt: String(fields.get("prompt")), priority: task.priority, kind: task.kind }),
+      "Tarefa relacionada criada com o mesmo contexto.",
+      (related) => openTask(related.id),
+    );
   }
   const projects = data?.projects ?? [];
   const tasks = data?.tasks ?? [];
   const approvals = data?.approvals ?? [];
+  const selectedTask = tasks.find((task) => task.id === taskRoute);
+  const selectedApproval = approvals.find((approval) => approval.taskId === selectedTask?.id);
+  const taskViewHeading = useRef<HTMLHeadingElement>(null);
+  const taskViewReady = taskRoute !== null && data !== null;
+  useEffect(() => {
+    if (taskViewReady) taskViewHeading.current?.focus();
+  }, [taskRoute, taskViewReady, selectedTask?.id]);
+  useEffect(() => { setFormError(""); }, [taskRoute]);
   const filteredTasks = tasks
     .filter(
       (task) =>
@@ -364,11 +398,11 @@ export function App({ client }: { client: ControlRoomClient }) {
   const projectName = (id: string) =>
     projects.find((project) => project.id === id)?.name ??
     "Projeto indisponível";
-  const projectForTask = projects.find((project) => project.id === taskProjectId);
   const directoryName = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.find((directory) => directory.id === task.targetDirectoryId)?.name ?? "Diretório indisponível";
   const directoryNames = (task: Task) => projects.find((project) => project.id === task.projectId)?.directories.filter((directory) => task.directoryIds.includes(directory.id)).map((directory) => directory.name).join(", ") ?? "Diretório indisponível";
   const latestRunForTask = (taskId: string) => data?.runs.find((run) => run.taskId === taskId);
   const latestLogForRun = (runId: string) => data?.logs.filter((log) => log.executionId === runId).at(-1);
+  const selectedRun = selectedTask && latestRunForTask(selectedTask.id);
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
     overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
@@ -378,23 +412,17 @@ export function App({ client }: { client: ControlRoomClient }) {
         Ir para o conteúdo
       </a>
       <aside className="sidebar">
-        <a className="brand" href="#/overview" title="Eleazar · Visão geral">
-          <span className="brand-symbol">
-            <Terminal size={23} />
-          </span>
-          <span>
-            Eleazar<small>CONTROL ROOM</small>
-          </span>
-        </a>
-        <button className="sidebar-toggle" aria-label={collapsed ? "Expandir menu" : "Recolher menu"} aria-pressed={collapsed} onClick={() => setCollapsed((value) => !value)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button>
-        <div className="workspace">
-          <span className="workspace-icon">E</span>
-          <div>
-            Workspace local<small>Seu centro de operações</small>
-          </div>
-          <Layers3 size={15} />
+        <div className="sidebar-heading">
+          <a className="brand" href="#/overview" aria-label="Eleazar · Visão geral" title="Eleazar · Visão geral">
+            <span className="brand-symbol"><Terminal size={18} aria-hidden="true" /></span>
+            <span>Eleazar</span>
+          </a>
+          <button className="sidebar-toggle" type="button" aria-label={collapsed ? "Expandir menu" : "Recolher menu"} aria-expanded={!collapsed} onClick={() => (narrow ? setNarrowCollapsed : setDesktopCollapsed)((value) => !value)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button>
         </div>
-        <span className="nav-label">OPERAÇÕES</span>
+        <a className="sidebar-new" href="#/tasks/new" aria-label="Nova tarefa" aria-current={taskRoute === "new" ? "page" : undefined} title="Nova tarefa">
+          <Plus size={19} aria-hidden="true" />
+          <span>Nova tarefa</span>
+        </a>
         <nav aria-label="Navegação principal">
           {navigation.map((item) => (
             <a
@@ -402,9 +430,10 @@ export function App({ client }: { client: ControlRoomClient }) {
               href={`#/${item.id}`}
               className={active === item.id ? "active" : ""}
               aria-current={active === item.id ? "location" : undefined}
+              aria-label={item.label}
               title={collapsed ? item.label : undefined}
             >
-              <item.icon size={19} />
+              <item.icon size={17} aria-hidden="true" />
               <span>{item.label}</span>
               {item.id === "approvals" && approvals.length > 0 && (
                 <b className="nav-count">{approvals.length}</b>
@@ -412,6 +441,14 @@ export function App({ client }: { client: ControlRoomClient }) {
             </a>
           ))}
         </nav>
+        {tasks.length > 0 && (
+          <nav className="sidebar-recent" aria-label="Tarefas recentes">
+            <span>Tarefas recentes</span>
+            {tasks.slice(0, 5).map((task) => (
+              <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id ? "page" : undefined} title={task.title}>{task.title}</a>
+            ))}
+          </nav>
+        )}
         <div className="sidebar-actions">
           <button
             className="theme-toggle"
@@ -430,17 +467,6 @@ export function App({ client }: { client: ControlRoomClient }) {
             <span className="dot green" />
             Modo local · API loopback
           </div>
-          <p>
-            Uma meta. Vários agentes.
-            <br />
-            Uma execução coordenada.
-          </p>
-          <div className="operator">
-            <span>OP</span>
-            <div>
-              Operador local<small>Você está no controle</small>
-            </div>
-          </div>
         </div>
       </aside>
       <div className="content">
@@ -451,7 +477,42 @@ export function App({ client }: { client: ControlRoomClient }) {
           </div>
         </header>
         {executionRoute ? <ExecutionResultPage detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" tabIndex={-1}>
-          {active === "not-found" ? <section className="route-not-found"><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
+           {taskRoute ? (
+             <section className="task-workspace" aria-labelledby="task-workspace-title">
+               <header className="task-workspace-heading">
+                 <span className="eyebrow">{selectedTask ? projectName(selectedTask.projectId) : "Tarefas"}</span>
+                 <h1 id="task-workspace-title" ref={taskViewHeading} tabIndex={-1}>{taskRoute === "new" ? "O que você quer fazer?" : selectedTask?.title ?? "Tarefa"}</h1>
+               </header>
+               <div className="feedback" role="status">{notice}</div>
+               {error && <div className="error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => void refresh()}>Atualizar</button></div>}
+               {!data ? (
+                 !error && <div className="empty" role="status">Carregando tarefas…</div>
+               ) : taskRoute === "new" ? (
+                 <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })} />
+               ) : selectedTask ? (
+                 <TaskWorkspace
+                   task={selectedTask}
+                   statusLabel={statuses[selectedTask.status]}
+                   projectName={projectName(selectedTask.projectId)}
+                   directoryName={directoryName(selectedTask)}
+                   scopeNames={directoryNames(selectedTask)}
+                   run={selectedRun}
+                   latestLog={selectedRun && latestLogForRun(selectedRun.id)}
+                   failure={selectedTask.status === "failed" && selectedRun ? readableRunSummary(selectedRun.summary) : undefined}
+                   actions={<>
+                     {selectedRun && <button className="secondary" onClick={() => openExecution(selectedRun.id)}>{selectedTask.status === "queued" ? "Ver última tentativa" : "Ver detalhes da execução"}</button>}
+                     {selectedTask.status === "queued" && <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: selectedTask })}><Play size={16} aria-hidden="true" /> Executar tarefa</button>}
+                     {selectedApproval && selectedTask.status === "waiting_approval" && <button className="primary" disabled={busy} onClick={() => open({ kind: "approval", approval: selectedApproval })}><ShieldCheck size={16} aria-hidden="true" /> Revisar aprovação</button>}
+                     {selectedTask.status === "failed" && <button className="primary" disabled={busy} onClick={() => void mutate(() => client.retryTask(selectedTask.id), "Tarefa reenfileirada.")}><RefreshCw size={16} aria-hidden="true" /> {busy ? "Reenfileirando…" : "Reenfileirar tarefa"}</button>}
+                     {selectedTask.status === "completed" && <button className="primary" disabled={busy} onClick={() => open({ kind: "related", task: selectedTask })}><Plus size={16} aria-hidden="true" /> Criar tarefa relacionada</button>}
+                   </>}
+                 />
+               ) : (
+                 <div className="empty">Tarefa não encontrada. <a className="text-button" href="#/tasks">Voltar à fila</a></div>
+               )}
+               {formError && !dialog && taskRoute !== "new" && <div className="error" role="alert">{formError}</div>}
+             </section>
+           ) : active === "not-found" ? <section className="route-not-found"><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
           <div className="page-heading">
             <div>
               <div className="eyebrow">ELEAZAR / OPERAÇÕES</div>
@@ -469,14 +530,6 @@ export function App({ client }: { client: ControlRoomClient }) {
               >
                 <RefreshCw size={16} className={busy ? "spinning" : ""} />
                 Atualizar
-              </button>
-              <button
-                className="primary"
-                onClick={() => open({ kind: "task" })}
-                disabled={!data || !projects.length || busy}
-              >
-                <Plus size={17} />
-                Nova tarefa
               </button>
             </div>
           </div>
@@ -551,7 +604,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                     >
                       <div className="executive-list">
                         {filteredTasks.slice(0, 4).map((task) => (
-                          <button className="executive-row" key={task.id} onClick={() => latestRunForTask(task.id) ? openExecution(latestRunForTask(task.id)!.id) : open({ kind: "detail", task })}>
+                           <button className="executive-row" key={task.id} onClick={() => openTask(task.id)}>
                             <span className={`priority ${task.priority}`}><span className="dot" />{priorities[task.priority]}</span>
                             <span className="executive-row-copy"><strong>{task.title}</strong><small>{projectName(task.projectId)} · {directoryName(task)}</small></span>
                             <span className={`status ${task.status}`}>{statuses[task.status]}</span>
@@ -571,7 +624,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                         {[...data.runs].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")).slice(0, 4).map((run) => {
                           const task = tasks.find((item) => item.id === run.taskId);
                           return <button className="executive-row" key={run.id} onClick={() => openExecution(run.id)}>
-                            <span className={`status ${run.status}`}>{statuses[run.status as keyof typeof statuses] ?? run.status}</span>
+                             <span className={`status ${run.status}`}>{runStatuses[run.status]}</span>
                             <span className="executive-row-copy"><strong>{task?.title ?? "Tarefa indisponível"}</strong><small>{run.provider ?? "Provedor não informado"} · {run.finishedAt ? new Date(run.finishedAt).toLocaleString("pt-BR") : "Em andamento"}</small></span>
                             <ChevronRight size={17} />
                           </button>;
@@ -704,7 +757,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                                 <span className="task-id">{task.id}</span>
                                 <button
                                   className="task-title"
-                                  onClick={() => latestRunForTask(task.id) ? openExecution(latestRunForTask(task.id)!.id) : open({ kind: "detail", task })}
+                                   onClick={() => openTask(task.id)}
                                 >
                                   {task.title}
                                 </button>
@@ -729,11 +782,11 @@ export function App({ client }: { client: ControlRoomClient }) {
                               </td>
                               <td>
                                 {task.status === "queued" ? (
-                                  <button className="text-button" aria-label={`Executar ${task.title}`} disabled={busy} onClick={() => open({ kind: "execute", task })}>
+                                   <button className="text-button" aria-label={`Executar ${task.title}`} disabled={busy} onClick={() => { openTask(task.id); open({ kind: "execute", task }); }}>
                                     <Play size={14} /> Executar
                                   </button>
                                 ) : task.status === "failed" ? (
-                                  <button className="text-button danger" aria-label={`Ver erro de ${task.title}`} onClick={() => latestRunForTask(task.id) && openExecution(latestRunForTask(task.id)!.id)}>
+                                   <button className="text-button danger" aria-label={`Ver erro de ${task.title}`} onClick={() => openTask(task.id)}>
                                     Ver erro
                                   </button>
                                 ) : task.status === "completed" && latestRunForTask(task.id) ? (
@@ -741,7 +794,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                                     Ver resultado
                                   </button>
                                 ) : (
-                                  <button className="icon-button" aria-label={`Ver ${task.title}`} onClick={() => open({ kind: "detail", task })}>
+                                   <button className="icon-button" aria-label={`Ver ${task.title}`} onClick={() => openTask(task.id)}>
                                     <ChevronRight size={17} />
                                   </button>
                                 )}
@@ -768,8 +821,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                   {active === "executions" &&
                   <Panel
                     id="runs"
-                    title="Execuções ativas"
-                    eyebrow="EM ANDAMENTO"
+                     title="Histórico de execuções"
                     action={
                       <span className="live-label">
                         <span className="dot green" />
@@ -799,15 +851,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                                 ? projectName(task.projectId)
                                 : "Projeto indisponível"}
                             </p>
-                            <div className="progress-caption">
-                              <span>{run.status}</span>
-                              <strong>{run.status === "completed" ? "100" : "0"}%</strong>
-                            </div>
-                            <progress
-                              aria-label={`Progresso de ${task?.title ?? run.id}`}
-                              max={100}
-                              value={run.status === "completed" ? 100 : 0}
-                            />
+                             <span className={`status ${run.status}`}>{runStatuses[run.status]}</span>
                             <small>
                               {run.startedAt
                                 ? `Iniciada em ${new Date(run.startedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
@@ -822,7 +866,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       })}
                     </div>
                     {!data.runs.length && (
-                      <div className="empty">Nenhuma execução ativa.</div>
+                       <div className="empty">Ainda não há execuções registradas.</div>
                     )}
                   </Panel>}
                   {active === "logs" &&
@@ -957,15 +1001,11 @@ export function App({ client }: { client: ControlRoomClient }) {
           title={
             dialog.kind === "project"
               ? "Cadastrar projeto local"
-              : dialog.kind === "task"
-                ? "Criar tarefa"
-                : dialog.kind === "detail"
-                  ? "Detalhes da tarefa"
-                : dialog.kind === "execute"
-                    ? "Executar tarefa"
-                  : dialog.kind === "related"
-                    ? "Criar tarefa relacionada"
-                    : "Revisar aprovação"
+               : dialog.kind === "execute"
+                 ? "Executar tarefa"
+                 : dialog.kind === "related"
+                   ? "Criar tarefa relacionada"
+                   : "Revisar aprovação"
           }
           onClose={() => setDialog(null)}
           busy={busy}
@@ -1039,138 +1079,6 @@ export function App({ client }: { client: ControlRoomClient }) {
               </div>
             </form>
           )}
-          {dialog.kind === "task" && (
-            <form onSubmit={submitTask}>
-              <p className="form-intro">
-                Defina o próximo trabalho. A tarefa entra na fila persistida;
-                o despacho continua sujeito à política do núcleo.
-              </p>
-              <label>
-                Projeto
-                <select
-                  name="projectId"
-                  required
-                  value={taskProjectId}
-                  onChange={(event) => {
-                    const projectId = event.target.value;
-                    setTaskProjectId(projectId);
-                    const directoryId = projects.find((project) => project.id === projectId)?.directories[0]?.id ?? "";
-                    setTaskDirectoryId(directoryId);
-                    setTaskDirectoryIds(directoryId ? [directoryId] : []);
-                  }}
-                >
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Diretório-alvo
-                <select name="targetDirectoryId" required value={taskDirectoryId} onChange={(event) => {
-                  const directoryId = event.target.value;
-                  setTaskDirectoryId(directoryId);
-                  setTaskDirectoryIds((current) => [directoryId, ...current.filter((item) => item !== directoryId)]);
-                }}>
-                  {projectForTask?.directories.map((directory) => (
-                    <option key={directory.id} value={directory.id}>{directory.name} · {directory.path}</option>
-                  ))}
-                </select>
-                <small>Toda tarefa é vinculada a um diretório específico.</small>
-              </label>
-              <fieldset className="task-scope">
-                <legend>Diretórios adicionais afetados</legend>
-                {projectForTask?.directories.filter((directory) => directory.id !== taskDirectoryId).map((directory) => (
-                  <label key={directory.id} className="scope-option">
-                    <input type="checkbox" checked={taskDirectoryIds.includes(directory.id)} onChange={(event) => setTaskDirectoryIds((current) => event.target.checked ? [...current, directory.id] : current.filter((item) => item !== directory.id))} />
-                    {directory.name}
-                  </label>
-                ))}
-                <small>Mais de um diretório exige aprovação antes do despacho.</small>
-              </fieldset>
-              <label>
-                Título
-                <input
-                  name="title"
-                  required
-                  maxLength={160}
-                  placeholder="O que precisa ser feito?"
-                />
-              </label>
-              <label>
-                Prompt
-                <textarea
-                  name="prompt"
-                  required
-                  maxLength={20000}
-                  rows={5}
-                  placeholder="Descreva o objetivo, o contexto e os critérios de conclusão…"
-                />
-              </label>
-              <label>
-                Prioridade
-                <select name="priority" defaultValue="normal">
-                  <option value="critical">Crítica</option>
-                  <option value="high">Alta</option>
-                  <option value="normal">Normal</option>
-                  <option value="low">Baixa</option>
-                </select>
-              </label>
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => setDialog(null)}
-                >
-                  Cancelar
-                </button>
-                <button className="primary" disabled={busy}>
-                  {busy ? "Criando…" : "Adicionar à fila"}
-                </button>
-              </div>
-            </form>
-          )}
-          {dialog.kind === "detail" && (
-            <div className="task-detail">
-              <span className="task-id">
-                {dialog.task.id} · {projectName(dialog.task.projectId)}
-              </span>
-              <h3>{dialog.task.title}</h3>
-              <div className="detail-badges">
-                <span className={`priority ${dialog.task.priority}`}>
-                  {priorities[dialog.task.priority]}
-                </span>
-                <span className={`status ${dialog.task.status}`}>
-                  {statuses[dialog.task.status]}
-                </span>
-              </div>
-              <h4>Prompt</h4>
-              <p className="prompt-text">{dialog.task.prompt}</p>
-              <h4>Diretório-alvo</h4>
-              <p>{directoryNames(dialog.task)}{dialog.task.directoryIds.length > 1 ? " · Escopo composto" : ""}</p>
-              {latestRunForTask(dialog.task.id) && <div className="form-actions"><button className="secondary" onClick={() => openExecution(latestRunForTask(dialog.task.id)!.id)}>Abrir resultado da última execução</button></div>}
-              <small>
-                Criada em{" "}
-                {new Date(dialog.task.createdAt).toLocaleString("pt-BR")}
-              </small>
-              {dialog.task.status === "queued" && (
-                <div className="form-actions">
-                  <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: dialog.task })}>
-                    <Play size={16} /> Executar tarefa
-                  </button>
-                </div>
-              )}
-              {dialog.task.status === "failed" && (
-                <div className="form-actions">
-                  <button className="secondary" disabled={busy} onClick={() => void mutate(() => client.retryTask(dialog.task.id), "Tarefa reenfileirada. Revise o erro e execute novamente quando estiver pronto.")}>
-                    <RefreshCw size={16} /> {busy ? "Reenfileirando…" : "Reenfileirar tarefa"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
           {dialog.kind === "related" && (
             <form onSubmit={(event) => submitRelatedTask(event, dialog.task)}>
               <p className="form-intro">Esta tarefa herdará projeto, diretório, escopo, prioridade e tipo de <strong>{dialog.task.title}</strong>.</p>
@@ -1193,17 +1101,22 @@ export function App({ client }: { client: ControlRoomClient }) {
               <span className="task-id">{dialog.task.id} · {projectName(dialog.task.projectId)}</span>
               <h3>{dialog.task.title}</h3>
               <p className="form-intro">
-                Esta ação usa uma sessão já autenticada do provedor selecionado e executa o prompt no diretório-alvo. O resultado e os logs ficarão no histórico desta tarefa.
+                A execução usa uma sessão já autenticada do provedor. O resultado e os logs ficarão no histórico desta tarefa.
               </p>
               <label>
                 Provedor
-                <select value={executionProvider} onChange={(event) => setExecutionProvider(event.target.value as "auto" | "codex" | "antigravity")} disabled={busy}>
+                <select value={executionProvider} onChange={(event) => setExecutionProvider(event.target.value as ExecutionProvider)} disabled={busy}>
                   <option value="auto">Automático (recomendado)</option>
                   <option value="codex">Codex</option>
                   <option value="antigravity">Antigravity</option>
+                  <option value="claude" disabled={dialog.task.kind !== "review" && dialog.task.kind !== "planning"}>Claude Code (revisão e planejamento por texto)</option>
                 </select>
               </label>
-              <small>Push, merge, deploy, publicação e manipulação de credenciais continuam bloqueados neste fluxo.</small>
+              {executionProvider === "claude" ? (
+                <small>Ao confirmar, o título e a solicitação serão enviados ao Claude Code. Inclua apenas o que você autoriza compartilhar. A execução é textual, sem acesso aos arquivos do projeto.</small>
+              ) : (
+                <small>O provedor executa no diretório-alvo. Push, merge, deploy, publicação e manipulação de credenciais estão bloqueados neste fluxo.</small>
+              )}
               <div className="form-actions">
                 <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>
                 <button className="primary" disabled={busy} onClick={() => void mutate(() => client.executeTask(dialog.task.id, executionProvider), "Execução iniciada. O painel atualizará enquanto o provedor trabalha.")}>

@@ -1,4 +1,5 @@
 import type { AgentRunRequest, AgentRunResult, ProviderName, RouteDecision } from "../core/contracts.js";
+import { claudeTextTaskKinds } from "../core/contracts.js";
 import type { Orchestrator, OrchestratorRun } from "../core/orchestrator.js";
 import { ControlRoomService } from "../core/control-room-service.js";
 import type { ControlRoomTask, DelegationCandidate, LocalProjectDirectory } from "../core/control-room.js";
@@ -20,14 +21,23 @@ export class ControlRoomTaskExecutor {
 
   async start(taskId: string, preferredProvider?: ProviderName): Promise<ControlRoomTask> {
     const task = this.requireQueuedTask(taskId);
+    const usesClaude = preferredProvider === "claude";
+    if (usesClaude && !claudeTextTaskKinds.has(task.kind)) {
+      throw new Error("Claude Code aceita apenas tarefas de revisão ou planejamento por texto.");
+    }
     const directory = this.requireTargetDirectory(task);
-    const request = makeRunRequest(task, directory);
+    const request = usesClaude
+      ? { cwd: directory.path, taskKind: task.kind, prompt: `${task.title}\n\n${task.prompt}` }
+      : makeRunRequest(task, directory);
     const route = await this.runner.router.route({
       prompt: request.prompt,
       taskKind: task.kind,
       ...(preferredProvider ? { preferredProvider } : {})
     });
     if (!route.selected) {
+      if (usesClaude) {
+        throw new Error("Claude Code precisa estar instalado e autenticado. Consulte o status dos provedores ou execute `npm run doctor`.");
+      }
       throw new Error("Nenhum provedor autenticado esta disponivel. Execute `npm run doctor` e atualize o login antes de tentar novamente.");
     }
 
@@ -35,23 +45,28 @@ export class ControlRoomTaskExecutor {
       selectedProvider: route.selected,
       reason: routeReason(route),
       candidates: route.candidates.map(toDelegationCandidate),
-      requestedActions: ["read_project"]
+      requestedActions: usesClaude ? [] : ["read_project"]
     });
     if (dispatched.status !== "running" || !dispatched.dispatchLease) {
       throw new Error("A tarefa nao foi iniciada; releia o estado antes de tentar novamente.");
     }
 
-    void this.runAndPersist(dispatched, request, preferredProvider, route.selected, this.requireTaskDirectories(dispatched));
+    const directories = usesClaude ? null : this.requireTaskDirectories(dispatched);
+    void this.runAndPersist(dispatched, request, preferredProvider, route.selected, directories);
     return dispatched;
   }
 
-  private async runAndPersist(task: ControlRoomTask, request: AgentRunRequest, preferredProvider: ProviderName | undefined, selectedProvider: ProviderName, directories: LocalProjectDirectory[]): Promise<void> {
+  private async runAndPersist(task: ControlRoomTask, request: AgentRunRequest, preferredProvider: ProviderName | undefined, selectedProvider: ProviderName, directories: LocalProjectDirectory[] | null): Promise<void> {
     const startedAt = Date.now();
     const execution = this.service.store.listExecutions(task.id).find((item) => item.leaseId === task.dispatchLease);
-    const snapshot = await this.changes.capture(directories);
+    const snapshot = directories ? await this.changes.capture(directories) : null;
+    const collect = () => {
+      if (!snapshot) return { files: [], warnings: [] };
+      return execution ? snapshot.collect(execution.id) : { files: [], warnings: ["Execucao nao encontrada para registrar os arquivos afetados."] };
+    };
     try {
       const outcome = await this.runner.run(request, preferredProvider);
-      const collected = execution ? await snapshot.collect(execution.id) : { files: [], warnings: ["Execucao nao encontrada para registrar os arquivos afetados."] };
+      const collected = await collect();
       this.service.finishProviderRun(task.id, task.dispatchLease!, outcome.result, collected.files, collected.warnings);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -62,7 +77,7 @@ export class ControlRoomTaskExecutor {
         error: detail,
         durationMs: Date.now() - startedAt
       };
-      const collected = execution ? await snapshot.collect(execution.id) : { files: [], warnings: ["Execucao nao encontrada para registrar os arquivos afetados."] };
+      const collected = await collect();
       this.service.finishProviderRun(task.id, task.dispatchLease!, failed, collected.files, collected.warnings);
     }
   }

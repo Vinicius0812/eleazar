@@ -1,6 +1,8 @@
+import { isAutomaticProvider } from "./contracts.js";
 import type {
   AgentAdapter,
   AgentHealth,
+  AutomaticProviderName,
   ProviderName,
   RouteCandidate,
   RouteDecision,
@@ -23,7 +25,7 @@ const taskPatterns: ReadonlyArray<readonly [TaskKind, RegExp]> = [
   ]
 ];
 
-const baseScores: Record<TaskKind, Record<ProviderName, number>> = {
+const baseScores: Record<TaskKind, Record<AutomaticProviderName, number>> = {
   implementation: { codex: 90, antigravity: 72 },
   review: { codex: 86, antigravity: 80 },
   planning: { codex: 78, antigravity: 84 },
@@ -54,8 +56,13 @@ export class Router {
 
   async route(request: RouteRequest): Promise<RouteDecision> {
     const taskKind = request.taskKind ?? classifyTask(request.prompt);
+    const preferred = request.preferredProvider;
+    const explicitOnly = preferred !== undefined && !isAutomaticProvider(preferred);
+    const eligible = [...this.#adapters.values()].filter((adapter) =>
+      explicitOnly ? adapter.provider === preferred : isAutomaticProvider(adapter.provider)
+    );
     const healthEntries = await Promise.all(
-      [...this.#adapters.values()].map(async (adapter) => [adapter, await adapter.health()] as const)
+      eligible.map(async (adapter) => [adapter, await adapter.health()] as const)
     );
 
     const candidates = healthEntries
@@ -64,7 +71,11 @@ export class Router {
 
     return {
       taskKind,
-      selected: candidates.find((candidate) => candidate.health.available && candidate.health.authenticated !== false)
+      selected: candidates.find((candidate) => candidate.health.available && (
+        explicitOnly
+          ? candidate.health.authenticated === true && this.#adapters.get(candidate.provider)?.supportedTasks.has(taskKind)
+          : candidate.health.authenticated !== false
+      ))
         ?.provider ?? null,
       candidates
     };
@@ -77,11 +88,11 @@ export class Router {
     preferredProvider?: ProviderName
   ): RouteCandidate {
     const reasons: string[] = [];
-    let score = baseScores[taskKind][adapter.provider];
+    let score = isAutomaticProvider(adapter.provider) ? baseScores[taskKind][adapter.provider] : 80;
 
     reasons.push(`afinidade ${taskKind}: ${score}`);
 
-    if (!adapter.supportedTasks.has(taskKind) && taskKind !== "unknown") {
+    if (!adapter.supportedTasks.has(taskKind) && (taskKind !== "unknown" || !isAutomaticProvider(adapter.provider))) {
       score -= 30;
       reasons.push("tarefa fora das capacidades declaradas: -30");
     }

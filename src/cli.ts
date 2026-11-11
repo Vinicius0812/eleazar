@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { createInterface, type Interface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 
+import { ClaudeAdapter } from "./adapters/claude.js";
+import { CodexAdapter } from "./adapters/codex.js";
 import { createEleazar } from "./create-eleazar.js";
 import { providerNames, type ProviderName } from "./core/contracts.js";
+import { escapeTerminal, runCrossReviewCommand, safeResultJson } from "./cross-review-cli.js";
 
 const parsed = parseArgs({
   allowPositionals: true,
   options: {
     cwd: { type: "string", short: "C" },
+    file: { type: "string", multiple: true },
     json: { type: "boolean", default: false },
     model: { type: "string", short: "m" },
     prompt: { type: "string", short: "p" },
@@ -32,6 +37,9 @@ try {
     case "run":
       await run();
       break;
+    case "cross-review":
+      await crossReview();
+      break;
     case "help":
     case "--help":
     case "-h":
@@ -46,8 +54,7 @@ try {
 }
 
 async function doctor(): Promise<void> {
-  const decision = await eleazar.router.route({ prompt: "diagnostico" });
-  const health = decision.candidates.map((candidate) => candidate.health);
+  const health = await eleazar.health();
 
   if (parsed.values.json) {
     console.log(JSON.stringify(health, null, 2));
@@ -88,6 +95,9 @@ async function plan(): Promise<void> {
 async function run(): Promise<void> {
   const prompt = readPrompt(positionals);
   const preferredProvider = readProvider(parsed.values.provider);
+  if (preferredProvider === "claude" && parsed.values.session !== undefined) {
+    throw new Error("Claude Code opera sem retomada de sessao.");
+  }
   const cwd = resolve(parsed.values.cwd ?? process.cwd());
   const execution = await eleazar.run(
     {
@@ -116,6 +126,56 @@ async function run(): Promise<void> {
   throw new Error(execution.result.error ?? "A execucao falhou sem mensagem de erro.");
 }
 
+async function crossReview(): Promise<void> {
+  if (parsed.values.provider !== "auto" || parsed.values.session !== undefined || parsed.values.model !== undefined) {
+    throw new Error("Revisao cruzada seleciona Codex e Claude em sessoes novas e nao aceita --provider, --session ou --model.");
+  }
+  let reader: Interface | undefined;
+  let closed = false;
+  try {
+    const result = await runCrossReviewCommand({
+      cwd: parsed.values.cwd ?? process.cwd(),
+      prompt: parsed.values.prompt ?? positionals.join(" "),
+      files: parsed.values.file ?? []
+    }, {
+      interactive: process.stdin.isTTY === true && process.stderr.isTTY === true,
+      write: (text) => process.stderr.write(text),
+      async confirm(question) {
+        if (!reader) {
+          reader = createInterface({ input: process.stdin, output: process.stderr, terminal: false });
+          reader.once("close", () => { closed = true; });
+        }
+        if (closed) return false;
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        reader.once("close", abort);
+        try {
+          const answer = await reader.question(`${question} Digite SIM para aprovar: `, { signal: controller.signal });
+          return answer.trim() === "SIM";
+        } catch {
+          return false;
+        } finally {
+          reader.removeListener("close", abort);
+        }
+      }
+    }, { codex: new CodexAdapter("cross-review"), claude: new ClaudeAdapter() });
+    if (parsed.values.json) console.log(safeResultJson(result));
+    else {
+      console.log(`Revisao cruzada: ${result.status} (${result.rounds.length} rodada(s) revisada(s)).`);
+      for (const round of result.rounds) {
+        console.log(`Rodada ${round.round}: ${round.verdict}`);
+        for (const finding of round.findings) {
+          console.log(`- ${escapeTerminal(finding.path)}:${finding.line} ${escapeTerminal(finding.message)}`);
+        }
+      }
+      if (result.error) console.error(escapeTerminal(result.error));
+    }
+    if (result.status === "failed") process.exitCode = 1;
+  } finally {
+    reader?.close();
+  }
+}
+
 function readPrompt(positionals: readonly string[]): string {
   const prompt = parsed.values.prompt ?? positionals.join(" ").trim();
   if (!prompt) {
@@ -131,22 +191,24 @@ function readProvider(value: string | undefined): ProviderName | undefined {
   if (providerNames.includes(value as ProviderName)) {
     return value as ProviderName;
   }
-  throw new Error(`Provedor invalido: ${value}. Use auto, codex ou antigravity.`);
+  throw new Error(`Provedor invalido: ${value}. Use auto, ${providerNames.join(", ")}.`);
 }
 
 function printHelp(): void {
   console.log(`Eleazar - orquestrador local-first de agentes\n
 Uso:
   eleazar doctor [--json]
-  eleazar plan <tarefa> [--provider auto|codex|antigravity]
-  eleazar run <tarefa> [--provider auto|codex|antigravity] [--cwd <pasta>]
+  eleazar plan <tarefa> [--provider auto|${providerNames.join("|")}]
+  eleazar run <tarefa> [--provider auto|${providerNames.join("|")}] [--cwd <pasta>]
+  eleazar cross-review <tarefa> --cwd <raiz-git> --file <caminho-relativo> [--file <caminho-relativo>] [--json]
 
 Opcoes:
   -p, --prompt      Texto da tarefa
-  -P, --provider    Provedor preferido (padrao: auto)
+  -P, --provider    Provedor preferido (padrao: auto). Claude exige selecao explicita e aceita apenas revisao e planejamento.
   -m, --model       Modelo especifico do provedor
   -s, --session     ID de sessao a retomar
   -C, --cwd         Diretorio de trabalho
+      --file        Arquivo rastreado no escopo da revisao cruzada (repetivel)
       --json        Saida JSON
 `);
 }

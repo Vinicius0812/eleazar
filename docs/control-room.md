@@ -25,10 +25,10 @@ O cliente HTTP usa um snapshot consistente para leitura e mutacoes confirmadas p
 - `GET /api/control-room/executions/:id` retorna a execução completa sob demanda: saída do agente, logs, arquivos atribuídos e histórico da tarefa. A tela usa a rota local `#/executions/:id` para esse detalhe.
 - `POST /projects` e `POST /tasks` registram estado no nucleo.
 - `POST /tasks/:id/transition` aplica uma transicao valida.
-- `POST /tasks/:id/execute` é uma ação explícita do operador. Aceita `{ "provider": "auto" | "codex" | "antigravity" }`, verifica o roteamento e inicia o provedor no diretório-alvo. A resposta `202` confirma que a execução foi registrada; a conclusão chega pelo próximo snapshot.
+- `POST /tasks/:id/execute` é uma ação explícita do operador. Aceita `{ "provider": "auto" | "codex" | "antigravity" | "claude" }`. Claude requer seleção explícita e autenticação confirmada. Para tarefas de revisão ou planejamento, recebe o título e a solicitação, sem coleta de arquivos do checkout. A resposta `202` confirma que a execução foi registrada; a conclusão chega pelo próximo snapshot.
 - Tarefas em `waiting_approval` viram aprovacoes no painel. Aprovar as leva para `queued`; rejeitar as leva para `cancelled`.
 
-A interface não inicia provedores automaticamente. O operador precisa clicar em **Executar**, selecionar o roteamento e confirmar. O executor registra a decisão, inicia uma única execução em segundo plano e encerra a tarefa como `completed` ou `failed` na mesma transação que atualiza a execução, a saída completa (limitada a 100.000 caracteres), uso de tokens quando devolvido pelo provedor, o log e os arquivos atribuídos. Antes e depois da chamada ao provedor, o executor coleta apenas o estado Git do escopo autorizado; mudanças que já existiam são marcadas como preexistentes e falhas de coleta ficam como aviso no log, sem falhar a tarefa. O endpoint de dispatch continua sujeito aos limites do domínio: `push`, `merge` e `deploy` são bloqueados.
+A interface não inicia provedores automaticamente. O operador precisa clicar em **Executar**, selecionar o roteamento e confirmar. O executor registra a decisão, inicia uma única execução em segundo plano e encerra a tarefa como `completed` ou `failed` na mesma transação que atualiza a execução, a saída completa (limitada a 100.000 caracteres), uso de tokens quando devolvido pelo provedor, o log e os arquivos atribuídos. Para Codex e Antigravity, o executor coleta o estado Git do escopo autorizado antes e depois da execução. Mudanças que já existiam são marcadas como preexistentes e falhas de coleta ficam como aviso no log. O endpoint de dispatch continua sujeito aos limites do domínio: `push`, `merge` e `deploy` são bloqueados.
 
 Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e `path` absoluto; o servidor devolve o ID, a ordem e a detecção de Git (incluindo metadata `.git` como arquivo de worktree). A UI permite adicionar, remover e reordenar entradas, e exige `targetDirectoryId` e `directoryIds` ao criar uma tarefa. O alvo precisa estar no escopo; diretórios repetidos ou de outro projeto são rejeitados. Escopos com mais de um diretório aparecem em `waiting_approval` até que o operador os mova para `queued`.
 
@@ -36,7 +36,7 @@ O host de produção do Control Room cria `ControlRoomService` com `{ useWorktre
 
 ## Limite de rede
 
-A API escuta exclusivamente em `127.0.0.1`. Ela exige conexao e Host loopback, restringe Origin quando presente e exige `Content-Type: application/json` para mutacoes. Nao exponha a porta por proxy reverso, tunel ou interface de rede.
+A API escuta exclusivamente em `127.0.0.1`. Ela exige conexão e Host loopback. Quando o navegador envia `Origin`, a API aceita a origem do próprio endpoint ou a interface em `http://127.0.0.1:5173` e `http://localhost:5173`. A prévia do Vite usa os mesmos hosts na porta `4173`. Clientes locais podem fazer requisições sem `Origin`. Mutações exigem `Content-Type: application/json`.
 
 ## Verificacao
 

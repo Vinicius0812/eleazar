@@ -2,10 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRunRequest, ProviderName, RouteDecision } from "../src/core/contracts.js";
 import type { OrchestratorRun } from "../src/core/orchestrator.js";
+import { GitChangeCollector } from "../src/control-room/git-change-collector.js";
+import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
@@ -52,9 +54,65 @@ describe("Control Room task executor", () => {
     const project = service.registerProject({ name: "Core", directories: [{ path: process.cwd() }, { path: extra }] });
     const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: project.directories.map((directory) => directory.id), title: "Analisar", prompt: "Planeje a proxima etapa" });
 
-    await expect(new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "success", response: "ok", durationMs: 1 })).start(task.id)).rejects.toThrow("precisa ser aprovada");
+    const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "success", response: "ok", durationMs: 1 }));
+    await expect(executor.start(task.id)).rejects.toThrow("precisa ser aprovada");
+    await expect(executor.start(task.id, "claude")).rejects.toThrow("precisa ser aprovada");
     expect(store.getTask(task.id)?.status).toBe("waiting_approval");
     store.close();
+  });
+
+  it("aceita Claude em execute e envia somente o texto aprovado sem coletar arquivos do checkout", async () => {
+    const { service, store } = await fixture();
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, kind: "planning", title: "Comunicação", prompt: "Responda OK" });
+    const runner = fakeRunner({ provider: "claude", status: "success", response: "OK", durationMs: 1 });
+    const run = vi.spyOn(runner, "run");
+    const changes = new GitChangeCollector();
+    const capture = vi.spyOn(changes, "capture");
+    const executor = new ControlRoomTaskExecutor(service, runner, changes);
+    const server = createControlRoomServer(service, executor);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Endereço local indisponível");
+      const endpoint = `http://127.0.0.1:${address.port}/api/control-room/tasks/${task.id}`;
+      const post = (action: string, body: object) => fetch(`${endpoint}/${action}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
+      });
+      expect((await post("dispatch", { selectedProvider: "claude", reason: "teste", requestedActions: ["read_project"] })).status).toBe(400);
+      const response = await post("execute", { provider: "claude" });
+      expect(response.status).toBe(202);
+      await response.json();
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({ taskKind: "planning", prompt: "Comunicação\n\nResponda OK" }), "claude");
+      expect(capture).not.toHaveBeenCalled();
+      expect(store.listExecutions(task.id)).toMatchObject([{ provider: "claude", status: "completed", summary: "OK" }]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      store.close();
+    }
+  });
+
+  it("mantém a tarefa na fila quando o tipo ou a autenticação impedem escolher Claude", async () => {
+    const { service, store } = await fixture();
+    try {
+      const project = service.registerProject({ name: "Core", path: process.cwd() });
+      const incompatible = service.createTask({ projectId: project.id, kind: "implementation", title: "Implementação", prompt: "Implemente a mudança." });
+      const compatible = service.createTask({ projectId: project.id, kind: "review", title: "Revisão", prompt: "Revise o texto." });
+      const route = vi.fn<ControlRoomTaskRunner["router"]["route"]>().mockResolvedValue({ selected: null, taskKind: "review", candidates: [] });
+      const runner = { router: { route }, run: vi.fn<ControlRoomTaskRunner["run"]>() };
+      const executor = new ControlRoomTaskExecutor(service, runner);
+
+      await expect(executor.start(incompatible.id, "claude")).rejects.toThrow("apenas tarefas de revisão ou planejamento");
+      expect(route).not.toHaveBeenCalled();
+      await expect(executor.start(compatible.id, "claude")).rejects.toThrow("instalado e autenticado");
+      expect(runner.run).not.toHaveBeenCalled();
+      for (const task of [incompatible, compatible]) {
+        expect(store.getTask(task.id)).toMatchObject({ status: "queued", dispatchLease: null });
+        expect(store.listExecutions(task.id)).toHaveLength(0);
+      }
+    } finally {
+      store.close();
+    }
   });
 });
 

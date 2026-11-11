@@ -5,10 +5,10 @@
   "private": true,
   "type": "module",
   "bin": {
-    "eleazar": "./dist/cli.js"
+    "eleazar": "./dist/src/cli.js"
   },
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/src/index.js"
   },
   "files": [
     "dist"
@@ -19,7 +19,7 @@
     "control-room": "tsx scripts/control-room-dev.ts",
     "dev": "tsx src/cli.ts",
     "doctor": "tsx src/cli.ts doctor",
-    "start": "node dist/cli.js",
+    "start": "node dist/src/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit"

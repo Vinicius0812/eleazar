@@ -1,6 +1,16 @@
-export const providerNames = ["codex", "antigravity"] as const;
+export const automaticProviderNames = ["codex", "antigravity"] as const;
+export const providerNames = [...automaticProviderNames, "claude"] as const;
 
 export type ProviderName = (typeof providerNames)[number];
+export type AutomaticProviderName = (typeof automaticProviderNames)[number];
+
+export function isProviderName(value: string): value is ProviderName {
+  return providerNames.some((provider) => provider === value);
+}
+
+export function isAutomaticProvider(value: string): value is AutomaticProviderName {
+  return automaticProviderNames.some((provider) => provider === value);
+}
 
 export const taskKinds = [
   "implementation",
@@ -13,6 +23,8 @@ export const taskKinds = [
 ] as const;
 
 export type TaskKind = (typeof taskKinds)[number];
+
+export const claudeTextTaskKinds: ReadonlySet<TaskKind> = new Set(["review", "planning"]);
 
 export interface TokenUsage {
   input?: number;

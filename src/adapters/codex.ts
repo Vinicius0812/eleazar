@@ -1,4 +1,4 @@
-import { Codex } from "@openai/codex-sdk";
+import { Codex, type ThreadOptions } from "@openai/codex-sdk";
 import { createRequire } from "node:module";
 
 import type {
@@ -23,9 +23,39 @@ const supportedTasks = new Set<TaskKind>([
   "unknown"
 ]);
 
+const crossReviewThread = {
+  sandboxMode: "workspace-write",
+  approvalPolicy: "never",
+  networkAccessEnabled: false,
+  webSearchMode: "disabled"
+} satisfies ThreadOptions;
+
+const crossReviewConfig = [
+  'model_provider="openai"',
+  "mcp_servers={}",
+  "features.apps=false",
+  "features.plugins=false",
+  "features.hooks=false",
+  "features.browser_use=false",
+  "features.browser_use_external=false",
+  "features.in_app_browser=false",
+  "features.computer_use=false",
+  "features.multi_agent=false",
+  "features.multi_agent_v2=false",
+  "features.memories=false",
+  "features.js_repl=false",
+  'shell_environment_policy.inherit="none"',
+  "sandbox_workspace_write.writable_roots=[]",
+  "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+  "sandbox_workspace_write.exclude_slash_tmp=true",
+  ...(process.platform === "win32" ? ['windows.sandbox="unelevated"'] : [])
+];
+
 export class CodexAdapter implements AgentAdapter {
   readonly provider = "codex" as const;
   readonly supportedTasks = supportedTasks;
+
+  constructor(private readonly mode: "default" | "cross-review" = "default") {}
 
   async health(): Promise<AgentHealth> {
     try {
@@ -62,17 +92,24 @@ export class CodexAdapter implements AgentAdapter {
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
+    const crossReview = this.mode === "cross-review";
 
     try {
-      const codex = new Codex();
+      if (crossReview && request.sessionId !== undefined) {
+        throw new Error("Revisao cruzada requer uma sessao nova.");
+      }
+      const codex = crossReview ? new Codex({ configOverrides: crossReviewConfig }) : new Codex();
       const thread = request.sessionId
         ? codex.resumeThread(request.sessionId)
         : codex.startThread({
             workingDirectory: request.cwd,
             skipGitRepoCheck: false,
+            ...(crossReview ? crossReviewThread : {}),
             ...(request.model ? { model: request.model } : {})
           });
-      const result = await thread.run(request.prompt);
+      const result = crossReview
+        ? await thread.run(request.prompt, { signal: AbortSignal.timeout(5 * 60_000) })
+        : await thread.run(request.prompt);
 
       return {
         provider: this.provider,
@@ -88,7 +125,7 @@ export class CodexAdapter implements AgentAdapter {
         status: "error",
         response: "",
         durationMs: Date.now() - startedAt,
-        error: message
+        error: crossReview ? "Falha na execucao restrita do Codex." : message
       };
     }
   }

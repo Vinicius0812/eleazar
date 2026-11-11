@@ -38,7 +38,7 @@ export class Orchestrator {
     });
 
     if (!route.selected) {
-      throw new Error("Nenhum provedor esta instalado e autenticado. Execute `eleazar doctor`.");
+      throw new Error("Nenhum provedor apto para esta tarefa. Consulte `eleazar doctor` e `eleazar plan`.");
     }
 
     const adapter = this.#adapters.get(route.selected);
@@ -48,7 +48,7 @@ export class Orchestrator {
 
     return {
       route,
-      result: await adapter.run(request)
+      result: await adapter.run({ ...request, taskKind: route.taskKind })
     };
   }
 }

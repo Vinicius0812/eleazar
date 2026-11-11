@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
+import { isAutomaticProvider } from "../core/contracts.js";
 import type { ControlRoomService } from "../core/control-room-service.js";
 import type { Orchestrator } from "../core/orchestrator.js";
 import type { ProviderStatus, ProviderUsageStatus } from "../core/control-room.js";
@@ -35,10 +36,10 @@ export class ProviderStatusService {
     const observed = observedTokens(this.controlRoom);
     const fetchedAt = new Date().toISOString();
     this.#cached = health.map((item) => {
-      const localTotal = observed.get(item.provider) ?? 0;
+      const localTotal = observed.get(item.provider);
       const usage = item.provider === "codex" && codexAccount
         ? codexUsage(codexAccount)
-        : observedUsage(localTotal, item.available);
+        : observedUsage(localTotal ?? 0, item.available && (localTotal !== undefined || isAutomaticProvider(item.provider)));
       return { provider: item.provider, available: item.available, authenticated: item.authenticated, version: item.version ?? null, detail: item.detail, fetchedAt, usage };
     });
     this.#cachedAt = Date.now();
