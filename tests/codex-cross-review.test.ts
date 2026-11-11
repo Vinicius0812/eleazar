@@ -6,6 +6,9 @@ const sdk = vi.hoisted(() => ({
   resumeThread: vi.fn(),
   run: vi.fn()
 }));
+const acp = vi.hoisted(() => ({ run: vi.fn() }));
+
+vi.mock("../src/adapters/codex-acp.js", () => ({ CodexAcpClient: class { run = acp.run; } }));
 
 vi.mock("@openai/codex-sdk", () => ({
   Codex: class {
@@ -24,6 +27,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   sdk.startThread.mockReturnValue({ run: sdk.run });
   sdk.run.mockResolvedValue({ finalResponse: "ok" });
+  acp.run.mockResolvedValue({ provider: "codex", status: "success", response: "acp", durationMs: 1 });
 });
 
 describe("Codex SDK restrictions for cross-review", () => {
@@ -45,10 +49,10 @@ describe("Codex SDK restrictions for cross-review", () => {
     expect(sdk.constructor).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves the ordinary adapter options for existing calls", async () => {
-    await new CodexAdapter().run({ cwd: process.cwd(), prompt: "Pedido comum." });
-    expect(sdk.constructor).toHaveBeenCalledWith(undefined);
-    expect(sdk.startThread).toHaveBeenCalledWith({ workingDirectory: process.cwd(), skipGitRepoCheck: false });
-    expect(sdk.run).toHaveBeenCalledWith("Pedido comum.");
+  it("uses ACP for ordinary runs and keeps the restricted SDK isolated", async () => {
+    const request = { cwd: process.cwd(), prompt: "Pedido comum." };
+    expect(await new CodexAdapter().run(request)).toMatchObject({ response: "acp" });
+    expect(acp.run).toHaveBeenCalledWith(request);
+    expect(sdk.constructor).not.toHaveBeenCalled();
   });
 });

@@ -25,6 +25,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agentclientprotocol/codex-acp": "2.6.0",
+    "@agentclientprotocol/sdk": "2.5.0",
     "@openai/codex-sdk": "^0.155.1",
     "better-sqlite3": "^12.6.2"
   },

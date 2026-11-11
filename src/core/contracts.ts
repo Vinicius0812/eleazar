@@ -48,6 +48,24 @@ export interface AgentRunRequest {
   model?: string;
   sessionId?: string;
   taskKind?: TaskKind;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  onUpdate?: (update: AgentUpdate) => void;
+  onPermission?: (request: AgentPermissionRequest) => Promise<string | null> | string | null;
+}
+
+/** Provider-neutral events for an interactive execution. */
+export interface AgentUpdate {
+  sessionId: string;
+  kind: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AgentPermissionRequest {
+  sessionId: string;
+  toolCallId: string;
+  title: string;
+  options: Array<{ id: string; name: string; kind: string }>;
 }
 
 export interface AgentRunResult {

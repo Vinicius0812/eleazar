@@ -1,13 +1,10 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 
 import { isAutomaticProvider } from "../core/contracts.js";
 import type { ControlRoomService } from "../core/control-room-service.js";
 import type { Orchestrator } from "../core/orchestrator.js";
 import type { ProviderStatus, ProviderUsageStatus } from "../core/control-room.js";
-
-const require = createRequire(import.meta.url);
-const codexCliPath = require.resolve("@openai/codex/bin/codex.js");
+import { resolveCodexRuntime } from "../adapters/codex-runtime.js";
 
 interface CodexAccountUsage {
   usedPercent: number | null;
@@ -90,7 +87,9 @@ class AppServerClient {
   #timeout: ReturnType<typeof setTimeout> | null = null;
 
   async start(): Promise<void> {
-    const child = spawn(process.execPath, [codexCliPath, "app-server", "--stdio"], { stdio: "pipe", windowsHide: true });
+    const runtime = await resolveCodexRuntime();
+    const isJs = runtime.path.endsWith(".js");
+    const child = spawn(isJs ? process.execPath : runtime.path, isJs ? [runtime.path, "app-server", "--stdio"] : ["app-server", "--stdio"], { stdio: "pipe", windowsHide: true, shell: false });
     this.#child = child;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.receive(chunk));

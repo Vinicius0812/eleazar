@@ -34,6 +34,8 @@ Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e
 
 O host de produção do Control Room cria `ControlRoomService` com `{ useWorktrees: false }` e sem provisionador Git. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida para qualquer interseção de `directoryIds`.
 
+A execução comum do Codex usa o transporte ACP por stdio. `ELEAZAR_CODEX_PATH` pode apontar para um executável nativo do Codex; sem override, o adaptador procura a instalação desktop compatível e depois o binário da dependência ACP. Pedidos de permissão são negados quando não há callback do operador. A interface ainda usa snapshots: apresentação dos updates por SSE e controles por sessão permanecem pendentes.
+
 ## Limite de rede
 
 A API escuta exclusivamente em `127.0.0.1`. Ela exige conexão e Host loopback. Quando o navegador envia `Origin`, a API aceita a origem do próprio endpoint ou a interface em `http://127.0.0.1:5173` e `http://localhost:5173`. A prévia do Vite usa os mesmos hosts na porta `4173`. Clientes locais podem fazer requisições sem `Origin`. Mutações exigem `Content-Type: application/json`.

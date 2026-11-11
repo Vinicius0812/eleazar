@@ -9,6 +9,8 @@ import type {
   TaskKind
 } from "../core/contracts.js";
 import { runProcess } from "./process-runner.js";
+import { CodexAcpClient } from "./codex-acp.js";
+import { resolveCodexRuntime } from "./codex-runtime.js";
 
 const require = createRequire(import.meta.url);
 const codexCliPath = require.resolve("@openai/codex/bin/codex.js");
@@ -59,7 +61,10 @@ export class CodexAdapter implements AgentAdapter {
 
   async health(): Promise<AgentHealth> {
     try {
-      const version = await runProcess(process.execPath, [codexCliPath, "--version"], { timeoutMs: 5_000 });
+      const runtime = this.mode === "cross-review" ? null : await resolveCodexRuntime();
+      const executable = runtime?.path ?? codexCliPath;
+      const isJs = executable.endsWith(".js");
+      const version = await runProcess(isJs ? process.execPath : executable, isJs ? [executable, "--version"] : ["--version"], { timeoutMs: 5_000 });
       if (version.exitCode !== 0) {
         return {
           provider: this.provider,
@@ -69,7 +74,7 @@ export class CodexAdapter implements AgentAdapter {
         };
       }
 
-      const auth = await runProcess(process.execPath, [codexCliPath, "login", "status"], { timeoutMs: 5_000 });
+      const auth = await runProcess(isJs ? process.execPath : executable, isJs ? [executable, "login", "status"] : ["login", "status"], { timeoutMs: 5_000 });
       const authenticated = auth.exitCode === 0;
       const authDetail = auth.stdout.trim() || auth.stderr.trim();
 
@@ -78,7 +83,7 @@ export class CodexAdapter implements AgentAdapter {
         available: true,
         authenticated,
         version: version.stdout.trim(),
-        detail: authenticated ? authDetail || "Autenticado." : authDetail || "Nao autenticado."
+        detail: `${runtime ? `ACP ${runtime.source}: ${runtime.path}. ` : "SDK cross-review. "}${authenticated ? authDetail || "Autenticado." : authDetail || "Nao autenticado."}`
       };
     } catch (error) {
       return {
@@ -93,6 +98,8 @@ export class CodexAdapter implements AgentAdapter {
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
     const crossReview = this.mode === "cross-review";
+
+    if (!crossReview) return new CodexAcpClient().run(request);
 
     try {
       if (crossReview && request.sessionId !== undefined) {
