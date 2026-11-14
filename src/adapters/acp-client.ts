@@ -52,6 +52,7 @@ export class AcpClient {
     let sessionId: string | undefined;
     let response = "";
     let modeOptions: acp.SessionConfigOption[] | undefined;
+    const turn: TurnState = { active: false };
     try {
       const result = await this.withConnection(request, async (agent, state, setActiveSession) => {
         const session = await openSession(agent, state.capabilities, request.cwd, request.sessionId, request.additionalDirectories, this.deps.sessionMeta?.(request));
@@ -78,18 +79,28 @@ export class AcpClient {
           capabilities: state.capabilities, configOptions: options,
           runtimePath: state.runtime.path, runtimeVersion: state.runtime.version
         } });
-        const prompt = await agent.request(acp.methods.agent.session.prompt, {
-          sessionId, prompt: [{ type: "text", text: request.prompt }]
-        });
-        return { stopReason: prompt.stopReason, usage: parseUsage((prompt as acp.PromptResponse & { usage?: unknown }).usage) };
+        // The turn window is exactly the prompt request: traffic before it (session/load replay, mode/model
+        // setup) and after it (late events while the process is being torn down) is not this turn.
+        // Text received before a failure stays in `response` as partial output.
+        turn.active = true;
+        try {
+          const prompt = await agent.request(acp.methods.agent.session.prompt, {
+            sessionId, prompt: [{ type: "text", text: request.prompt }]
+          });
+          return { stopReason: prompt.stopReason, usage: parseUsage((prompt as acp.PromptResponse & { usage?: unknown }).usage) };
+        } finally {
+          turn.active = false;
+        }
       }, (notification) => {
+        // Configuration updates always feed the mode confirmation; nothing else counts outside the turn.
         modeOptions = configOptionsUpdate(notification) ?? modeOptions;
+        if (!turn.active) return;
         if (notification.update.sessionUpdate === "agent_message_chunk" && notification.update.content.type === "text") {
           response += notification.update.content.text;
         }
         request.onUpdate?.({ sessionId: notification.sessionId, kind: notification.update.sessionUpdate,
           payload: notification.update as unknown as Record<string, unknown> });
-      });
+      }, turn);
       return { provider: this.provider, status: result.stopReason === "end_turn" ? "success" : "error", response,
         durationMs: Date.now() - startedAt, ...(sessionId ? { sessionId } : {}),
         ...(result.usage ? { usage: result.usage } : {}),
@@ -103,7 +114,8 @@ export class AcpClient {
   private async withConnection<T>(
     request: AgentRunRequest,
     operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes">, setActiveSession: (id: string) => void) => Promise<T>,
-    onUpdate?: (notification: acp.SessionNotification) => void
+    onUpdate?: (notification: acp.SessionNotification) => void,
+    turn: TurnState = { active: false }
   ): Promise<T> {
     const runtime = await this.deps.resolveRuntime();
     const entryPath = typeof this.deps.entryPath === "string" ? this.deps.entryPath : this.deps.entryPath();
@@ -116,6 +128,13 @@ export class AcpClient {
     const app = acp.client({ name: "eleazar" })
       .onNotification(acp.methods.client.session.update, ({ params }) => onUpdate?.(params))
       .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
+        // A permission asked outside the turn (replayed history, or late during teardown) is not an
+        // active tool call: cancel it safely without involving the executor.
+        // The turn can end (or the run be aborted) while we await file checks or the operator's choice,
+        // so the window is re-validated after every await, and a late decision is never forwarded.
+        const cancelled = { outcome: { outcome: "cancelled" as const } };
+        const live = () => turn.active && !request.signal?.aborted;
+        if (!live()) return cancelled;
         const options = params.options.map((item) => ({ id: item.optionId, name: item.name, kind: item.kind }));
         const rawLocations = params.toolCall.locations ?? [];
         const locations = rawLocations.slice(0, 20).map((item) => item.path.slice(0, 500));
@@ -124,17 +143,18 @@ export class AcpClient {
           (rawLocations.length > 20 || rawLocations.some((item) => item.path.length > 500) ||
            (params.toolCall.kind === "edit" && locations.length === 0) ||
            (await Promise.all(locations.map((path) => realPathWithinRoots(path, roots)))).some((inside) => !inside))) {
-          return { outcome: { outcome: "cancelled" as const } };
+          return cancelled;
         }
+        if (!live()) return cancelled; // ended while checking paths: do not involve the executor
         const requiresElevation = permissionRequiresElevation(params.toolCall, locations,
           roots);
         const choice = await request.onPermission?.({ sessionId: params.sessionId,
           toolCallId: params.toolCall.toolCallId, title: (params.toolCall.title ?? "Ferramenta").slice(0, 300),
           ...(params.toolCall.kind ? { toolKind: params.toolCall.kind } : {}),
           ...(params.toolCall.name ? { toolName: params.toolCall.name } : {}), locations, requiresElevation, options });
-        return choice && options.some((item) => item.id === choice)
+        return live() && choice && options.some((item) => item.id === choice)
           ? { outcome: { outcome: "selected" as const, optionId: choice } }
-          : { outcome: { outcome: "cancelled" as const } };
+          : cancelled;
       });
     const connection = app.connect(stream);
     const timeoutMs = request.timeoutMs ?? 5 * 60_000;
@@ -160,6 +180,7 @@ export class AcpClient {
           agentName: init.agentInfo?.name ?? null, capabilities: init.agentCapabilities ?? {} }, (id) => { activeSession = id; });
       })()]);
     } catch (error) {
+      turn.active = false; // interruption: close the window before cancelling and tearing down
       if (activeSession) await connection.agent.notify(acp.methods.agent.session.cancel, { sessionId: activeSession }).catch(() => {});
       if (error instanceof Error && /connection closed/i.test(error.message)) {
         throw new Error(`${this.provider} ACP encerrou antes do resultado (codigo ${child.exitCode ?? "desconhecido"}).`);
@@ -170,6 +191,7 @@ export class AcpClient {
       if (reason) throw new Error(`${error instanceof Error ? error.message : String(error)} [startupFailureReason=${reason}]`);
       throw error;
     } finally {
+      turn.active = false;
       if (timer) clearTimeout(timer);
       if (abortListener) request.signal?.removeEventListener("abort", abortListener);
       // The ACP bridge may spawn a native CLI; it was spawned detached (POSIX), so its group is ours.
@@ -181,6 +203,12 @@ export class AcpClient {
     }
   }
 }
+
+/**
+ * Explicit window of the new turn: opened right before `session/prompt` is sent and closed when it
+ * settles, or earlier when the connection is interrupted (timeout, abort, exit) or cleaned up.
+ */
+interface TurnState { active: boolean }
 
 function permissionRequiresElevation(tool: acp.ToolCallUpdate, locations: string[], roots: string[]): boolean {
   if (tool.kind === "fetch") return true;
