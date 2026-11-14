@@ -48,6 +48,7 @@ import type {
   Task,
 } from "./services/contracts.js";
 import { priorityOrder } from "./services/contracts.js";
+import { failureHint, readableRunSummary } from "./services/run-messages.js";
 const priorities = { critical: "Crítica", high: "Alta", normal: "Normal", low: "Baixa" };
 const statuses = {
   queued: "Na fila",
@@ -135,33 +136,13 @@ function pageFromHash(hash: string): PageRoute {
   const value = hash.replace(/^#\/?/, "").split("/")[0] || "overview";
   return ["overview", "projects", "tasks", "executions", "approvals", "logs"].includes(value) ? value as PageRoute : "not-found";
 }
-function readableRunSummary(summary: string | null) {
-  if (!summary) return "O provedor não retornou detalhes adicionais.";
-  try {
-    const parsed: unknown = JSON.parse(summary);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const item = parsed as Record<string, unknown>;
-      for (const key of ["detail", "error", "message"]) {
-        if (typeof item[key] === "string" && item[key].trim()) return item[key].trim();
-      }
-    }
-  } catch { /* Entradas legadas podem conter texto simples. */ }
-  return summary;
-}
-function failureHint(summary: string | null) {
-  const detail = readableRunSummary(summary);
-  if (/requires a newer version of codex|vers[aã]o mais nova.*codex/i.test(detail)) {
-    return "Atualize o pacote @openai/codex-sdk usado pelo Eleazar e reinicie o Control Room; atualizar apenas o CLI global pode não atualizar o binário chamado pelo SDK.";
-  }
-  return "Consulte a mensagem e o log abaixo antes de reenfileirar a tarefa.";
-}
 function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry | undefined }) {
   const failed = run.status === "failed";
   return (
     <section className={`execution-feedback ${failed ? "error" : ""}`} aria-label="Resultado da última execução">
       <strong>{failed ? "Motivo da falha" : "Resultado da última execução"}</strong>
       <p className="execution-summary">{readableRunSummary(run.summary)}</p>
-      {failed && <p className="execution-hint">{failureHint(run.summary)}</p>}
+      {failed && <p className="execution-hint">{failureHint(run.summary, run.transport)}</p>}
       <dl>
         <div><dt>Provedor</dt><dd>{run.provider ?? "Não informado"}</dd></div>
         <div><dt>Encerrada</dt><dd>{run.finishedAt ? new Date(run.finishedAt).toLocaleString("pt-BR") : "Ainda em andamento"}</dd></div>
@@ -191,13 +172,19 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [data, setData] = useState<ControlRoomSnapshot | null>(null);
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
-  const [notice, setNotice] = useState("");
+  // A success notice belongs to the route it was raised on (or navigated to by the same action)
+  // and is hidden once the route changes. Errors are separate state and are never hidden by this.
+  const [noticeState, setNoticeState] = useState({ text: "", hash: "" });
+  const setNotice = (text: string) => setNoticeState({ text, hash: window.location.hash });
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [projectFilter, setProjectFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
   const [hash, setHash] = useState(() => window.location.hash);
+  const notice = noticeState.hash === hash ? noticeState.text : "";
+  // Discard (not just hide) a notice from a previous route so it cannot reappear on return.
+  useEffect(() => { setNoticeState((current) => current.hash === hash ? current : { text: "", hash: "" }); }, [hash]);
   const active = pageFromHash(hash);
   const executionRoute = routeId(hash, "executions");
   const taskRoute = routeId(hash, "tasks");
@@ -332,7 +319,6 @@ export function App({ client }: { client: ControlRoomClient }) {
     try {
       const result = await operation();
       setDialog(null);
-      setNotice(success);
       try {
         setData(await client.getSnapshot());
         setError("");
@@ -342,6 +328,8 @@ export function App({ client }: { client: ControlRoomClient }) {
         );
       }
       onSuccess?.(result);
+      // After onSuccess so a navigation it starts is already in location.hash and keeps the notice.
+      setNotice(success);
     } catch (reason) {
       setFormError(message(reason));
     } finally {

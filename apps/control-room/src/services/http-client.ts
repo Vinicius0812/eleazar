@@ -1,3 +1,4 @@
+import { readableProviderMessage } from "./run-messages.js";
 import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
@@ -82,19 +83,6 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
       await request<Task>(`/tasks/${encodeURIComponent(taskId)}/transition`, { method: "POST", body: JSON.stringify({ status: decision === "approve" ? "queued" : "cancelled", actor: "local-operator", reason: decision === "approve" ? "aprovada pelo operador" : "cancelada pelo operador" }) });
     }
   };
-}
-function readableProviderMessage(summary: string | null): string {
-  if (!summary) return "O provedor nao retornou detalhes. Abra a tarefa e consulte os logs persistidos.";
-  try {
-    const parsed: unknown = JSON.parse(summary);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const item = parsed as Record<string, unknown>;
-      for (const key of ["detail", "error", "message"]) {
-        if (typeof item[key] === "string" && item[key].trim()) return item[key].trim();
-      }
-    }
-  } catch { /* Older persisted entries can contain ordinary text. */ }
-  return summary;
 }
 function errorMessage(body: unknown, status: number): string {
   return body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : `A API local respondeu com erro ${status}.`;

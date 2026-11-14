@@ -58,6 +58,20 @@ describe("Task workspace", () => {
     expect(executeTask).toHaveBeenCalledWith(queued.id, "codex", { model: "m-b" });
   });
 
+  it("keeps a success notice on its route and drops it when the route changes", async () => {
+    window.location.hash = "#/overview";
+    const controlled = client();
+    render(<App client={controlled} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Atualizar/ }));
+    expect(await screen.findAllByText("Painel atualizado.")).not.toHaveLength(0);
+    await user.click(screen.getByRole("link", { name: "Fila de tarefas" }));
+    await waitFor(() => expect(screen.queryByText("Painel atualizado.")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("link", { name: "Visão geral" }));
+    await screen.findByRole("heading", { name: "Sala de controle" });
+    expect(screen.queryByText("Painel atualizado.")).not.toBeInTheDocument();
+  });
+
   it("offers resuming the previous session only as an explicit opt-in and shows the API refusal", async () => {
     window.location.hash = "#/tasks/task-2";
     const controlled = client();
@@ -275,6 +289,7 @@ describe("Task workspace", () => {
     expect(status).toHaveTextContent("Na fila");
     expect(screen.getByText(queued.prompt)).toBeInTheDocument();
     expect(window.location.hash).toBe("#/tasks/task-new");
+    expect(screen.getByText("Tarefa criada.")).toBeInTheDocument();
     expect(createTask).toHaveBeenCalledWith({ projectId: queued.projectId, targetDirectoryId: queued.targetDirectoryId, directoryIds: queued.directoryIds, title: queued.title, prompt: queued.prompt, priority: "normal" });
 
     await user.click(screen.getByRole("button", { name: "Executar tarefa" }));

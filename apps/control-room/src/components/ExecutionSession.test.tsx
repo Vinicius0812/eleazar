@@ -13,7 +13,7 @@ const project = { id: "p", name: "P", path: "C:\\P", directories: [], createdAt:
 const event = (sequence: number, kind: string, payload: Record<string, unknown>): ExecutionEvent => ({ executionId: "run-1", sequence, id: `run-1:${sequence}`, kind, payload, createdAt: at });
 const permission = (over: Partial<ExecutionPermission> = {}): ExecutionPermission => ({ id: "perm-1", executionId: "run-1", leaseId: "x", toolCallId: "t1", title: "Editar arquivo", toolKind: "edit", toolName: "apply_patch", locations: ["C:\\P\\src\\a.ts"], requiresElevation: false, options: [{ id: "allow", name: "Permitir uma vez", kind: "allow_once" }, { id: "always", name: "Sempre permitir", kind: "allow_always" }, { id: "reject", name: "Rejeitar", kind: "reject_once" }], status: "pending", selectedOptionId: null, createdAt: at, resolvedAt: null, ...over } as ExecutionPermission);
 
-function detail(over: Partial<ExecutionDetail> & { status?: "running" | "completed" | "cancelled" } = {}): ExecutionDetail {
+function detail(over: Partial<ExecutionDetail> & { status?: "running" | "completed" | "cancelled" | "failed" } = {}): ExecutionDetail {
   const { status = "running", ...rest } = over;
   return { execution: { id: "run-1", taskId: "task-1", provider: "codex", status, startedAt: at, finishedAt: status === "running" ? null : at, summary: null, transport: "acp", model: "gpt-test" }, task, project, logs: [], files: [], history: [], events: [], permissions: [], ...rest };
 }
@@ -129,6 +129,76 @@ describe("ExecutionSession", () => {
     expect(onChanged).not.toHaveBeenCalled();
     expect(screen.queryByText("Editar arquivo")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancelar execução" })).toBeEnabled();
+  });
+
+  it("shows the normalized failure reason together with the partial agent text", async () => {
+    const failed = detail({ status: "failed", events: [event(1, "agent_message_chunk", { text: "Texto **parcial**" }), event(2, "failed", { summary: "x" })] });
+    failed.execution = { ...failed.execution, summary: '{"detail":"Cota do provedor esgotada"}', output: '{"detail":"Cota do provedor esgotada"}' };
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => failed })} executionId="run-1" />);
+    expect(await screen.findByText("parcial")).toBeInTheDocument();
+    expect(screen.getByText("Motivo da falha")).toBeInTheDocument();
+    expect(screen.getByText("Cota do provedor esgotada")).toBeInTheDocument();
+    expect(screen.queryByText(/detail/)).not.toBeInTheDocument();
+  });
+
+  it("shows a cancellation reason from the terminal event while the detail is still stale", async () => {
+    const client = fakeClient({
+      getExecutionDetail: async () => detail(), // still "running" and without summary
+      streamExecutionEvents: async (_id: string, options: EventStreamOptions) => {
+        options.onEvent(event(1, "agent_message_chunk", { text: "Quase lá" }));
+        options.onEvent(event(2, "cancelled", { reason: "Cancelada pelo operador" }));
+        return true;
+      }
+    });
+    render(<ExecutionSession client={client} executionId="run-1" />);
+    expect(await screen.findByText("Motivo do cancelamento")).toBeInTheDocument();
+    expect(screen.getByText("Cancelada pelo operador")).toBeInTheDocument();
+    expect(screen.getByText("Quase lá")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar execução" })).not.toBeInTheDocument();
+  });
+
+  it("does not show a failure block for a completed run", async () => {
+    const done = detail({ status: "completed", events: [event(1, "agent_message_chunk", { text: "Tudo certo" }), event(2, "completed", {})] });
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => done })} executionId="run-1" />);
+    expect(await screen.findByText("Tudo certo")).toBeInTheDocument();
+    expect(screen.queryByText(/Motivo|interrompida/)).not.toBeInTheDocument();
+  });
+
+  it("says so, without inventing a cause, when a failed run has no recorded reason", async () => {
+    const failed = detail({ status: "failed", events: [event(1, "agent_message_chunk", { text: "Parcial" }), event(2, "failed", {})] });
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => failed })} executionId="run-1" />);
+    expect(await screen.findByText("A execução falhou e nenhum detalhe foi registrado.")).toBeInTheDocument();
+    expect(screen.getByText("Parcial")).toBeInTheDocument();
+  });
+
+  it("keeps persisted partial output next to the reason when there are no events, but not a repeated reason", async () => {
+    const partial = detail({ status: "failed", events: [] });
+    partial.execution = { ...partial.execution, summary: "Erro de rede no provedor", output: "## Análise parcial\n\nAchei **dois** problemas." };
+    const view = render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => partial })} executionId="run-1" />);
+    expect(await screen.findByText("Erro de rede no provedor")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Análise parcial" })).toBeInTheDocument();
+    expect(screen.getByText("dois")).toBeInTheDocument();
+    view.unmount();
+    const same = detail({ status: "failed", events: [] });
+    same.execution = { ...same.execution, summary: '{"detail":"Cota esgotada"}', output: '{"detail":"Cota esgotada"}' };
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => same })} executionId="run-1" />);
+    expect(await screen.findByText("Motivo da falha")).toBeInTheDocument();
+    expect(screen.getAllByText("Cota esgotada")).toHaveLength(1);
+  });
+
+  it("never hides a fuller output behind a truncated reason", async () => {
+    const truncated = detail({ status: "failed", events: [] });
+    truncated.execution = { ...truncated.execution, summary: "Falha de conexão...", output: "Falha de conexão: detalhes importantes do servidor" };
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => truncated })} executionId="run-1" />);
+    expect(await screen.findByText("Falha de conexão...")).toBeInTheDocument();
+    expect(screen.getByText(/detalhes importantes do servidor/)).toBeInTheDocument();
+  });
+
+  it("reports a stream failure as a connection problem, not as a failed execution", async () => {
+    const stream = vi.fn(async () => { throw new Error("socket fechado"); });
+    render(<ExecutionSession client={fakeClient({ streamExecutionEvents: stream })} executionId="run-1" retryDelayMs={() => 0} />);
+    expect(await screen.findByText(/Falha na conexão com o fluxo de eventos: socket fechado/)).toBeInTheDocument();
+    expect(screen.queryByText("Motivo da falha")).not.toBeInTheDocument();
   });
 
   it("disables allowing an action that requires elevation", async () => {

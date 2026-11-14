@@ -68,7 +68,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
             <p>{latestLog.message}</p>
           </div>
         )}
-        {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={false} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
+        {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={false} showOutcome={!failure} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
         <div className="task-next-actions">
           <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>
           {actions}
