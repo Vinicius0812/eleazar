@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { classifyTask } from "./router.js";
+import { providerOutput, summarizeProviderResult } from "./provider-result.js";
 import {
   assertSafeTaskActions,
   assertValidTransition,
@@ -350,39 +351,11 @@ function visibleAgentPayload(update: AgentUpdate): Record<string, unknown> | nul
 }
 function retainsLease(status: TaskStatus): boolean { return status === "planning" || status === "running"; }
 
-function summarizeProviderResult(result: AgentRunResult): string {
-  const detail = result.status === "success" ? result.response : result.error ?? result.response;
-  const normalized = providerDetail(detail) || (result.status === "success" ? "Execucao concluida sem resposta textual." : "O provedor nao retornou detalhes do erro.");
-  return normalized.length > 4_000 ? `${normalized.slice(0, 3_997)}...` : normalized;
-}
-
-function providerOutput(result: AgentRunResult): string {
-  const detail = result.status === "success" ? result.response : result.error ?? result.response;
-  const normalized = providerDetail(detail) || (result.status === "success" ? "Execucao concluida sem resposta textual." : "O provedor nao retornou detalhes do erro.");
-  const maxLength = 100_000;
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 48)}\n\n[Saida truncada pelo Eleazar apos 100.000 caracteres.]` : normalized;
-}
-
 function formatProviderLog(result: AgentRunResult): string {
   const usage = result.usage?.total ? `; ${result.usage.total} tokens` : "";
   const outcome = result.status === "success" ? "concluiu" : "falhou";
   const detail = result.status === "success" ? "" : ` Motivo: ${summarizeProviderResult(result)}`;
   return `${result.provider} ${outcome} em ${result.durationMs} ms${usage}.${detail}`;
-}
-
-function providerDetail(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const item = parsed as Record<string, unknown>;
-      for (const key of ["detail", "error", "message"]) {
-        if (typeof item[key] === "string" && item[key].trim()) return item[key].trim();
-      }
-    }
-  } catch { /* The provider may return ordinary text. */ }
-  return trimmed;
 }
 
 function normalizeDirectoryPath(path: string): string {
