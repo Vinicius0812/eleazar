@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 import { runProcess } from "./process-runner.js";
+import { operationalEnvironment } from "./runtime-environment.js";
 
 const require = createRequire(import.meta.url);
 export function claudeAcpEntry(): string {
@@ -29,9 +30,7 @@ export async function resolveClaudeRuntime(): Promise<ClaudeRuntime> {
 
 /** Operational environment only. Never forward API keys or token variables. */
 export function claudeAcpEnvironment(runtimePath: string): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LANG", "LC_ALL"];
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of allowed) if (process.env[name] !== undefined) env[name] = process.env[name];
+  const env = operationalEnvironment();
   env.CLAUDE_CODE_EXECUTABLE = runtimePath;
   env.CLAUDE_AGENT_ACP_PROTOCOL = "v1";
   env.DISABLE_AUTOUPDATER = "1";

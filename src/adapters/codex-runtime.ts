@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import { runProcess } from "./process-runner.js";
+import { operationalEnvironment } from "./runtime-environment.js";
 
 const require = createRequire(import.meta.url);
 const acpEntry = require.resolve("@agentclientprotocol/codex-acp");
@@ -64,9 +65,7 @@ async function probe(path: string, source: CodexRuntime["source"]): Promise<Code
 
 /** Allow only operational environment values; do not copy credential variables to subprocesses. */
 export function acpEnvironment(runtimePath: string): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LANG", "LC_ALL"];
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of allowed) if (process.env[name] !== undefined) env[name] = process.env[name];
+  const env = operationalEnvironment();
   env.CODEX_PATH = runtimePath;
   env.INITIAL_AGENT_MODE = "workspace-write";
   env.CODEX_CONFIG = JSON.stringify({ sandbox_mode: "workspace-write", approval_policy: "on-request", web_search: "disabled",
