@@ -14,6 +14,8 @@ npm run control-room
 
 O comando inicia a API em `127.0.0.1:4317` e o Vite em `127.0.0.1:5173`. A porta da API pode ser alterada somente no host local por `ELEAZAR_CONTROL_ROOM_PORT`; quando ela for alterada, ajuste a configuracao do cliente antes de abrir a UI.
 
+O launcher (`scripts/control-room-dev.ts`) executa a API (via `tsx`) e o Vite como processos Node comuns, sem shell nem `npm`, com argumentos fixos; o Vite usa `--strictPort` (já configurado em `vite.config.ts`), então uma 5173 ocupada falha em vez de mudar de porta. Ctrl+C, SIGTERM, falha de inicialização ou a saída de qualquer um dos dois param os dois e seus descendentes, e o launcher só termina depois de confirmar que cada filho saiu (até 3 s por filho); se algum não sair, o PID é registrado e o código de saída é diferente de zero. Só processos criados pelo próprio launcher são encerrados: não há encerramento por nome ou porta, então uma API que já estivesse rodando antes não é tocada (e a nova API falhará por porta ocupada). Limite: os descendentes de um filho que já havia saído sozinho não são rastreados nem encerrados, e a confirmação vale para cada filho direto, não para cada descendente. O encerramento é forçado (`taskkill /T /F` no Windows; grupo de processos isolado com `SIGKILL` no POSIX, caminho este não exercitado pelos testes feitos no Windows). O mesmo helper encerra as pontes ACP.
+
 ## Contratos e fluxo
 
 `src/core/control-room.ts` e a fonte dos contratos de dominio. `apps/control-room/src/services/contracts.ts` e um espelho de transporte JSON: preserva estados (`queued`, `planning`, `running`, `waiting_approval`, `completed`, `failed`, `cancelled`) e prioridades (`low`, `normal`, `high`, `critical`), sem importar codigo do host no navegador.

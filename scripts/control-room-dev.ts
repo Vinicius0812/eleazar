@@ -1,18 +1,8 @@
-import { spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const processes = [
-  spawn(npm, ["exec", "tsx", "src/control-room/serve.ts"], { stdio: "inherit", shell: process.platform === "win32" }),
-  spawn(npm, ["run", "dev", "--prefix", "apps/control-room"], { stdio: "inherit", shell: process.platform === "win32" })
-];
+import { resolveDevCommands } from "../src/control-room/dev-commands.js";
+import { superviseProcesses } from "../src/control-room/dev-supervisor.js";
 
-let stopping = false;
-function stop(code = 0): void {
-  if (stopping) return;
-  stopping = true;
-  for (const child of processes) child.kill();
-  process.exitCode = code;
-}
-process.on("SIGINT", () => stop());
-process.on("SIGTERM", () => stop());
-for (const child of processes) child.once("exit", (code) => stop(code ?? 1));
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+process.exitCode = await superviseProcesses({ commands: resolveDevCommands(root) });

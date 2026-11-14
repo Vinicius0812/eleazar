@@ -1,10 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import * as acp from "@agentclientprotocol/sdk";
 
+import { terminateProcessTree } from "./process-tree.js";
 import type { AgentRunRequest, AgentRunResult, ProviderName, TokenUsage } from "../core/contracts.js";
 
 export interface AcpRuntime { path: string; version: string; source: string; }
@@ -171,31 +172,14 @@ export class AcpClient {
     } finally {
       if (timer) clearTimeout(timer);
       if (abortListener) request.signal?.removeEventListener("abort", abortListener);
-      await terminateProcessTree(child);
+      // The ACP bridge may spawn a native CLI; it was spawned detached (POSIX), so its group is ours.
+      await terminateProcessTree(child, { groupIsolated: process.platform !== "win32" });
       connection.close();
       child.stdin.end();
       child.stdout.destroy();
       child.stderr.destroy();
     }
   }
-}
-
-/** The ACP bridge may spawn a native CLI; stop only descendants of our own PID. */
-async function terminateProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
-  if (process.platform !== "win32") {
-    try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill(); }
-    return;
-  }
-  await new Promise<void>((done) => {
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-      stdio: "ignore", shell: false, windowsHide: true
-    });
-    const timer = setTimeout(() => { killer.kill(); done(); }, 3_000);
-    killer.once("error", () => { clearTimeout(timer); done(); });
-    killer.once("exit", () => { clearTimeout(timer); done(); });
-  });
-  if (child.exitCode === null && child.signalCode === null) child.kill();
 }
 
 function permissionRequiresElevation(tool: acp.ToolCallUpdate, locations: string[], roots: string[]): boolean {
