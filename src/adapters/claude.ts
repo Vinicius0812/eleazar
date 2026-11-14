@@ -4,6 +4,8 @@ import { dirname, join, resolve } from "node:path";
 
 import type { AgentAdapter, AgentHealth, AgentRunRequest, AgentRunResult, TaskKind, TokenUsage } from "../core/contracts.js";
 import { claudeTextTaskKinds } from "../core/contracts.js";
+import { ClaudeAcpClient } from "./claude-acp.js";
+import { claudeAcpEntry, resolveClaudeRuntime } from "./claude-runtime.js";
 import { runProcess, type ProcessOptions } from "./process-runner.js";
 
 const executable = process.platform === "win32" ? "claude.exe" : "claude";
@@ -22,15 +24,23 @@ const textOnlyFlags = [
 
 export class ClaudeAdapter implements AgentAdapter {
   readonly provider = "claude" as const;
-  readonly supportedTasks: ReadonlySet<TaskKind> = claudeTextTaskKinds;
+  readonly supportedTasks: ReadonlySet<TaskKind>;
 
-  constructor(private readonly runner: typeof runProcess = runProcess) {}
+  constructor(private readonly runner: typeof runProcess = runProcess, private readonly mode: "default" | "cross-review" = "default") {
+    this.supportedTasks = mode === "cross-review" ? claudeTextTaskKinds : new Set<TaskKind>([
+      "implementation", "review", "planning", "research", "testing", "documentation", "unknown"
+    ]);
+  }
 
   async health(): Promise<AgentHealth> {
     const unavailable = { provider: this.provider, available: false, authenticated: null };
     try {
       return await inTemporaryDirectory(async (cwd) => {
-        const launch = await this.start(["--version"], { cwd, timeoutMs: 5_000 }).catch((error: unknown) => {
+        if (this.mode === "default") claudeAcpEntry();
+        const runtime = this.mode === "default" ? await resolveClaudeRuntime() : null;
+        const launch = await (runtime
+          ? this.runner(runtime.path, ["--version"], { cwd, timeoutMs: 5_000 }).then((result) => ({ binary: runtime.path, result }))
+          : this.start(["--version"], { cwd, timeoutMs: 5_000 })).catch((error: unknown) => {
           if (!isMissingExecutable(error)) throw error;
           return undefined;
         });
@@ -55,7 +65,7 @@ export class ClaudeAdapter implements AgentAdapter {
         return {
           provider: this.provider, available: true, authenticated, version,
           detail: authenticated
-            ? "Autenticado para revisao e planejamento por texto."
+            ? (this.mode === "default" ? `Claude ACP ${runtime?.source ?? "indisponivel"}: ${runtime?.path ?? "runtime ausente"}.` : "Autenticado para revisao e planejamento por texto.")
             : "Nao foi possivel confirmar a autenticacao do Claude Code."
         };
       });
@@ -65,6 +75,7 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    if (this.mode === "default") return new ClaudeAcpClient().run(request);
     const startedAt = Date.now();
     if (request.sessionId !== undefined) return this.failure("Claude Code opera sem retomada de sessao.", 0);
     if (!request.taskKind || !this.supportedTasks.has(request.taskKind)) {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRunRequest, RouteDecision } from "../src/core/contracts.js";
 import { CodexAcpClient } from "../src/adapters/codex-acp.js";
+import { ClaudeAcpClient } from "../src/adapters/claude-acp.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
@@ -41,6 +42,55 @@ async function serve(service: ReturnType<typeof createLocalControlRoomService>, 
 }
 
 describe("ACP Control Room backend", () => {
+  it("serves provider-neutral catalogs for Codex and Claude", async () => {
+    const { store, service } = await fixture();
+    const project = service.registerProject({ name: "P", path: process.cwd() });
+    const claudeInspector = { inspect: async () => ({ runtime: { path: "C:/claude.exe", version: "2.1.322", source: "user" },
+      protocolVersion: 1, agentName: "claude-acp", capabilities: { loadSession: true }, sessionId: "catalog",
+      configOptions: [{ id: "model", category: "model", name: "Model", type: "select", currentValue: "sonnet",
+        options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] }] }) } as unknown as ClaudeAcpClient;
+    const executor = new ControlRoomTaskExecutor(service, runner(async () => ({ route,
+      result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), undefined, acpInspector, claudeInspector);
+    const api = await serve(service, executor);
+    try {
+      const id = project.directories[0]!.id;
+      const codex = await (await fetch(`${api.base}/providers/codex/config?directoryId=${id}`)).json();
+      const claude = await (await fetch(`${api.base}/providers/claude/config?directoryId=${id}`)).json();
+      expect(codex).toMatchObject({ provider: "codex", capabilities: { loadSession: true } });
+      expect(codex.models).toContainEqual(expect.objectContaining({ id: "gpt-test" }));
+      expect(claude).toMatchObject({ provider: "claude", capabilities: { loadSession: true }, defaultModel: "sonnet" });
+      expect(claude.models).toContainEqual(expect.objectContaining({ id: "opus" }));
+    } finally { await api.close(); store.close(); }
+  });
+  it("resumes Claude only from the same provider and scope with advertised capability", async () => {
+    const { store, service } = await fixture();
+    const project = service.registerProject({ name: "P", path: process.cwd() });
+    const first = service.createTask({ projectId: project.id, title: "First", prompt: "P" });
+    const running = await service.dispatch(first.id, { selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [] });
+    const prior = store.listExecutions(first.id)[0]!;
+    service.setExecutionMetadata(prior.id, running.dispatchLease!, "acp", null, "same-id");
+    service.finishProviderRun(first.id, running.dispatchLease!, { provider: "codex", status: "success", response: "ok", durationMs: 1 });
+    const next = service.createTask({ projectId: project.id, title: "Next", prompt: "P" });
+    const claudeRoute: RouteDecision = { ...route, selected: "claude", candidates: [{ provider: "claude", score: 1, reasons: ["test"],
+      health: { provider: "claude", available: true, authenticated: true, detail: "test" } }] };
+    const claudeInspector = { inspect: async () => ({ runtime: { path: "C:/claude.exe", version: "2.1.322", source: "user" },
+      protocolVersion: 1, agentName: "claude-acp", capabilities: { loadSession: true }, sessionId: "catalog", configOptions: [] }) } as unknown as ClaudeAcpClient;
+    const run = vi.fn<ControlRoomTaskRunner["run"]>(async () => ({ route: claudeRoute,
+      result: { provider: "claude", status: "success", response: "ok", durationMs: 1 } }));
+    const fake: ControlRoomTaskRunner = { router: { route: async () => claudeRoute }, run };
+    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector, claudeInspector);
+    await expect(executor.start(next.id, "claude", undefined, "same-id")).rejects.toThrow("nao pertence");
+    expect(store.listExecutions(next.id)).toHaveLength(0);
+    const claudeTask = service.createTask({ projectId: project.id, title: "Claude previous", prompt: "P" });
+    const claudeRunning = await service.dispatch(claudeTask.id, { selectedProvider: "claude", reason: "test", candidates: [], requestedActions: [] });
+    const claudePrior = store.listExecutions(claudeTask.id)[0]!;
+    service.setExecutionMetadata(claudePrior.id, claudeRunning.dispatchLease!, "acp", null, "claude-id");
+    service.finishProviderRun(claudeTask.id, claudeRunning.dispatchLease!, { provider: "claude", status: "success", response: "ok", durationMs: 1 });
+    await executor.start(next.id, "claude", undefined, "claude-id");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "claude-id" }), "claude"));
+    await vi.waitFor(() => expect(store.getTask(next.id)?.status).toBe("completed"));
+    store.close();
+  });
   it("backfills legacy executions without losing their output", async () => {
     const { store, path, service } = await fixture();
     const project = service.registerProject({ name: "P", path: process.cwd() });

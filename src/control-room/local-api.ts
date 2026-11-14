@@ -40,11 +40,12 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (!providers) return json(response, 200, []);
     return json(response, 200, await providers.list(url.searchParams.get("refresh") === "true"));
   }
-  if (method === "GET" && url.pathname === "/api/control-room/providers/codex/config") {
-    if (!executor) throw new Error("Executor Codex nao configurado.");
+  const providerConfigMatch = /^\/api\/control-room\/providers\/(codex|claude)\/config$/.exec(url.pathname);
+  if (method === "GET" && providerConfigMatch?.[1]) {
+    if (!executor) throw new Error("Executor ACP nao configurado.");
     const directoryId = url.searchParams.get("directoryId");
-    if (!directoryId) throw new Error("Informe directoryId para o catalogo Codex.");
-    return json(response, 200, await executor.codexConfig(directoryId));
+    if (!directoryId) throw new Error("Informe directoryId para o catalogo ACP.");
+    return json(response, 200, await executor.providerConfig(providerConfigMatch[1] as "codex" | "claude", directoryId));
   }
   const eventsMatch = /^\/api\/control-room\/executions\/([^/]+)\/events$/.exec(url.pathname);
   if (method === "GET" && eventsMatch?.[1]) {

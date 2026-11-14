@@ -90,6 +90,19 @@ export interface AgentAdapter {
   run(request: AgentRunRequest): Promise<AgentRunResult>;
 }
 
+/** Stable provider-neutral catalog returned by the local Control Room API. */
+export interface ProviderConfig {
+  provider?: "codex" | "claude";
+  directoryId: string;
+  runtime: { path: string; version: string; source: string };
+  protocolVersion: number;
+  settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean";
+    currentValue: string | boolean; options: Array<{ id: string; name: string }> }>;
+  models: Array<{ id: string; name: string }>;
+  defaultModel: string | null;
+  capabilities?: { loadSession?: boolean };
+}
+
 export interface RouteRequest {
   prompt: string;
   preferredProvider?: ProviderName;

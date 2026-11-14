@@ -21,7 +21,7 @@ describe("Claude Code adapter", () => {
       .mockResolvedValueOnce(result({ stdout: "2.1.314 (Claude Code)\n" }))
       .mockResolvedValueOnce(result({ stdout: JSON.stringify({ loggedIn: true, email: "privado@example.test", configDirectory: "/local/secreto" }) }));
 
-    const health = await new ClaudeAdapter(runner).health();
+    const health = await new ClaudeAdapter(runner, "cross-review").health();
     expect(health).toMatchObject({ provider: "claude", available: true, authenticated: true, version: "2.1.314" });
     expect(JSON.stringify(health)).not.toMatch(/privado|secreto/);
     expect(runner.mock.calls.map(([, args]) => args)).toEqual([
@@ -35,8 +35,8 @@ describe("Claude Code adapter", () => {
       .mockResolvedValueOnce(result({ stdout: "2.1.314 (Claude Code)" }))
       .mockResolvedValueOnce(result({ stdout: "conteudo interno" }));
 
-    expect(await new ClaudeAdapter(missing).health()).toMatchObject({ available: false, authenticated: null });
-    const health = await new ClaudeAdapter(malformed).health();
+    expect(await new ClaudeAdapter(missing, "cross-review").health()).toMatchObject({ available: false, authenticated: null });
+    const health = await new ClaudeAdapter(malformed, "cross-review").health();
     expect(health).toMatchObject({ available: true, authenticated: false });
     expect(JSON.stringify(health)).not.toContain("conteudo interno");
   });
@@ -48,7 +48,7 @@ describe("Claude Code adapter", () => {
       .mockResolvedValueOnce(result({ stdout: '{"loggedIn":true}' }));
     const native = join(homedir(), ".local", "bin", "claude.exe");
 
-    await expect(new ClaudeAdapter(runner).health()).resolves.toMatchObject({
+    await expect(new ClaudeAdapter(runner, "cross-review").health()).resolves.toMatchObject({
       available: true,
       authenticated: true,
       version: "2.1.314"
@@ -65,7 +65,7 @@ describe("Claude Code adapter", () => {
       .mockRejectedValueOnce(missingExecutable)
       .mockResolvedValueOnce(result({ stdout: '{"type":"result","subtype":"success","is_error":false,"result":"Revisado."}' }));
 
-    await expect(new ClaudeAdapter(runner).run(request)).resolves.toMatchObject({ status: "success", response: "Revisado." });
+    await expect(new ClaudeAdapter(runner, "cross-review").run(request)).resolves.toMatchObject({ status: "success", response: "Revisado." });
     expect(runner).toHaveBeenCalledTimes(2);
     const [binary, args, options] = runner.mock.calls[1]!;
     expect(binary).toBe(join(homedir(), ".local", "bin", "claude.exe"));
@@ -78,7 +78,7 @@ describe("Claude Code adapter", () => {
       .mockResolvedValueOnce(result({ stdout: "2.1.314 (Claude Code)" }))
       .mockRejectedValueOnce(missingExecutable);
 
-    await expect(new ClaudeAdapter(runner).health()).resolves.toMatchObject({
+    await expect(new ClaudeAdapter(runner, "cross-review").health()).resolves.toMatchObject({
       detail: "Nao foi possivel diagnosticar o Claude Code."
     });
     expect(runner).toHaveBeenCalledTimes(2);
@@ -90,7 +90,7 @@ describe("Claude Code adapter", () => {
       usage: { input_tokens: 5, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 },
     }) }));
     const prompt = `Revise o texto literal: "aspas", $env:TESTE, & echo marcador\nSegunda linha.`;
-    const outcome = await new ClaudeAdapter(runner).run({ ...request, prompt, model: "sonnet[1m]" });
+    const outcome = await new ClaudeAdapter(runner, "cross-review").run({ ...request, prompt, model: "sonnet[1m]" });
     const [binary, args, options] = runner.mock.calls[0]!;
     expect(binary).toBe(process.platform === "win32" ? "claude.exe" : "claude");
     expect(args).toEqual(expect.arrayContaining(["--safe-mode", "--strict-mcp-config", "--no-chrome", "--no-session-persistence", "--disable-slash-commands"]));
@@ -110,7 +110,7 @@ describe("Claude Code adapter", () => {
 
   it("recusa sessao, tarefa de implementacao e modelo em formato de flag antes de iniciar o subprocesso", async () => {
     const runner = vi.fn<typeof runProcess>();
-    const adapter = new ClaudeAdapter(runner);
+    const adapter = new ClaudeAdapter(runner, "cross-review");
     for (const values of [{ sessionId: "existing" }, { taskKind: "implementation" } as const, { model: "--dangerously-skip-permissions" }]) {
       await expect(adapter.run({ ...request, ...values })).resolves.toMatchObject({ status: "error", response: "" });
     }
@@ -125,7 +125,7 @@ describe("Claude Code adapter", () => {
       result({ timedOut: true, stdout: "credencial privada" }),
     ]) {
       const runner = vi.fn<typeof runProcess>().mockResolvedValue(failed);
-      const outcome = await new ClaudeAdapter(runner).run(request);
+      const outcome = await new ClaudeAdapter(runner, "cross-review").run(request);
       expect(outcome).toMatchObject({ status: "error", response: "" });
       expect(JSON.stringify(outcome)).not.toContain("credencial privada");
       expect(runner).toHaveBeenCalledTimes(1);

@@ -158,7 +158,7 @@ async function crossReview(): Promise<void> {
           reader.removeListener("close", abort);
         }
       }
-    }, { codex: new CodexAdapter("cross-review"), claude: new ClaudeAdapter() });
+    }, { codex: new CodexAdapter("cross-review"), claude: new ClaudeAdapter(undefined, "cross-review") });
     if (parsed.values.json) console.log(safeResultJson(result));
     else {
       console.log(`Revisao cruzada: ${result.status} (${result.rounds.length} rodada(s) revisada(s)).`);

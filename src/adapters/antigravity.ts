@@ -54,7 +54,9 @@ export class AntigravityAdapter implements AgentAdapter {
         available: true,
         authenticated: null,
         version: version.stdout.trim(),
-        detail: "Instalado; a autenticacao sera confirmada na primeira execucao."
+        detail: /\b1\.2\.7\b/.test(version.stdout)
+          ? "Instalado em transporte legado; agy 1.2.7 nao oferece ACP. A autenticacao sera confirmada na primeira execucao."
+          : "Instalado em transporte legado; ACP nao configurado neste adaptador. A autenticacao sera confirmada na primeira execucao."
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -61,7 +61,7 @@ describe("Control Room task executor", () => {
     store.close();
   });
 
-  it("aceita Claude em execute e envia somente o texto aprovado sem coletar arquivos do checkout", async () => {
+  it("aceita Claude ACP em execute e coleta arquivos do checkout", async () => {
     const { service, store } = await fixture();
     const project = service.registerProject({ name: "Core", path: process.cwd() });
     const task = service.createTask({ projectId: project.id, kind: "planning", title: "Comunicação", prompt: "Responda OK" });
@@ -83,16 +83,16 @@ describe("Control Room task executor", () => {
       const response = await post("execute", { provider: "claude" });
       expect(response.status).toBe(202);
       await response.json();
-      expect(run).toHaveBeenCalledWith(expect.objectContaining({ taskKind: "planning", prompt: "Comunicação\n\nResponda OK" }), "claude");
-      expect(capture).not.toHaveBeenCalled();
-      expect(store.listExecutions(task.id)).toMatchObject([{ provider: "claude", status: "completed", summary: "OK" }]);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ taskKind: "planning", prompt: expect.stringContaining("Responda OK"), additionalDirectories: [] }), "claude"));
+      expect(capture).toHaveBeenCalled();
+      await vi.waitFor(() => expect(store.listExecutions(task.id)).toMatchObject([{ provider: "claude", transport: "acp", status: "completed", summary: "OK" }]));
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       store.close();
     }
   });
 
-  it("mantém a tarefa na fila quando o tipo ou a autenticação impedem escolher Claude", async () => {
+  it("mantém a tarefa na fila quando a autenticação impede escolher Claude", async () => {
     const { service, store } = await fixture();
     try {
       const project = service.registerProject({ name: "Core", path: process.cwd() });
@@ -102,8 +102,7 @@ describe("Control Room task executor", () => {
       const runner = { router: { route }, run: vi.fn<ControlRoomTaskRunner["run"]>() };
       const executor = new ControlRoomTaskExecutor(service, runner);
 
-      await expect(executor.start(incompatible.id, "claude")).rejects.toThrow("apenas tarefas de revisão ou planejamento");
-      expect(route).not.toHaveBeenCalled();
+      await expect(executor.start(incompatible.id, "claude")).rejects.toThrow("instalado e autenticado");
       await expect(executor.start(compatible.id, "claude")).rejects.toThrow("instalado e autenticado");
       expect(runner.run).not.toHaveBeenCalled();
       for (const task of [incompatible, compatible]) {

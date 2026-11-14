@@ -1,6 +1,7 @@
-import type { AgentRunRequest, AgentRunResult, ProviderName, RouteDecision } from "../core/contracts.js";
+import type { AgentRunRequest, AgentRunResult, ProviderConfig, ProviderName, RouteDecision } from "../core/contracts.js";
 import { CodexAcpClient } from "../adapters/codex-acp.js";
-import { claudeTextTaskKinds } from "../core/contracts.js";
+import { ClaudeAcpClient } from "../adapters/claude-acp.js";
+import type { AcpClient, AcpSessionInfo } from "../adapters/acp-client.js";
 import type { Orchestrator, OrchestratorRun } from "../core/orchestrator.js";
 import { ControlRoomService } from "../core/control-room-service.js";
 import type { ControlRoomTask, DelegationCandidate, LocalProjectDirectory } from "../core/control-room.js";
@@ -16,37 +17,45 @@ export interface ControlRoomTaskRunner {
 export class ControlRoomTaskExecutor {
   private readonly active = new Map<string, AbortController>();
   private readonly pendingPermissions = new Map<string, { executionId: string; resolve: (optionId: string | null) => void }>();
-  private readonly configCache = new Map<string, { expires: number; value: CodexConfig }>();
+  private readonly configCache = new Map<string, { expires: number; value: ProviderConfig }>();
+  private readonly acpClients: ReadonlyMap<ProviderName, AcpClient>;
   isActive(executionId: string): boolean { return this.active.has(executionId); }
   constructor(
     private readonly service: ControlRoomService,
     private readonly runner: ControlRoomTaskRunner,
     private readonly changes = new GitChangeCollector(),
-    private readonly codexClient = new CodexAcpClient()
-  ) {}
+    private readonly codexClient = new CodexAcpClient(),
+    private readonly claudeClient = new ClaudeAcpClient()
+  ) { this.acpClients = new Map<ProviderName, AcpClient>([["codex", codexClient], ["claude", claudeClient]]); }
 
-  async codexConfig(directoryId: string): Promise<CodexConfig> {
+  async codexConfig(directoryId: string): Promise<ProviderConfig> { return this.providerConfig("codex", directoryId); }
+
+  async providerConfig(provider: "codex" | "claude", directoryId: string): Promise<ProviderConfig> {
     const directory = this.service.store.listProjects().flatMap((project) => project.directories).find((item) => item.id === directoryId);
-    if (!directory) throw new Error("Diretorio nao encontrado para catalogo Codex.");
-    const cached = this.configCache.get(directory.path);
+    if (!directory) throw new Error(`Diretorio nao encontrado para catalogo ${provider}.`);
+    const key = `${provider}\0${directory.path}`;
+    const cached = this.configCache.get(key);
     if (cached && cached.expires > Date.now()) return cached.value;
-    let info: Awaited<ReturnType<CodexAcpClient["inspect"]>>;
-    try { info = await this.codexClient.inspect(directory.path); }
-    catch (error) { throw Object.assign(new Error(`Catalogo Codex ACP indisponivel: ${error instanceof Error ? error.message : String(error)}`), { statusCode: 503 }); }
-    const value: CodexConfig = { directoryId, runtime: info.runtime, protocolVersion: info.protocolVersion,
-      settings: info.configOptions.filter((item) => ["mode", "model", "thought_level", "model_config", "collaboration_mode"].includes(item.category ?? item.id))
+    const client = this.acpClients.get(provider)!;
+    let info: Awaited<ReturnType<typeof client.inspect>>;
+    try { info = await client.inspect(directory.path); }
+    catch (error) { throw Object.assign(new Error(`Catalogo ${provider} ACP indisponivel: ${error instanceof Error ? error.message : String(error)}`), { statusCode: 503 }); }
+    const modelOption = info.configOptions.find((item) => item.type === "select" && (item.category === "model" || item.id === "model"));
+    const model = modelOption?.type === "select" ? modelOption : null;
+    const value: ProviderConfig = { provider, directoryId, runtime: info.runtime, protocolVersion: info.protocolVersion,
+      capabilities: { loadSession: info.capabilities.loadSession === true },
+      settings: info.configOptions.filter((item) => provider === "claude" || ["mode", "model", "thought_level", "model_config", "collaboration_mode"].includes(item.category ?? item.id))
         .map((item) => item.type === "select"
           ? { id: item.id, name: item.name, category: item.category ?? null, type: "select" as const,
-            currentValue: item.currentValue, options: item.options.flatMap((option) => "value" in option
-              ? [{ id: option.value, name: option.name }] : option.options.map((choice) => ({ id: choice.value, name: choice.name })))
-              .filter((option) => item.category !== "mode" && item.id !== "mode" || ["read-only", "workspace-write"].includes(option.id)) }
+            currentValue: item.currentValue,
+            options: catalogChoices(item).filter((choice) =>
+              item.category !== "mode" && item.id !== "mode" ||
+              (provider === "claude" ? choice.id === "default" : ["read-only", "workspace-write"].includes(choice.id))) }
           : { id: item.id, name: item.name, category: item.category ?? null, type: "boolean" as const,
             currentValue: item.currentValue, options: [] }),
-      models: info.configOptions.filter((item) => item.type === "select" && (item.category === "model" || item.id === "model"))
-        .flatMap((item) => item.type === "select" ? item.options.flatMap((option) => "value" in option ? [{ id: option.value, name: option.name }] : option.options.map((choice) => ({ id: choice.value, name: choice.name }))) : []),
-      defaultModel: info.configOptions.find((item) => item.type === "select" && (item.category === "model" || item.id === "model"))?.type === "select"
-        ? (info.configOptions.find((item) => item.type === "select" && (item.category === "model" || item.id === "model")) as { currentValue: string }).currentValue : null };
-    this.configCache.set(directory.path, { expires: Date.now() + 30_000, value });
+      models: model ? catalogChoices(model) : [],
+      defaultModel: model?.currentValue ?? null };
+    this.configCache.set(key, { expires: Date.now() + 30_000, value });
     return value;
   }
 
@@ -73,51 +82,47 @@ export class ControlRoomTaskExecutor {
 
   async start(taskId: string, preferredProvider?: ProviderName, model?: string, sessionId?: string): Promise<ControlRoomTask> {
     const task = this.requireQueuedTask(taskId);
-    const usesClaude = preferredProvider === "claude";
-    if (usesClaude && !claudeTextTaskKinds.has(task.kind)) {
-      throw new Error("Claude Code aceita apenas tarefas de revisão ou planejamento por texto.");
-    }
     const directory = this.requireTargetDirectory(task);
-    const request = usesClaude
-      ? { cwd: directory.path, taskKind: task.kind, prompt: `${task.title}\n\n${task.prompt}` }
-      : makeRunRequest(task, directory);
+    const request = makeRunRequest(task, directory);
     const route = await this.runner.router.route({
       prompt: request.prompt,
       taskKind: task.kind,
       ...(preferredProvider ? { preferredProvider } : {})
     });
     if (!route.selected) {
-      if (usesClaude) {
+      if (preferredProvider === "claude") {
         throw new Error("Claude Code precisa estar instalado e autenticado. Consulte o status dos provedores ou execute `npm run doctor`.");
       }
       throw new Error("Nenhum provedor autenticado esta disponivel. Execute `npm run doctor` e atualize o login antes de tentar novamente.");
     }
-    if ((model || sessionId) && route.selected !== "codex") throw new Error("Modelo e sessao ACP requerem Codex.");
-    if (sessionId && !this.authorizedSession(task, sessionId)) throw new Error("Sessao ACP nao pertence ao escopo desta tarefa.");
+    const isAcp = this.acpClients.has(route.selected);
+    if ((model || sessionId) && !isAcp) throw new Error("Modelo e sessao requerem um provedor ACP.");
+    if (sessionId && !this.authorizedSession(task, route.selected, sessionId)) throw new Error("Sessao ACP nao pertence ao provedor e escopo desta tarefa.");
     if (model) {
-      const config = await this.codexConfig(directory.id);
-      if (!config.models.some((item) => item.id === model)) throw new Error(`Modelo Codex nao anunciado: ${model}`);
+      const config = await this.providerConfig(route.selected as "codex" | "claude", directory.id);
+      if (!config.models.some((item) => item.id === model)) throw new Error(`Modelo ${route.selected} nao anunciado: ${model}`);
     }
+    if (sessionId && !(await this.providerConfig(route.selected as "codex" | "claude", directory.id)).capabilities?.loadSession) throw new Error("Agente ACP nao anuncia retomada de sessao.");
 
     const dispatched = await this.service.dispatch(task.id, {
       selectedProvider: route.selected,
       reason: routeReason(route),
       candidates: route.candidates.map(toDelegationCandidate),
-      requestedActions: usesClaude ? [] : ["read_project"]
+      requestedActions: ["read_project"]
     });
     if (dispatched.status !== "running" || !dispatched.dispatchLease) {
       throw new Error("A tarefa nao foi iniciada; releia o estado antes de tentar novamente.");
     }
 
-    const directories = usesClaude ? null : this.requireTaskDirectories(dispatched);
+    const directories = this.requireTaskDirectories(dispatched);
     const execution = this.service.store.listExecutions(task.id).find((item) => item.leaseId === dispatched.dispatchLease);
     if (!execution) throw new Error("Execucao reservada nao encontrada.");
     const controller = new AbortController();
     this.active.set(execution.id, controller);
-    this.service.setExecutionMetadata(execution.id, dispatched.dispatchLease, route.selected === "codex" ? "acp" : "legacy", model ?? null, sessionId);
+    this.service.setExecutionMetadata(execution.id, dispatched.dispatchLease, isAcp ? "acp" : "legacy", model ?? null, sessionId);
     const runRequest: AgentRunRequest = { ...request, signal: controller.signal,
       ...(model ? { model } : {}), ...(sessionId ? { sessionId } : {}),
-      ...(route.selected === "codex" ? { additionalDirectories: (directories ?? []).filter((item) => item.id !== directory.id).map((item) => item.path),
+      ...(isAcp ? { additionalDirectories: directories.filter((item) => item.id !== directory.id).map((item) => item.path),
         onUpdate: (update) => this.service.recordAgentUpdate(execution.id, dispatched.dispatchLease!, update),
         onPermission: async (permissionRequest) => {
           const permission = this.service.requestAgentPermission(execution.id, dispatched.dispatchLease!, permissionRequest);
@@ -185,24 +190,22 @@ export class ControlRoomTaskExecutor {
     if (!project) throw new Error("Projeto local nao encontrado.");
     return task.directoryIds.map((id) => project.directories.find((directory) => directory.id === id)).filter((directory): directory is LocalProjectDirectory => Boolean(directory));
   }
-  private authorizedSession(task: ControlRoomTask, sessionId: string): boolean {
+  private authorizedSession(task: ControlRoomTask, provider: ProviderName, sessionId: string): boolean {
     return this.service.listTasks(task.projectId).some((previous) =>
       previous.targetDirectoryId === task.targetDirectoryId &&
       previous.directoryIds.join("\0") === task.directoryIds.join("\0") &&
-      this.service.store.listExecutions(previous.id).some((execution) => execution.provider === "codex" &&
+      this.service.store.listExecutions(previous.id).some((execution) => execution.provider === provider &&
         execution.transport === "acp" && execution.sessionId === sessionId &&
         ["completed", "failed"].includes(execution.status)));
   }
 }
 
-export interface CodexConfig {
-  directoryId: string;
-  runtime: { path: string; version: string; source: string };
-  protocolVersion: number;
-  settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean";
-    currentValue: string | boolean; options: Array<{ id: string; name: string }> }>;
-  models: Array<{ id: string; name: string }>;
-  defaultModel: string | null;
+export type CodexConfig = ProviderConfig;
+type SessionOption = AcpSessionInfo["configOptions"][number];
+function catalogChoices(option: Extract<SessionOption, { type: "select" }>): Array<{ id: string; name: string }> {
+  return option.options.flatMap((item) => "value" in item
+    ? [{ id: item.value, name: item.name }]
+    : item.options.map((choice) => ({ id: choice.value, name: choice.name })));
 }
 function conflict(message: string): Error { return Object.assign(new Error(message), { statusCode: 409 }); }
 
