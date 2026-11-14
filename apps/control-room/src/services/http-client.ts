@@ -1,4 +1,4 @@
-import { isLiveExecution, terminalEventKinds, type Approval, type CodexConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; };
@@ -35,6 +35,7 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     getProviderStatuses(refresh = false) { return request<ProviderStatus[]>(`/providers/status${refresh ? "?refresh=true" : ""}`); },
     registerProject(input: RegisterProjectInput) { return request<Project>("/projects", { method: "POST", body: JSON.stringify(input) }); },
     createTask(input: CreateTaskInput) { return request<Task>("/tasks", { method: "POST", body: JSON.stringify(input) }); },
+    getProviderConfig(provider: AcpProvider, directoryId: string) { return request<ProviderConfig>(`/providers/${provider}/config?directoryId=${encodeURIComponent(directoryId)}`); },
     getCodexConfig(directoryId: string) { return request<CodexConfig>(`/providers/codex/config?directoryId=${encodeURIComponent(directoryId)}`); },
     executeTask(taskId: string, provider: ExecutionProvider, options?: ExecuteOptions) {
       const body: Record<string, string> = { provider };

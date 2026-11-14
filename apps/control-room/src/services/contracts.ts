@@ -29,7 +29,11 @@ export function isLiveExecution(task: Task, run: Run): boolean {
 }
 export interface ExecutionPermissionOption { id: string; name: string; kind: string; }
 export interface ExecutionPermission { id: string; executionId: string; toolCallId: string; title: string; toolKind: string | null; toolName: string | null; locations: string[]; requiresElevation: boolean; options: ExecutionPermissionOption[]; status: "pending" | "selected" | "cancelled"; selectedOptionId: string | null; createdAt: string; resolvedAt: string | null; }
-export interface CodexConfig { directoryId: string; runtime: { path: string; version: string; source: string }; protocolVersion: number; settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean"; currentValue: string | boolean; options: Array<{ id: string; name: string }> }>; models: Array<{ id: string; name: string }>; defaultModel: string | null; }
+export type AcpProvider = "codex" | "claude";
+/** Operational catalog of an ACP provider. `capabilities` is optional and only present when the backend announces it. */
+export interface ProviderConfig { directoryId: string; runtime: { path: string; version: string; source: string }; protocolVersion: number; settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean"; currentValue: string | boolean; options: Array<{ id: string; name: string }> }>; models: Array<{ id: string; name: string }>; defaultModel: string | null; capabilities?: { loadSession?: boolean }; }
+/** Kept for compatibility with the original Codex-only catalog. */
+export type CodexConfig = ProviderConfig;
 export interface ExecuteOptions { model?: string; sessionId?: string; }
 export interface EventStreamOptions { afterId?: string | undefined; signal: AbortSignal; onEvent(event: ExecutionEvent): void; }
 export interface Approval { id: string; taskId: string; title: string; description: string; action: string; }
@@ -47,6 +51,7 @@ export interface ControlRoomClient {
   getProviderStatuses(refresh?: boolean): Promise<ProviderStatus[]>;
   registerProject(input: RegisterProjectInput): Promise<Project>;
   createTask(input: CreateTaskInput): Promise<Task>;
+  getProviderConfig(provider: AcpProvider, directoryId: string): Promise<ProviderConfig>;
   getCodexConfig(directoryId: string): Promise<CodexConfig>;
   executeTask(taskId: string, provider: ExecutionProvider, options?: ExecuteOptions): Promise<Task>;
   /** Resolves true when the stream ended after a terminal event, false on any other end. Rejects on network/HTTP failure or abort. */

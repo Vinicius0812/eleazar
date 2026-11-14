@@ -6,9 +6,9 @@ Eleazar e um orquestrador local-first de agentes de programacao. Ele classifica 
 
 ## Requisitos
 
-- Node.js 20.19 ou superior;
+- Node.js 22 ou superior (a ponte ACP do Claude, versão 0.107.0, exige Node 22; o ambiente de desenvolvimento usa Node 24);
 - Git;
-- Codex CLI autenticado e/ou Antigravity CLI autenticado apenas para `doctor` e `run`.
+- Codex CLI, Claude Code CLI e/ou Antigravity CLI instalados; autentique o provedor que pretende executar.
 
 Eleazar nao armazena senhas, cookies ou tokens de sessao.
 
@@ -48,18 +48,18 @@ npm run dev -- run "Revise o tratamento de erros" --cwd C:\caminho\do\projeto
 
 Use `--json` em qualquer comando para obter saida legivel por outras ferramentas.
 
-### Claude Code para revisão e planejamento
+### Claude Code via ACP
 
-Use o [CLI nativo do Claude Code](https://code.claude.com/docs/en/cli-reference) já instalado no `PATH` e autenticado. `npm run doctor` verifica o estado local sem consultar modelos.
+Use o [CLI nativo do Claude Code](https://code.claude.com/docs/en/cli-reference) já instalado e autenticado. O adaptador procura primeiro `~/.local/bin/claude` (`claude.exe` no Windows) e depois o `PATH`. `npm run doctor` verifica o runtime e a autenticação sem consultar modelos.
 
 ```powershell
 npm run dev -- plan "Planeje a arquitetura a partir deste resumo aprovado: ..." --provider claude
 npm run dev -- run "Revise este trecho aprovado: ..." --provider claude
 ```
 
-`plan` verifica se a tarefa é elegível. `run` envia o texto informado ao Claude, por isso inclua somente o contexto que você aprova compartilhar com o provedor. O adaptador abre uma execução textual de um turno em um diretório temporário, com ferramentas do agente, MCP e Chrome desabilitados, sem retomada de sessão. A política gerenciada do Claude Code continua aplicável. Essa configuração controla o uso do agente e mantém o processo do CLI sob as permissões do usuário local.
+`plan` mostra a decisão de roteamento. `run` envia o texto informado ao Claude, por isso inclua somente o contexto que você aprova compartilhar com o provedor. A execução comum usa a ponte Claude ACP `0.107.0`, com sessões retomáveis quando anunciadas pelo agente, eventos parciais e pedidos de permissão. As ferramentas expostas são `Read`, `Glob`, `Grep`, `Edit` e `Write`; `Bash`, terminal, ferramentas web e MCP não são expostos. As regras de arquivos do SDK bloqueiam leituras e escritas fora dos diretórios de trabalho, enquanto `Edit` e `Write` exigem confirmação e o cliente verifica os caminhos reais antes de aceitar uma permissão. Esse modo de arquivos não exige o sandbox de shell do Claude e não equivale ao sandbox `workspace-write` do Codex.
 
-Claude exige seleção explícita na CLI e na Control Room. No painel, crie uma tarefa de revisão ou planejamento e selecione **Claude Code** ao confirmar a execução. O painel envia o título e a solicitação ao provedor para uma resposta textual.
+Claude exige seleção explícita na CLI e na Control Room. No painel, qualquer tipo de tarefa pode selecioná-lo ao confirmar a execução, no escopo aprovado da tarefa. O título e a solicitação são enviados ao provedor, e os pedidos de permissão aparecem na sessão e esperam a decisão do operador. O modo **Automático** nunca escolhe o Claude por conta própria. A **revisão cruzada** continua usando o modo textual restrito do `ClaudeAdapter`, sem ferramentas nem acesso ao checkout.
 
 ### Revisão cruzada no terminal
 
@@ -75,9 +75,9 @@ Com `--json`, o resultado final sai no stdout. Progresso, prévias e confirmaç�
 
 ## Control Room local
 
-A UI conversa somente com `GET /api/control-room/snapshot`, `GET /api/control-room/providers/status`, `GET /api/control-room/executions/:id`, `GET/POST /api/control-room/projects`, `GET/POST /api/control-room/tasks`, `POST /api/control-room/tasks/:id/transition`, `POST /api/control-room/tasks/:id/dispatch` e `POST /api/control-room/tasks/:id/execute`. Os DTOs HTTP espelham os contratos de `src/core/control-room.ts`, mas ficam no pacote da UI sem importar Node, SQLite ou SDKs de provedores.
+A UI conversa somente com a API HTTP local em `/api/control-room` (projetos, tarefas, execuções, status e catálogo de provedores, eventos SSE, cancelamento e permissões de sessão); a lista completa de rotas e contratos está em [docs/control-room.md](docs/control-room.md). Os DTOs HTTP espelham os contratos de `src/core/control-room.ts`, mas ficam no pacote da UI sem importar Node, SQLite ou SDKs de provedores.
 
-O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar** e confirme o provedor. Codex e Antigravity executam no diretório-alvo. Claude Code recebe somente o texto das tarefas compatíveis. A API verifica a disponibilidade e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
+O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar** e confirme o provedor. Codex e Claude Code usam sessões ACP com modelo selecionável (somente entre os anunciados pelo catálogo do provedor), texto do agente em streaming, atividade de ferramentas, decisões de permissão e cancelamento. Antigravity 1.2.7 continua no transporte legado; seu ACP ainda não está implementado. A API verifica a disponibilidade e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
 
 Consulte [o guia do Control Room](docs/control-room.md) para detalhes do transporte e operacao local.
 

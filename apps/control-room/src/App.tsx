@@ -31,17 +31,17 @@ import {
 } from "lucide-react";
 import { Modal } from "./components/Modal.js";
 import { ExecutionResultPage } from "./components/ExecutionResultPage.js";
+import { ExecutionLaunchFields } from "./components/ExecutionLaunchFields.js";
+import { useExecutionLaunch } from "./components/useExecutionLaunch.js";
 import { PendingPermissions } from "./components/PendingPermissions.js";
 import { TaskComposer } from "./components/TaskComposer.js";
 import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import type {
   Approval,
-  CodexConfig,
   ControlRoomClient,
   ControlRoomSnapshot,
   CreateTaskInput,
   ExecutionDetail,
-  ExecutionProvider,
   ProviderStatus,
   LogEntry,
   Run,
@@ -202,13 +202,9 @@ export function App({ client }: { client: ControlRoomClient }) {
   const executionRoute = routeId(hash, "executions");
   const taskRoute = routeId(hash, "tasks");
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
-  const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("auto");
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
-  const [resumeSession, setResumeSession] = useState(false);
-  const [catalog, setCatalog] = useState<{ status: "idle" | "loading" | "ready" | "error"; config: CodexConfig | null; error: string }>({ status: "idle", config: null, error: "" });
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState("");
@@ -280,27 +276,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
   }, [active, client]);
-  const executeDirectoryId = dialog?.kind === "execute" ? dialog.task.targetDirectoryId : null;
-  useEffect(() => {
-    setSelectedModel("");
-    setResumeSession(false);
-    if (executionProvider !== "codex" || !executeDirectoryId) { setCatalog({ status: "idle", config: null, error: "" }); return; }
-    let alive = true;
-    setCatalog({ status: "loading", config: null, error: "" });
-    client.getCodexConfig(executeDirectoryId)
-      .then((config) => { if (alive) setCatalog({ status: "ready", config, error: "" }); })
-      .catch((reason) => { if (alive) setCatalog({ status: "error", config: null, error: message(reason) }); });
-    return () => { alive = false; };
-  }, [client, executionProvider, executeDirectoryId]);
-  // Latest finished Codex ACP session of the same project and exact directory scope. The API
-  // revalidates it; the UI only offers it, never assumes the runtime can resume it.
-  const resumableRun = dialog?.kind === "execute" ? data?.runs.find((run) => {
-    const previous = data.tasks.find((item) => item.id === run.taskId);
-    return previous && run.sessionId && run.provider === "codex" && run.transport === "acp"
-      && (run.status === "completed" || run.status === "failed")
-      && previous.projectId === dialog.task.projectId && previous.targetDirectoryId === dialog.task.targetDirectoryId
-      && previous.directoryIds.join("\0") === dialog.task.directoryIds.join("\0");
-  }) : undefined;
+  const launch = useExecutionLaunch(client, data?.runs ?? [], data?.tasks ?? [], dialog?.kind === "execute" ? dialog.task : null);
   const refreshSession = useCallback(() => {
     void client.getSnapshot().then(setData).catch(() => undefined);
     if (executionRoute) void client.getExecutionDetail(executionRoute).then((detail) => setExecutionDetail((current) => current?.execution.id === detail.execution.id ? detail : current)).catch(() => undefined);
@@ -329,7 +305,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
     if (next?.kind === "project") setProjectDirectories([{ name: "", path: "" }]);
-    if (next?.kind === "execute") { setExecutionProvider("auto"); setSelectedModel(""); setResumeSession(false); setCatalog({ status: "idle", config: null, error: "" }); }
+    if (next?.kind === "execute") launch.reset();
     setDialog(next);
   }
   function navigate(next: PageRoute): void { window.location.hash = `/${next === "not-found" ? "overview" : next}`; }
@@ -426,6 +402,7 @@ export function App({ client }: { client: ControlRoomClient }) {
         priorityOrder[a.priority] - priorityOrder[b.priority] ||
         a.createdAt.localeCompare(b.createdAt),
     );
+  const nextTasks = filteredTasks.filter((task) => task.status === "queued");
   const projectName = (id: string) =>
     projects.find((project) => project.id === id)?.name ??
     "Projeto indisponível";
@@ -636,7 +613,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       action={<button className="text-button" onClick={() => navigate("tasks")}>Ver fila <ArrowRight size={15} /></button>}
                     >
                       <div className="executive-list">
-                        {filteredTasks.slice(0, 4).map((task) => (
+                        {nextTasks.slice(0, 4).map((task) => (
                            <button className="executive-row" key={task.id} onClick={() => openTask(task.id)}>
                             <span className={`priority ${task.priority}`}><span className="dot" />{priorities[task.priority]}</span>
                             <span className="executive-row-copy"><strong>{task.title}</strong><small>{projectName(task.projectId)} · {directoryName(task)}</small></span>
@@ -644,7 +621,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                             <ChevronRight size={17} />
                           </button>
                         ))}
-                        {!filteredTasks.length && <div className="empty">Nenhuma tarefa pendente. Crie a próxima etapa quando estiver pronto.</div>}
+                        {!nextTasks.length && <div className="empty">Nenhuma tarefa pendente. Crie a próxima etapa quando estiver pronto.</div>}
                       </div>
                     </Panel>
                     <Panel
@@ -1137,58 +1114,12 @@ export function App({ client }: { client: ControlRoomClient }) {
               <p className="form-intro">
                 A execução usa uma sessão já autenticada do provedor. O resultado e os logs ficarão no histórico desta tarefa.
               </p>
-              <label>
-                Provedor
-                <select value={executionProvider} onChange={(event) => setExecutionProvider(event.target.value as ExecutionProvider)} disabled={busy}>
-                  <option value="auto">Automático (recomendado)</option>
-                  <option value="codex">Codex</option>
-                  <option value="antigravity">Antigravity</option>
-                  <option value="claude" disabled={dialog.task.kind !== "review" && dialog.task.kind !== "planning"}>Claude Code (revisão e planejamento por texto)</option>
-                </select>
-              </label>
-              {executionProvider === "codex" && (
-                <div className="model-picker">
-                  {catalog.status === "loading" && <small role="status">Carregando modelos do Codex…</small>}
-                  {catalog.status === "error" && <div className="error" role="alert">Não foi possível carregar o catálogo de modelos: {catalog.error} A execução usará o modelo padrão do Codex.</div>}
-                  {resumableRun?.sessionId && (
-                    <label className="scope-option">
-                      <input type="checkbox" checked={resumeSession} disabled={busy} onChange={(event) => setResumeSession(event.target.checked)} />
-                      Tentar retomar a sessão anterior ({resumableRun.id})
-                    </label>
-                  )}
-                  {resumableRun && <small>Por padrão, uma sessão nova é criada. A retomada é uma tentativa: a API valida a sessão e o suporte do Codex, e qualquer recusa aparecerá aqui.</small>}
-                  {catalog.config && (
-                    <>
-                      <label>
-                        Modelo
-                        <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={busy}>
-                          <option value="">{catalog.config.defaultModel ? `Padrão anunciado (${catalog.config.models.find((model) => model.id === catalog.config?.defaultModel)?.name ?? catalog.config.defaultModel})` : "Padrão do Codex"}</option>
-                          {catalog.config.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                        </select>
-                      </label>
-                      <details className="model-runtime">
-                        <summary>Detalhes do runtime</summary>
-                        <dl>
-                          <div><dt>Versão</dt><dd>{catalog.config.runtime.version}</dd></div>
-                          <div><dt>Origem</dt><dd>{catalog.config.runtime.source}</dd></div>
-                        </dl>
-                      </details>
-                    </>
-                  )}
-                </div>
-              )}
-              {executionProvider === "claude" ? (
-                <small>Ao confirmar, o título e a solicitação serão enviados ao Claude Code. Inclua apenas o que você autoriza compartilhar. A execução é textual, sem acesso aos arquivos do projeto.</small>
-              ) : (
-                <small>O provedor executa no diretório-alvo. Push, merge, deploy, publicação e manipulação de credenciais estão bloqueados neste fluxo.</small>
-              )}
+              <ExecutionLaunchFields launch={launch} busy={busy} />
               <div className="form-actions">
                 <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>
                 <button className="primary" disabled={busy} onClick={() => void mutate(() => {
-                  const model = executionProvider === "codex" && catalog.config?.models.some((item) => item.id === selectedModel) ? selectedModel : "";
-                  const sessionId = executionProvider === "codex" && resumeSession ? resumableRun?.sessionId : undefined;
-                  const options = { ...(model ? { model } : {}), ...(sessionId ? { sessionId } : {}) };
-                  return Object.keys(options).length ? client.executeTask(dialog.task.id, executionProvider, options) : client.executeTask(dialog.task.id, executionProvider);
+                  const options = launch.options();
+                  return Object.keys(options).length ? client.executeTask(dialog.task.id, launch.provider, options) : client.executeTask(dialog.task.id, launch.provider);
                 }, "Execução iniciada. O painel atualizará enquanto o provedor trabalha.")}>
                   <Play size={16} /> {busy ? "Iniciando…" : "Executar agora"}
                 </button>

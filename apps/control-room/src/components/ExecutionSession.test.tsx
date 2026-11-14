@@ -20,7 +20,7 @@ function detail(over: Partial<ExecutionDetail> & { status?: "running" | "complet
 
 function fakeClient(overrides: Partial<ControlRoomClient>): ControlRoomClient {
   const unused = async () => { throw new Error("unused"); };
-  return { getSnapshot: unused, getExecutionDetail: async () => detail(), getProviderStatuses: unused, registerProject: unused, createTask: unused, getCodexConfig: unused, executeTask: unused, retryTask: unused, decideApproval: unused, streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, ...overrides } as ControlRoomClient;
+  return { getSnapshot: unused, getExecutionDetail: async () => detail(), getProviderStatuses: unused, registerProject: unused, createTask: unused, getProviderConfig: unused, getCodexConfig: unused, executeTask: unused, retryTask: unused, decideApproval: unused, streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, ...overrides } as ControlRoomClient;
 }
 
 describe("ExecutionSession", () => {

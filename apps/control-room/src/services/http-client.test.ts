@@ -122,6 +122,19 @@ describe("HTTP Control Room client", () => {
     expect(fetch).toHaveBeenNthCalledWith(4, expect.stringContaining("/providers/codex/config?directoryId=dir%201"), expect.any(Object));
   });
 
+  it("reads the provider-specific catalog while keeping the legacy Codex method on the same route", async () => {
+    const config = { directoryId: "dir 1", runtime: { path: "claude", version: "1", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null, capabilities: { loadSession: true } };
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify(config), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const client = createHttpControlRoomClient("http://127.0.0.1:4317/api/control-room");
+    expect(await client.getProviderConfig("claude", "dir 1")).toMatchObject({ capabilities: { loadSession: true } });
+    await client.getProviderConfig("codex", "dir 1");
+    await client.getCodexConfig("dir 1");
+    expect(fetch).toHaveBeenNthCalledWith(1, "http://127.0.0.1:4317/api/control-room/providers/claude/config?directoryId=dir%201", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(2, "http://127.0.0.1:4317/api/control-room/providers/codex/config?directoryId=dir%201", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(3, "http://127.0.0.1:4317/api/control-room/providers/codex/config?directoryId=dir%201", expect.any(Object));
+  });
+
   it("sends directory collections and an explicit task target without importing host contracts", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "project-1" }), { status: 201 }));
     vi.stubGlobal("fetch", fetch);

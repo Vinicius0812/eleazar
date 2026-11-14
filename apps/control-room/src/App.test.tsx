@@ -30,7 +30,7 @@ describe("Task workspace", () => {
     const provider = screen.getByLabelText("Provedor");
     expect(provider).toHaveValue("auto");
     await user.selectOptions(provider, "claude");
-    expect(screen.getByText(/o título e a solicitação serão enviados ao Claude Code/i)).toBeInTheDocument();
+    expect(screen.getByText(/sua sessão oficial já autenticada e trabalha no escopo aprovado/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Executar agora" }));
     expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
   });
@@ -41,16 +41,16 @@ describe("Task workspace", () => {
     const snapshot = await controlled.getSnapshot();
     const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
     vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
-    const getCodexConfig = vi.spyOn(controlled, "getCodexConfig").mockResolvedValue({ directoryId: "directory-1", runtime: { path: "codex", version: "9.9.9", source: "path" }, protocolVersion: 1, settings: [], models: [{ id: "m-a", name: "Modelo A" }, { id: "m-b", name: "Modelo B" }], defaultModel: "m-a" });
+    const getProviderConfig = vi.spyOn(controlled, "getProviderConfig").mockResolvedValue({ directoryId: "directory-1", runtime: { path: "codex", version: "9.9.9", source: "path" }, protocolVersion: 1, settings: [], models: [{ id: "m-a", name: "Modelo A" }, { id: "m-b", name: "Modelo B" }], defaultModel: "m-a" });
     const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
     const user = userEvent.setup();
     render(<App client={controlled} />);
     await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
-    expect(getCodexConfig).not.toHaveBeenCalled();
+    expect(getProviderConfig).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
     const model = await screen.findByLabelText("Modelo");
-    expect(getCodexConfig).toHaveBeenCalledWith("directory-1");
+    expect(getProviderConfig).toHaveBeenCalledWith("codex", "directory-1");
     expect(within(model).getAllByRole("option").map((option) => option.textContent)).toEqual(["Padrão anunciado (Modelo A)", "Modelo A", "Modelo B"]);
     expect(screen.getByText("9.9.9")).toBeInTheDocument();
     await user.selectOptions(model, "m-b");
@@ -66,6 +66,7 @@ describe("Task workspace", () => {
     const queued = { ...previous, id: "task-2", status: "queued" as const };
     const earlier = { ...snapshot.runs[0]!, transport: "acp" as const, sessionId: "sess-1" };
     vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued, previous], runs: [earlier] });
+    vi.spyOn(controlled, "getProviderConfig").mockResolvedValue(catalog("codex", "1", [], null, true));
     const executeTask = vi.spyOn(controlled, "executeTask").mockRejectedValueOnce(new Error("Retomada nao suportada.")).mockResolvedValue(queued);
     const user = userEvent.setup();
     render(<App client={controlled} />);
@@ -82,13 +83,123 @@ describe("Task workspace", () => {
     expect(executeTask).toHaveBeenLastCalledWith(queued.id, "codex");
   });
 
+  it("runs Claude as a full ACP provider for any task kind, with its own catalog and model", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, kind: "implementation", status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    const getProviderConfig = vi.spyOn(controlled, "getProviderConfig").mockResolvedValue(catalog("claude", "3.4.5", ["sonnet", "opus"], "sonnet"));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    const model = await screen.findByLabelText("Modelo");
+    expect(getProviderConfig).toHaveBeenCalledWith("claude", queued.targetDirectoryId);
+    expect(within(model).getAllByRole("option").map((option) => option.textContent)).toEqual(["Padrão anunciado (sonnet)", "sonnet", "opus"]);
+    expect(screen.getByText("3.4.5")).toBeInTheDocument();
+    expect(screen.queryByText(/sem acesso aos arquivos/i)).not.toBeInTheDocument();
+    await user.selectOptions(model, "opus");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "claude", { model: "opus" });
+  });
+
+  it("shows a visible Claude catalog failure and sends no model", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    vi.spyOn(controlled, "getProviderConfig").mockRejectedValue(new Error("Claude indisponivel"));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude indisponivel");
+    expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
+  });
+
+  it("drops the chosen model and ignores a late catalog when the provider changes", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    let releaseCodex: (value: ReturnType<typeof catalog>) => void = () => undefined;
+    vi.spyOn(controlled, "getProviderConfig").mockImplementation((provider) => provider === "codex"
+      ? new Promise((resolve) => { releaseCodex = resolve; })
+      : Promise.resolve(catalog("claude", "1.0.0", ["haiku"], null)));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    expect(await screen.findByText("haiku")).toBeInTheDocument();
+    await act(async () => releaseCodex(catalog("codex", "9.0.0", ["gpt-late"], null)));
+    expect(screen.queryByText("gpt-late")).not.toBeInTheDocument();
+    expect(screen.queryByText("9.0.0")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Modelo"), "haiku");
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    expect(await screen.findByLabelText("Modelo")).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
+  });
+
+  it("offers resume only for the same provider, scope and announced loadSession", async () => {
+    window.location.hash = "#/tasks/task-9";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const base = snapshot.tasks[0]!;
+    const queued = { ...base, id: "task-9", status: "queued" as const };
+    const sibling = { ...base, id: "task-codex" };
+    const otherScope = { ...base, id: "task-other", directoryIds: ["directory-1", "directory-2"] };
+    const run = (id: string, taskId: string, provider: string, sessionId: string) => ({ ...snapshot.runs[0]!, id, taskId, provider, transport: "acp" as const, sessionId });
+    const runs = [run("run-claude-other-scope", "task-other", "claude", "s-x"), run("run-codex", "task-codex", "codex", "s-codex"), run("run-claude", "task-codex", "claude", "s-claude")];
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued, sibling, otherScope], runs });
+    const config = vi.spyOn(controlled, "getProviderConfig").mockImplementation(async (provider) => catalog(provider, "1", [], null, true));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    expect(await screen.findByLabelText(/retomar a sessão anterior \(run-codex\)/)).not.toBeChecked();
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    const resume = await screen.findByLabelText(/retomar a sessão anterior \(run-claude\)/);
+    expect(screen.queryByLabelText(/run-codex/)).not.toBeInTheDocument();
+    await user.click(resume);
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "claude", { sessionId: "s-claude" });
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    expect(screen.getByLabelText("Provedor")).toHaveValue("auto");
+    expect(screen.queryByLabelText(/retomar a sessão/)).not.toBeInTheDocument();
+    // Declared false, undeclared and a failed catalog must never offer resuming.
+    config.mockImplementation(async (provider) => catalog(provider, "1", [], null, false));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    await screen.findByText("Detalhes do runtime");
+    expect(screen.queryByLabelText(/retomar a sessão/)).not.toBeInTheDocument();
+    config.mockImplementation(async (provider) => catalog(provider, "2", [], null));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "claude");
+    await screen.findByText("2");
+    expect(screen.queryByLabelText(/retomar a sessão/)).not.toBeInTheDocument();
+    config.mockRejectedValue(new Error("catalogo indisponivel"));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "codex");
+    expect(await screen.findByRole("alert")).toHaveTextContent("catalogo indisponivel");
+    expect(screen.queryByLabelText(/retomar a sessão/)).not.toBeInTheDocument();
+  });
+
   it("shows a catalog failure and runs Codex without inventing a model", async () => {
     window.location.hash = "#/tasks/task-1";
     const controlled = client();
     const snapshot = await controlled.getSnapshot();
     const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
     vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
-    vi.spyOn(controlled, "getCodexConfig").mockRejectedValue(new Error("Codex indisponivel"));
+    vi.spyOn(controlled, "getProviderConfig").mockRejectedValue(new Error("Codex indisponivel"));
     const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
     const user = userEvent.setup();
     render(<App client={controlled} />);
@@ -306,6 +417,27 @@ describe("Control Room routes", () => {
     expect(screen.queryByRole("heading", { name: "Seus projetos" })).not.toBeInTheDocument();
   });
 
+  it("shows only queued work in next tasks while completed work remains in recent executions", async () => {
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const completed = { ...snapshot.tasks[0]!, priority: "critical" as const };
+    const queuedNormal = { ...completed, id: "task-normal", title: "Próxima normal", priority: "normal" as const, status: "queued" as const };
+    const queuedHigh = { ...completed, id: "task-high", title: "Próxima alta", priority: "high" as const, status: "queued" as const };
+    const running = { ...completed, id: "task-running", title: "Em andamento", status: "running" as const };
+    const failed = { ...completed, id: "task-failed", title: "Falha anterior", status: "failed" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [completed, running, queuedNormal, failed, queuedHigh] });
+    render(<App client={controlled} />);
+    const next = within(await screen.findByRole("region", { name: "Próximas tarefas" }));
+    expect(next.getAllByRole("button", { name: /Próxima/ }).map((button) => button.textContent)).toEqual([
+      expect.stringContaining("Próxima alta"), expect.stringContaining("Próxima normal")
+    ]);
+    expect(next.queryByText("Resultado")).not.toBeInTheDocument();
+    expect(next.queryByText("Em andamento")).not.toBeInTheDocument();
+    expect(next.queryByText("Falha anterior")).not.toBeInTheDocument();
+    expect(next.getByRole("button", { name: /Ver fila/ })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Execuções recentes" })).getByText("Resultado")).toBeInTheDocument();
+  });
+
   it("switches themes and persists the manual preference", async () => {
     render(<App client={client()} />);
     const user = userEvent.setup();
@@ -344,8 +476,12 @@ describe("Control Room routes", () => {
   });
 });
 
+function catalog(provider: "codex" | "claude", version: string, models: string[], defaultModel: string | null, loadSession?: boolean) {
+  return { directoryId: "directory-1", runtime: { path: provider, version, source: "path" }, protocolVersion: 1, settings: [], models: models.map((id) => ({ id, name: id })), defaultModel, ...(loadSession === undefined ? {} : { capabilities: { loadSession } }) };
+}
+
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined };
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined };
 }
