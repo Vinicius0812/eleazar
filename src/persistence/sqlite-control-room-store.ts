@@ -15,6 +15,9 @@ import type {
   LocalProject,
   LocalProjectDirectory,
   TaskExecution,
+  TaskOutboundAction,
+  TaskPullRequest,
+  TaskWorktree,
   TaskTransition
 } from "../core/control-room.js";
 
@@ -74,13 +77,13 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   }
   getTask(id: string): ControlRoomTask | null {
     const row = this.#db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-    return mapTask(row, row ? this.#taskDirectoryIds(id) : []);
+    return mapTask(row, row ? this.#taskDirectoryIds(id) : [], row ? this.#taskBranch(id) : null);
   }
   listTasks(projectId?: string): ControlRoomTask[] {
     const rows = projectId
       ? this.#db.prepare("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC").all(projectId)
       : this.#db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all();
-    return rows.map((row) => mapTask(row, this.#taskDirectoryIds(stringValue(row as Row, "id")))).filter(isPresent);
+    return rows.map((row) => mapTask(row, this.#taskDirectoryIds(stringValue(row as Row, "id")), this.#taskBranch(stringValue(row as Row, "id")))).filter(isPresent);
   }
   updateTask(task: ControlRoomTask): void {
     this.#db.transaction(() => {
@@ -113,11 +116,13 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   claimDispatch(taskId: string, attempt: import("../core/control-room.js").DispatchAttempt): ControlRoomTask | null {
     return this.#db.transaction(() => {
       const current = this.getTask(taskId);
-      if (!current || current.status !== "queued") return null;
+      // A new turn starts from the queue or, for a follow-up message, from a finished turn.
+      const fromStatus = attempt.transition.fromStatus;
+      if (!current || current.status !== fromStatus || !["queued", "completed", "failed"].includes(fromStatus)) return null;
       if (!attempt.usesWorktree && this.hasActiveDispatchForDirectories(current.directoryIds, taskId)) return null;
       const claimed = { ...current, status: "planning" as const, usesWorktree: attempt.usesWorktree, dispatchLease: attempt.leaseId, updatedAt: attempt.transition.createdAt };
       const result = this.#db.prepare(`UPDATE tasks SET status = @status, uses_worktree = @usesWorktree, dispatch_lease = @dispatchLease, updated_at = @updatedAt
-        WHERE id = @id AND status = 'queued' AND dispatch_lease IS NULL`).run({ ...claimed, usesWorktree: claimed.usesWorktree ? 1 : 0 });
+        WHERE id = @id AND status = @fromStatus AND dispatch_lease IS NULL`).run({ ...claimed, fromStatus, usesWorktree: claimed.usesWorktree ? 1 : 0 });
       if (result.changes !== 1) return null;
       this.recordTransition(attempt.transition);
       this.recordDelegation(attempt.decision);
@@ -125,11 +130,17 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       return claimed;
     })();
   }
-  completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null {
+  completeDispatchPreparation(taskId: string, leaseId: string, worktrees: readonly TaskWorktree[] | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null {
     return this.#db.transaction(() => {
       const current = this.getTask(taskId);
       if (!current || current.status !== "planning" || current.dispatchLease !== leaseId) return null;
-      const completed = { ...current, status: "running" as const, worktreePath: worktreePath ?? current.worktreePath, updatedAt: transition.createdAt };
+      if (worktrees?.length) {
+        const insert = this.#db.prepare(`INSERT OR REPLACE INTO task_worktrees (task_id, directory_id, path, branch, base_commit, created_at)
+          VALUES (@taskId, @directoryId, @path, @branch, @baseCommit, @createdAt)`);
+        for (const worktree of worktrees) insert.run(worktree);
+      }
+      const target = worktrees?.find((item) => item.directoryId === current.targetDirectoryId) ?? worktrees?.[0];
+      const completed = { ...current, status: "running" as const, worktreePath: target?.path ?? current.worktreePath, branch: target?.branch ?? current.branch ?? null, updatedAt: transition.createdAt };
       const task = this.#db.prepare(`UPDATE tasks SET status = @status, worktree_path = @worktreePath, updated_at = @updatedAt
         WHERE id = @id AND status = 'planning' AND dispatch_lease = @leaseId`).run({ ...completed, leaseId });
       if (task.changes !== 1) return null;
@@ -157,8 +168,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     })();
   }
   createExecution(execution: TaskExecution): void {
-    this.#db.prepare(`INSERT INTO executions (id, task_id, lease_id, provider, status, started_at, finished_at, summary, output, usage_json)
-      VALUES (@id, @taskId, @leaseId, @provider, @status, @startedAt, @finishedAt, @summary, @output, @usageJson)`).run({ ...execution, output: execution.output ?? null, usageJson: execution.usage ? JSON.stringify(execution.usage) : null });
+    this.#db.prepare(`INSERT INTO executions (id, task_id, lease_id, provider, status, started_at, finished_at, summary, output, usage_json, prompt)
+      VALUES (@id, @taskId, @leaseId, @provider, @status, @startedAt, @finishedAt, @summary, @output, @usageJson, @prompt)`).run({ ...execution, output: execution.output ?? null, usageJson: execution.usage ? JSON.stringify(execution.usage) : null, prompt: execution.prompt ?? null });
   }
   getExecution(id: string): TaskExecution | null { return mapExecution(this.#db.prepare("SELECT * FROM executions WHERE id = ?").get(id)); }
   updateExecution(execution: TaskExecution): void {
@@ -305,6 +316,54 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     })();
   }
 
+  listTaskWorktrees(taskId: string): TaskWorktree[] {
+    return (this.#db.prepare(`SELECT w.* FROM task_worktrees w LEFT JOIN task_directory_scopes scope
+      ON scope.task_id = w.task_id AND scope.directory_id = w.directory_id WHERE w.task_id = ? ORDER BY scope.position`).all(taskId) as Row[])
+      .map((item) => ({ taskId: stringValue(item, "task_id"), directoryId: stringValue(item, "directory_id"), path: stringValue(item, "path"),
+        branch: stringValue(item, "branch"), baseCommit: nullableString(item, "base_commit"), createdAt: stringValue(item, "created_at") }));
+  }
+  deleteTaskWorktrees(taskId: string): void {
+    this.#db.transaction(() => {
+      this.#db.prepare("DELETE FROM task_worktrees WHERE task_id = ?").run(taskId);
+      this.#db.prepare("UPDATE tasks SET worktree_path = NULL, uses_worktree = 0 WHERE id = ? AND dispatch_lease IS NULL").run(taskId);
+    })();
+  }
+  upsertTaskPullRequest(pullRequest: TaskPullRequest): void {
+    this.#db.prepare(`INSERT OR REPLACE INTO task_pull_requests (task_id, directory_id, head_branch, number, url, title, state, is_draft,
+      review_decision, mergeable, checks_json, fetched_at) VALUES (@taskId, @directoryId, @headBranch, @number, @url, @title, @state, @isDraft,
+      @reviewDecision, @mergeable, @checksJson, @fetchedAt)`).run({ ...pullRequest, isDraft: pullRequest.isDraft ? 1 : 0, checksJson: JSON.stringify(pullRequest.checks) });
+  }
+  listTaskPullRequests(taskId?: string): TaskPullRequest[] {
+    const rows = (taskId
+      ? this.#db.prepare("SELECT * FROM task_pull_requests WHERE task_id = ? ORDER BY rowid").all(taskId)
+      : this.#db.prepare("SELECT * FROM task_pull_requests ORDER BY rowid").all()) as Row[];
+    return rows.map((item) => ({ taskId: stringValue(item, "task_id"), directoryId: stringValue(item, "directory_id"), headBranch: stringValue(item, "head_branch"),
+      number: Number(item.number), url: stringValue(item, "url"), title: stringValue(item, "title"), state: stringValue(item, "state") as TaskPullRequest["state"],
+      isDraft: Boolean(item.is_draft), reviewDecision: nullableString(item, "review_decision") as TaskPullRequest["reviewDecision"],
+      mergeable: stringValue(item, "mergeable") as TaskPullRequest["mergeable"], checks: JSON.parse(stringValue(item, "checks_json")) as TaskPullRequest["checks"],
+      fetchedAt: stringValue(item, "fetched_at") }));
+  }
+  createOutboundAction(action: TaskOutboundAction): void {
+    this.#db.prepare(`INSERT INTO task_outbound_actions (id, task_id, kind, status, title, body, targets_json, result, requested_by, created_at, decided_at, finished_at)
+      VALUES (@id, @taskId, @kind, @status, @title, @body, @targetsJson, @result, @requestedBy, @createdAt, @decidedAt, @finishedAt)`)
+      .run({ ...action, targetsJson: JSON.stringify(action.targets) });
+  }
+  getOutboundAction(id: string): TaskOutboundAction | null {
+    return mapOutboundAction(this.#db.prepare("SELECT * FROM task_outbound_actions WHERE id = ?").get(id));
+  }
+  listOutboundActions(taskId?: string): TaskOutboundAction[] {
+    const rows = taskId
+      ? this.#db.prepare("SELECT * FROM task_outbound_actions WHERE task_id = ? ORDER BY rowid DESC").all(taskId)
+      : this.#db.prepare("SELECT * FROM task_outbound_actions ORDER BY rowid DESC").all();
+    return rows.map(mapOutboundAction).filter(isPresent);
+  }
+  updateOutboundAction(id: string, fromStatus: TaskOutboundAction["status"], patch: Pick<TaskOutboundAction, "status"> & Partial<Pick<TaskOutboundAction, "result" | "decidedAt" | "finishedAt">>): TaskOutboundAction | null {
+    const result = this.#db.prepare(`UPDATE task_outbound_actions SET status = @status, result = COALESCE(@result, result),
+      decided_at = COALESCE(@decidedAt, decided_at), finished_at = COALESCE(@finishedAt, finished_at) WHERE id = @id AND status = @fromStatus`)
+      .run({ id, fromStatus, status: patch.status, result: patch.result ?? null, decidedAt: patch.decidedAt ?? null, finishedAt: patch.finishedAt ?? null });
+    return result.changes === 1 ? this.getOutboundAction(id) : null;
+  }
+
   #insertEvent(executionId: string, kind: string, payload: Record<string, unknown>): ExecutionEvent {
     const sequence = (this.#db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM execution_events WHERE execution_id = ?")
       .get(executionId) as { next: number }).next;
@@ -343,7 +402,16 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         reason TEXT NOT NULL, candidates_json TEXT NOT NULL, actions_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_transitions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), from_status TEXT NOT NULL, from_lease TEXT,
         to_status TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS task_worktrees (task_id TEXT NOT NULL REFERENCES tasks(id), directory_id TEXT NOT NULL REFERENCES project_directories(id),
+        path TEXT NOT NULL, branch TEXT NOT NULL, base_commit TEXT, created_at TEXT NOT NULL, PRIMARY KEY(task_id, directory_id));
+      CREATE TABLE IF NOT EXISTS task_pull_requests (task_id TEXT NOT NULL REFERENCES tasks(id), directory_id TEXT NOT NULL REFERENCES project_directories(id),
+        head_branch TEXT NOT NULL, number INTEGER NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL, is_draft INTEGER NOT NULL DEFAULT 0,
+        review_decision TEXT, mergeable TEXT NOT NULL, checks_json TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY(task_id, directory_id));
+      CREATE TABLE IF NOT EXISTS task_outbound_actions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), kind TEXT NOT NULL,
+        status TEXT NOT NULL, title TEXT, body TEXT, targets_json TEXT NOT NULL, result TEXT, requested_by TEXT NOT NULL,
+        created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT);
     `);
+    this.#addColumnIfMissing("executions", "prompt", "TEXT");
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
     this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
@@ -389,6 +457,11 @@ export class SqliteControlRoomStore implements ControlRoomStore {
 
   #directoriesFor(projectId: string): LocalProjectDirectory[] {
     return this.#db.prepare("SELECT * FROM project_directories WHERE project_id = ? ORDER BY position").all(projectId).map(mapDirectory).filter(isPresent);
+  }
+
+  #taskBranch(taskId: string): string | null {
+    const row = this.#db.prepare("SELECT branch FROM task_worktrees WHERE task_id = ? LIMIT 1").get(taskId) as { branch: string } | undefined;
+    return row?.branch ?? null;
   }
 
   #taskDirectoryIds(taskId: string): string[] {
@@ -439,16 +512,16 @@ function mapDirectory(row: unknown): LocalProjectDirectory | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), createdAt: stringValue(item, "created_at"), isGitRepository: Boolean(item.is_git_repository) };
 }
-function mapTask(row: unknown, directoryIds: string[]): ControlRoomTask | null {
+function mapTask(row: unknown, directoryIds: string[], branch: string | null): ControlRoomTask | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), targetDirectoryId: nullableString(item, "target_directory_id"), directoryIds, usesWorktree: Boolean(item.uses_worktree), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
-    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), dispatchLease: nullableString(item, "dispatch_lease"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), branch, dispatchLease: nullableString(item, "dispatch_lease"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), leaseId: nullableString(item, "lease_id"), provider: nullableString(item, "provider") as TaskExecution["provider"],
-    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary"), output: nullableString(item, "output"), usage: parseUsage(nullableString(item, "usage_json")),
+    status: stringValue(item, "status") as TaskExecution["status"], startedAt: nullableString(item, "started_at"), finishedAt: nullableString(item, "finished_at"), summary: nullableString(item, "summary"), prompt: nullableString(item, "prompt"), output: nullableString(item, "output"), usage: parseUsage(nullableString(item, "usage_json")),
     transport: nullableString(item, "transport") as "acp" | "legacy" | null, model: nullableString(item, "model"), sessionId: nullableString(item, "session_id") };
 }
 function mapEvent(row: unknown): ExecutionEvent | null {
@@ -487,4 +560,12 @@ function mapDelegation(row: unknown): DelegationDecision | null {
 function mapTransition(row: unknown): TaskTransition | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), fromStatus: stringValue(item, "from_status") as TaskTransition["fromStatus"], fromDispatchLease: nullableString(item, "from_lease"), toStatus: stringValue(item, "to_status") as TaskTransition["toStatus"], actor: stringValue(item, "actor"), reason: nullableString(item, "reason"), createdAt: stringValue(item, "created_at") };
+}
+function mapOutboundAction(row: unknown): TaskOutboundAction | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), kind: stringValue(item, "kind") as TaskOutboundAction["kind"],
+    status: stringValue(item, "status") as TaskOutboundAction["status"], title: nullableString(item, "title"), body: nullableString(item, "body"),
+    targets: JSON.parse(stringValue(item, "targets_json")) as TaskOutboundAction["targets"], result: nullableString(item, "result"),
+    requestedBy: stringValue(item, "requested_by"), createdAt: stringValue(item, "created_at"),
+    decidedAt: nullableString(item, "decided_at"), finishedAt: nullableString(item, "finished_at") };
 }

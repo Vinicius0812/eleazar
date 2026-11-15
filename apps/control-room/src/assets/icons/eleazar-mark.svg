@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="64" height="64" viewBox="0 0 64 64">
+  <title>eleazar-mark</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path id="mark-bg" d="M16 0 L48 0 C56.837 0 64 7.163 64 16 L64 48 C64 56.837 56.837 64 48 64 L16 64 C7.163 64 0 56.837 0 48 L0 16 C0 7.163 7.163 0 16 0 Z" fill="#6955c8"/>
+    <path id="branch-top" d="M19 17 C34 17 31 32 45 32" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <line id="branch-mid" x1="19" y1="32" x2="45" y2="32" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-miterlimit="10"/>
+    <path id="branch-bottom" d="M19 47 C34 47 31 32 45 32" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle id="agent-1" cx="19" cy="17" r="5.5" fill="#ffffff"/>
+    <circle id="agent-2" cx="19" cy="32" r="5.5" fill="#ffffff"/>
+    <circle id="agent-3" cx="19" cy="47" r="5.5" fill="#ffffff"/>
+    <circle id="goal" cx="47" cy="32" r="9" fill="#ffffff"/>
+    <circle id="goal-core" cx="47" cy="32" r="4" fill="#6955c8"/>
+  </g>
+</svg>

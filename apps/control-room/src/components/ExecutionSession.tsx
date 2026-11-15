@@ -57,8 +57,8 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
     <section className="execution-session" aria-label="Sessão do agente">
       {showRequest && (
         <article className="session-request">
-          <div className="task-turn-heading"><MessageSquare size={16} aria-hidden="true" /><h3>Mensagem original</h3></div>
-          <p className="task-request-text">{task.prompt}</p>
+          <div className="task-turn-heading"><MessageSquare size={16} aria-hidden="true" /><h3>{execution.prompt ? "Mensagem desta continuação" : "Mensagem original"}</h3></div>
+          <p className="task-request-text">{execution.prompt ?? task.prompt}</p>
         </article>
       )}
       <div className="session-status" role="status" aria-live="polite">

@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
-import { taskActions, taskStatuses, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
+import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
 import { isAutomaticProvider, isProviderName, taskKinds } from "../core/contracts.js";
 import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
+import type { OutboundActionService } from "../core/outbound-actions.js";
+import type { PullRequestService } from "../core/pull-requests.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -12,10 +14,10 @@ const uiOrigins = new Set([
 ]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, executor, providers, request, response);
+      await route(service, executor, providers, actions, pullRequests, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -24,7 +26,7 @@ export function createControlRoomServer(service: ControlRoomService, executor?: 
   });
 }
 
-async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -119,6 +121,44 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     const model = optionalString(body, "model");
     const sessionId = optionalString(body, "sessionId");
     return json(response, 202, await executor.start(executeMatch[1], provider === "auto" ? undefined : provider, model, sessionId));
+  }
+  const messageMatch = /^\/api\/control-room\/tasks\/([^/]+)\/messages$/.exec(url.pathname);
+  if (method === "POST" && messageMatch?.[1]) {
+    if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");
+    const body = await readBody(request);
+    const provider = optionalString(body, "provider");
+    if (provider !== undefined && !isProviderName(provider)) throw new Error("Provedor invalido.");
+    return json(response, 202, await executor.continueTask(messageMatch[1], stringField(body, "prompt"), provider, optionalString(body, "model")));
+  }
+  const worktreeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/worktrees\/remove$/.exec(url.pathname);
+  if (method === "POST" && worktreeMatch?.[1]) {
+    await readBody(request);
+    return json(response, 200, await service.removeTaskWorktrees(worktreeMatch[1]));
+  }
+  const taskActionsMatch = /^\/api\/control-room\/tasks\/([^/]+)\/actions$/.exec(url.pathname);
+  if (taskActionsMatch?.[1] && (method === "GET" || method === "POST")) {
+    if (!actions) throw new Error("Acoes de saida nao configuradas neste host local.");
+    if (method === "GET") return json(response, 200, actions.list(taskActionsMatch[1]));
+    const body = await readBody(request); const kind = stringField(body, "kind");
+    if (!outboundActionKinds.includes(kind as OutboundActionKind)) throw new Error("Acao de saida invalida.");
+    const title = optionalString(body, "title"); const text = optionalString(body, "body");
+    return json(response, 201, await actions.request(taskActionsMatch[1], { kind: kind as OutboundActionKind, ...(title ? { title } : {}), ...(text ? { body: text } : {}) }));
+  }
+  const decisionMatch = /^\/api\/control-room\/actions\/([^/]+)\/decision$/.exec(url.pathname);
+  if (method === "POST" && decisionMatch?.[1]) {
+    if (!actions) throw new Error("Acoes de saida nao configuradas neste host local.");
+    const decision = stringField(await readBody(request), "decision");
+    if (decision !== "approve" && decision !== "reject") throw new Error("Decisao invalida.");
+    const decided = await actions.decide(decodeURIComponent(decisionMatch[1]), decision);
+    // A push or a new pull request changes what the forge reports; pick it up right away.
+    if (pullRequests && decided.status === "completed" && decided.kind !== "commit") await pullRequests.refresh(decided.taskId).catch(() => undefined);
+    return json(response, 200, decided);
+  }
+  const refreshMatch = /^\/api\/control-room\/(?:tasks\/([^/]+)\/)?pull-requests\/refresh$/.exec(url.pathname);
+  if (method === "POST" && refreshMatch) {
+    if (!pullRequests) throw new Error("Consulta de pull requests nao configurada neste host local.");
+    await readBody(request);
+    return json(response, 200, refreshMatch[1] ? await pullRequests.refresh(decodeURIComponent(refreshMatch[1])) : await pullRequests.refreshAll());
   }
   json(response, 404, { error: "Rota nao encontrada." });
 }

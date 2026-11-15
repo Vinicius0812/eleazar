@@ -7,7 +7,8 @@ Eleazar e um orquestrador local-first de agentes de programacao. Ele classifica 
 ## Requisitos
 
 - Node.js 22 ou superior (a ponte ACP do Claude, versão 0.107.0, exige Node 22; o ambiente de desenvolvimento usa Node 24);
-- Git;
+- Git, apenas para os recursos de branch por tarefa, commit, push e pull request. Uma pasta comum do disco, sem repositório, funciona normalmente;
+- GitHub CLI (`gh`) autenticado, somente se quiser abrir e acompanhar pull requests pelo painel;
 - Codex CLI, Claude Code CLI e/ou Antigravity CLI instalados; autentique o provedor que pretende executar.
 
 Eleazar nao armazena senhas, cookies ou tokens de sessao.
@@ -99,13 +100,30 @@ Pela API, o novo formato é:
 
 Ao criar uma tarefa, envie `targetDirectoryId` e `directoryIds`. O alvo principal sempre integra o escopo. Tarefas de um diretório entram na fila; tarefas que selecionam mais de um checkout são persistidas em `waiting_approval` e só voltam a `queued` após a aprovação do operador. Projetos antigos continuam com um escopo de um diretório após a migração.
 
-### Modo sem worktrees
+### Pasta comum ou repositório Git
 
-O host local do Control Room inicia com `{ useWorktrees: false }`. Nesse modo, `create_worktree` é recusada, o serviço não usa `GitWorktreeProvisioner` e a persistência impede dois despachos `planning`/`running` diretos cujos escopos tenham qualquer diretório em comum. Escopos disjuntos continuam independentes.
+O Eleazar não exige um repositório. O modo de execução é decidido por tarefa:
+
+- **Pasta comum** (ou escopo em que algum diretório não é Git): o agente trabalha direto na pasta. A persistência impede dois despachos simultâneos cujos escopos tenham qualquer diretório em comum; escopos disjuntos continuam independentes.
+- **Repositório Git** (todo o escopo): na primeira execução o Eleazar cria a branch `eleazar/<titulo>-<id>` e uma worktree por diretório em `.eleazar/worktrees/<tarefa>/`, fora dos repositórios. O agente trabalha só nessa worktree, o seu checkout não é tocado e várias tarefas rodam em paralelo no mesmo repositório. A worktree parte do último commit: alterações ainda sem commit no seu checkout não entram nela. Um repositório sem nenhum commit precisa de um commit inicial.
+
+Defina `ELEAZAR_CONTROL_ROOM_WORKTREES=off` antes de `npm run control-room` para rodar sempre direto na pasta.
+
+### Continuar a mesma tarefa
+
+Quando um turno termina (`completed` ou `failed`), a tela da tarefa mostra **Nova mensagem para o agente**. O novo turno roda na mesma pasta ou worktree. Com Codex e Claude Code, a sessão ACP anterior é retomada quando o agente anuncia suporte; caso contrário o pedido original segue junto com a nova mensagem.
+
+### Commit, push e pull request com aprovação
+
+Tarefas com branch própria mostram o painel **Publicação**. Cada ação tem duas etapas: você a solicita, o painel registra exatamente o que será feito (arquivos, branch, remoto) e nada roda até **Aprovar e executar**. O commit e o push usam o seu `git`; o pull request usa o `gh`. O Eleazar não lê tokens e remove credenciais embutidas em URLs antes de exibir ou gravar. O agente continua proibido de fazer push, e merge e deploy não são oferecidos. **Remover worktree** apaga a pasta isolada e mantém a branch; o Git recusa se houver trabalho sem commit.
+
+### Quadro e pull requests
+
+A fila de tarefas abre como um quadro em que cada tarefa se posiciona sozinha: Na fila, Trabalhando, Precisa de você, Para revisar, Em revisão e Pronto para merge. Depois que a branch é enviada, o host consulta o pull request com o `gh` a cada 60 s e o cartão acompanha CI, conflitos e revisões. O merge é sempre seu, no GitHub. Detalhes em [docs/control-room.md](docs/control-room.md).
 
 ## Seguranca
 
 - O Eleazar nunca tenta extrair credenciais dos provedores.
 - O adaptador Antigravity ativa o sandbox no modo headless.
 - O roteador nao envia uma tarefa a um provedor explicitamente nao autenticado.
-- Merges, publicacoes e comandos destrutivos exigem uma camada explicita de aprovacao; nao sao executados pelo Control Room.
+- Commit, push e pull request so rodam depois da aprovacao explicita do operador no painel Publicacao. Merge, deploy e comandos destrutivos nao sao executados pelo Control Room.

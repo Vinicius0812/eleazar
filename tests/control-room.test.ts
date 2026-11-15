@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ControlRoomService, type WorktreeProvisioner } from "../src/core/control-room-service.js";
-import type { ControlRoomTask, DispatchAttempt, LocalProject, TaskExecution } from "../src/core/control-room.js";
+import type { ControlRoomTask, DispatchAttempt, LocalProject, TaskExecution, TaskWorktree } from "../src/core/control-room.js";
 import { GitWorktreeProvisioner } from "../src/core/git-worktree-provisioner.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
@@ -211,9 +211,13 @@ describe("Control Room SQLite persistence", () => {
   });
 });
 
+function isolated(task: ControlRoomTask, path = `/isolated/${task.id}`): TaskWorktree[] {
+  return [{ taskId: task.id, directoryId: task.targetDirectoryId!, path, branch: "eleazar/teste", baseCommit: null, createdAt: "now" }];
+}
+
 class FakeWorktrees implements WorktreeProvisioner {
   calls = 0;
-  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<string> { this.calls += 1; return `/isolated/${task.id}`; }
+  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<TaskWorktree[]> { this.calls += 1; return isolated(task); }
 }
 
 class BlockingWorktrees implements WorktreeProvisioner {
@@ -222,8 +226,8 @@ class BlockingWorktrees implements WorktreeProvisioner {
   #release!: () => void;
   readonly started = new Promise<void>((resolve) => { this.#startedResolve = resolve; });
   readonly released = new Promise<void>((resolve) => { this.#release = resolve; });
-  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<string> {
-    this.calls += 1; this.#startedResolve(); await this.released; return `/isolated/${task.id}`;
+  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<TaskWorktree[]> {
+    this.calls += 1; this.#startedResolve(); await this.released; return isolated(task);
   }
   release(): void { this.#release(); }
 }
@@ -231,16 +235,17 @@ class BlockingWorktrees implements WorktreeProvisioner {
 class FirstAttemptWorktrees implements WorktreeProvisioner {
   calls = 0;
   #startedResolve!: () => void;
-  #settle!: () => void;
+  #settle!: (worktrees: TaskWorktree[]) => void;
   #fail!: (error: Error) => void;
   readonly started = new Promise<void>((resolve) => { this.#startedResolve = resolve; });
-  readonly first = new Promise<string>((resolve, reject) => { this.#settle = () => resolve("/isolated/old"); this.#fail = reject; });
-  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<string> {
+  #firstTask!: ControlRoomTask;
+  readonly first = new Promise<TaskWorktree[]>((resolve, reject) => { this.#settle = resolve; this.#fail = reject; });
+  async prepare(_project: LocalProject, task: ControlRoomTask): Promise<TaskWorktree[]> {
     this.calls += 1;
-    if (this.calls === 1) { this.#startedResolve(); return this.first; }
-    return `/isolated/${task.id}`;
+    if (this.calls === 1) { this.#firstTask = task; this.#startedResolve(); return this.first; }
+    return isolated(task);
   }
-  succeedFirst(): void { this.#settle(); }
+  succeedFirst(): void { this.#settle(isolated(this.#firstTask, "/isolated/old")); }
   failFirst(): void { this.#fail(new Error("worktree antiga falhou")); }
 }
 
@@ -402,38 +407,55 @@ describe("dispatch claim transaction", () => {
 });
 
 describe("Git worktree isolation", () => {
-  it("forca um hooksPath temporario e vazio para o subprocesso Git", async () => {
-    const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
-    let seenArgs: readonly string[] = [];
-    const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
-      seenArgs = args;
+  const directory = { id: "directory-1", name: "API Núcleo", path: "/repo", isGitRepository: true, createdAt: "now" };
+  const project = { id: "project-1", name: "Project", path: "/repo", directories: [directory], createdAt: "now" };
+  const task: ControlRoomTask = { id: "0a1b2c3d-task", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "Corrigir autenticação JWT!", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
+
+  it("cria uma branch por tarefa fora do repositorio, com hooksPath temporario e vazio", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eleazar-worktrees-")); temporaryDirectories.push(root);
+    const commands: string[][] = [];
+    const provisioner = new GitWorktreeProvisioner(root, async (cwd, args) => {
+      expect(cwd).toBe("/repo");
+      commands.push([...args]);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return "abc123\n";
+      if (args[0] === "rev-parse") throw new Error("branch ausente");
       const setting = args.find((item) => item.startsWith("core.hooksPath="));
-      expect(setting).toBeDefined();
       expect(await readdir(setting!.slice("core.hooksPath=".length))).toEqual([]);
-      await mkdir(args.at(-1)!, { recursive: true });
       return "";
     });
-    const task: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
-    await provisioner.prepare({ id: "project-1", name: "Project", path: projectDirectory, directories: [], createdAt: "now" }, task);
-    expect(seenArgs).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "--detach", join(projectDirectory, ".eleazar", "worktrees", "task-1-lease-1")]);
+    const target = join(root, "0a1b2c3d-task", "0-api-nucleo");
+    await expect(provisioner.prepare(project, task, [directory])).resolves.toEqual([
+      { taskId: task.id, directoryId: "directory-1", path: target, branch: "eleazar/corrigir-autenticacao-jwt-0a1b2c3d", baseCommit: "abc123", createdAt: expect.any(String) }
+    ]);
+    expect(commands.at(-1)).toEqual(["-c", expect.stringMatching(/^core\.hooksPath=/), "worktree", "add", "-b", "eleazar/corrigir-autenticacao-jwt-0a1b2c3d", target, "abc123"]);
   });
 
-  it("usa destino distinto por lease e nunca remove worktree antiga", async () => {
-    const projectDirectory = await mkdtemp(join(tmpdir(), "eleazar-project-")); temporaryDirectories.push(projectDirectory);
-    const oldTask: ControlRoomTask = { id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "T", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "old-lease", createdAt: "now", updatedAt: "now" };
-    const newTask = { ...oldTask, dispatchLease: "new-lease" };
-    const commands: readonly string[][] = [];
-    const provisioner = new GitWorktreeProvisioner(async (_cwd, args) => {
-      (commands as string[][]).push([...args]);
-      if (args.includes("add")) { await mkdir(args.at(-1)!, { recursive: true }); return ""; }
-      throw new Error("comando inesperado");
+  it("reaproveita a worktree e a branch existentes em vez de recriar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eleazar-worktrees-")); temporaryDirectories.push(root);
+    const target = join(root, "0a1b2c3d-task", "0-api-nucleo");
+    const commands: string[][] = [];
+    let branchExists = false;
+    const provisioner = new GitWorktreeProvisioner(root, async (_cwd, args) => {
+      commands.push([...args]);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return "abc123";
+      if (args[0] === "rev-parse") { if (!branchExists) throw new Error("ausente"); return ""; }
+      if (args.includes("add")) { branchExists = true; }
+      return "";
     });
-    const project = { id: "project-1", name: "Project", path: projectDirectory, directories: [], createdAt: "now" };
-    const oldTarget = await provisioner.prepare(project, oldTask);
-    const newTarget = await provisioner.prepare(project, newTask);
-    expect(oldTarget).toBe(join(projectDirectory, ".eleazar", "worktrees", "task-1-old-lease"));
-    expect(newTarget).toBe(join(projectDirectory, ".eleazar", "worktrees", "task-1-new-lease"));
+    await provisioner.prepare(project, task, [directory]);
+    await provisioner.prepare(project, task, [directory]);
+    expect(commands.filter((args) => args.includes("add")).at(-1)?.slice(-2)).toEqual([target, "eleazar/corrigir-autenticacao-jwt-0a1b2c3d"]);
+    await mkdir(join(target, ".git"), { recursive: true });
+    const before = commands.length;
+    await provisioner.prepare(project, task, [directory]);
+    expect(commands.slice(before).some((args) => args.includes("add"))).toBe(false);
     expect(commands.some((args) => args.includes("remove"))).toBe(false);
+  });
+
+  it("explica quando o repositorio ainda nao tem commits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eleazar-worktrees-")); temporaryDirectories.push(root);
+    const provisioner = new GitWorktreeProvisioner(root, async () => { throw new Error("sem HEAD"); });
+    await expect(provisioner.prepare(project, task, [directory])).rejects.toThrow("ainda nao tem commits");
   });
 });
 

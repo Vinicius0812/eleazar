@@ -14,7 +14,7 @@ const statusCopy: Record<Task["status"], string> = {
   cancelled: "A tarefa foi cancelada.",
 };
 
-export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, latestLog, failure, actions }: {
+export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, latestLog, failure, actions, followUp, publishing }: {
   client: ControlRoomClient;
   onSessionChanged?: () => void;
   task: Task;
@@ -26,6 +26,10 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
   latestLog: LogEntry | undefined;
   failure: string | undefined;
   actions: ReactNode;
+  /** Composer for another turn, shown once the last one finished. */
+  followUp?: ReactNode;
+  /** Commit, push and pull request panel, only for tasks that own a branch. */
+  publishing?: ReactNode;
 }) {
   const awaitsAcpDecision = task.status === "waiting_approval" && run !== undefined && isLiveExecution(task, run);
   const showSession = Boolean(run) && (awaitsAcpDecision || (task.status !== "queued" && task.status !== "waiting_approval"));
@@ -41,12 +45,15 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           <time dateTime={task.createdAt}>{new Date(task.createdAt).toLocaleString("pt-BR")}</time>
         </div>
         <p className="task-request-text">{task.prompt}</p>
+        {run?.prompt && <div className="task-follow-up-message"><strong>Última mensagem enviada</strong><p className="task-request-text">{run.prompt}</p></div>}
         <details className="task-context">
           <summary>Contexto da tarefa</summary>
           <dl>
             <div><dt>Projeto</dt><dd>{projectName}</dd></div>
             <div><dt>Diretório-alvo</dt><dd>{directoryName}</dd></div>
             {task.directoryIds.length > 1 && <div><dt>Escopo</dt><dd>{scopeNames}</dd></div>}
+            <div><dt>Isolamento</dt><dd>{task.branch ? <>Branch <code>{task.branch}</code> em worktree própria</> : "Direto na pasta, sem branch própria"}</dd></div>
+            {task.branch && task.worktreePath && <div><dt>Worktree</dt><dd><code>{task.worktreePath}</code></dd></div>}
           </dl>
         </details>
       </article>
@@ -69,11 +76,13 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           </div>
         )}
         {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={false} showOutcome={!failure} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
+        {followUp}
         <div className="task-next-actions">
           <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>
           {actions}
         </div>
       </article>
+      {publishing}
     </>
   );
 }

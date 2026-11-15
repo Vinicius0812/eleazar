@@ -15,6 +15,8 @@ import {
   Clock3,
   FolderGit2,
   GitBranch,
+  Kanban,
+  List,
   LayoutDashboard,
   ListTodo,
   Moon,
@@ -36,6 +38,11 @@ import { useExecutionLaunch } from "./components/useExecutionLaunch.js";
 import { PendingPermissions } from "./components/PendingPermissions.js";
 import { TaskComposer } from "./components/TaskComposer.js";
 import { TaskWorkspace } from "./components/TaskWorkspace.js";
+import { TaskFollowUp } from "./components/TaskFollowUp.js";
+import { TaskPublishing } from "./components/TaskPublishing.js";
+import { TaskBoard } from "./components/TaskBoard.js";
+import { placeTask } from "./services/board.js";
+import markUrl from "./assets/icons/eleazar-mark.svg";
 import type {
   Approval,
   ControlRoomClient,
@@ -181,6 +188,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [projectFilter, setProjectFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [logLevel, setLogLevel] = useState("all");
+  const [taskView, setTaskView] = useState<"board" | "list">(() => window.localStorage.getItem("eleazar.taskView") === "list" ? "list" : "board");
+  useEffect(() => { window.localStorage.setItem("eleazar.taskView", taskView); }, [taskView]);
   const [hash, setHash] = useState(() => window.location.hash);
   const notice = noticeState.hash === hash ? noticeState.text : "";
   // Discard (not just hide) a notice from a previous route so it cannot reappear on return.
@@ -269,8 +278,11 @@ export function App({ client }: { client: ControlRoomClient }) {
     if (executionRoute) void client.getExecutionDetail(executionRoute).then((detail) => setExecutionDetail((current) => current?.execution.id === detail.execution.id ? detail : current)).catch(() => undefined);
   }, [client, executionRoute]);
   const hasLiveTask =data?.tasks.some((task) => task.status === "planning" || task.status === "running") ?? false;
+  // The host re-reads open pull requests on its own; a slower poll keeps the board in step with CI and reviews.
+  const hasOpenPullRequest = data?.pullRequests?.some((item) => item.state === "open") ?? false;
+  const pollMs = hasLiveTask ? 2_000 : 15_000;
   useEffect(() => {
-    if (!hasLiveTask) return;
+    if (!hasLiveTask && !hasOpenPullRequest) return;
     let alive = true;
     let timer: number;
     async function poll() {
@@ -283,11 +295,11 @@ export function App({ client }: { client: ControlRoomClient }) {
       } catch (reason) {
         if (alive) setError(message(reason));
       }
-      if (alive) timer = window.setTimeout(poll, 2_000);
+      if (alive) timer = window.setTimeout(poll, pollMs);
     }
-    timer = window.setTimeout(poll, 2_000);
+    timer = window.setTimeout(poll, pollMs);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [client, hasLiveTask, data?.tasks]);
+  }, [client, hasLiveTask, hasOpenPullRequest, pollMs, data?.tasks]);
   function open(next: DialogState) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
@@ -304,8 +316,10 @@ export function App({ client }: { client: ControlRoomClient }) {
     setBusy(true);
     setError("");
     try {
+      // Pull requests live on GitHub; a manual refresh asks for their current CI and review state too.
+      const forge = await client.refreshPullRequests().catch(() => null);
       setData(await client.getSnapshot());
-      setNotice("Painel atualizado.");
+      setNotice(forge?.warnings[0] ? `Painel atualizado. Pull requests não foram lidos: ${forge.warnings[0]}` : "Painel atualizado.");
     } catch (reason) {
       setError(message(reason));
     } finally {
@@ -399,6 +413,10 @@ export function App({ client }: { client: ControlRoomClient }) {
   const latestRunForTask = (taskId: string) => data?.runs.find((run) => run.taskId === taskId);
   const latestLogForRun = (runId: string) => data?.logs.filter((log) => log.executionId === runId).at(-1);
   const selectedRun = selectedTask && latestRunForTask(selectedTask.id);
+  const placed = (task: Task) => placeTask(task, data?.runs ?? [], data?.actions ?? [], data?.pullRequests ?? []);
+  const projectsWithTasks = projects.map((project) => ({ project, cards: tasks.filter((task) => task.projectId === project.id).map(placed) }));
+  const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
+  const selectedTaskFinished = selectedTask?.status === "completed" || selectedTask?.status === "failed";
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
     overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
@@ -410,7 +428,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       <aside className="sidebar">
         <div className="sidebar-heading">
           <a className="brand" href="#/overview" aria-label="Eleazar · Visão geral" title="Eleazar · Visão geral">
-            <span className="brand-symbol"><Terminal size={18} aria-hidden="true" /></span>
+            <span className="brand-symbol" style={{ backgroundImage: `url("${markUrl}")` }} aria-hidden="true" />
             <span>Eleazar</span>
           </a>
           <button className="sidebar-toggle" type="button" aria-label={collapsed ? "Expandir menu" : "Recolher menu"} aria-expanded={!collapsed} onClick={() => (narrow ? setNarrowCollapsed : setDesktopCollapsed)((value) => !value)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button>
@@ -437,11 +455,19 @@ export function App({ client }: { client: ControlRoomClient }) {
             </a>
           ))}
         </nav>
-        {tasks.length > 0 && (
-          <nav className="sidebar-recent" aria-label="Tarefas recentes">
-            <span>Tarefas recentes</span>
-            {tasks.slice(0, 5).map((task) => (
-              <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id ? "page" : undefined} title={task.title}>{task.title}</a>
+        {projectsWithTasks.length > 0 && (
+          <nav className="sidebar-projects" aria-label="Projetos e tarefas">
+            <span className="sidebar-section">Projetos</span>
+            {projectsWithTasks.map(({ project, cards }) => (
+              <div key={project.id} className="sidebar-project">
+                <span className="sidebar-project-name" title={project.name}><FolderGit2 size={15} aria-hidden="true" /> <span>{project.name}</span></span>
+                {cards.filter((card) => card.place !== "archive").slice(0, 6).map(({ task, place, fact }) => (
+                  <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id ? "page" : undefined} title={`${task.title} · ${fact}`}>
+                    <span className={`lane-dot lane-${place}`} aria-hidden="true" />
+                    <span>{task.title}</span>
+                  </a>
+                ))}
+              </div>
             ))}
           </nav>
         )}
@@ -497,6 +523,13 @@ export function App({ client }: { client: ControlRoomClient }) {
                    run={selectedRun}
                    latestLog={selectedRun && latestLogForRun(selectedRun.id)}
                    failure={selectedTask.status === "failed" && selectedRun ? readableRunSummary(selectedRun.summary) : undefined}
+                   followUp={selectedTaskFinished && selectedRun ? <TaskFollowUp busy={busy} resumesSession={selectedRun.transport === "acp" && Boolean(selectedRun.sessionId)}
+                     onSend={(prompt) => void mutate(() => client.sendTaskMessage(selectedTask.id, prompt), "Mensagem enviada ao agente.")} /> : undefined}
+                   publishing={selectedTask.branch ? <TaskPublishing task={selectedTask} actions={selectedActions} busy={busy} pullRequests={(data?.pullRequests ?? []).filter((item) => item.taskId === selectedTask.id)}
+                     onRefreshPullRequests={() => void mutate(async () => { const result = await client.refreshPullRequests(selectedTask.id); if (result.warnings[0]) throw new Error(result.warnings[0]); return result; }, "Pull request atualizado.")} locked={!selectedTaskFinished}
+                     onRequest={(input) => void mutate(() => client.requestTaskAction(selectedTask.id, input), "Ação registrada. Revise o que será feito e aprove para executar.")}
+                     onDecide={(actionId, decision) => void mutate(() => client.decideTaskAction(actionId, decision), decision === "approve" ? "Ação aprovada; confira o resultado abaixo." : "Ação rejeitada.")}
+                     onRemoveWorktree={() => void mutate(() => client.removeTaskWorktrees(selectedTask.id), "Worktree removida; a branch foi mantida.")} /> : undefined}
                    actions={<>
                      {selectedRun && <button className="secondary" onClick={() => openExecution(selectedRun.id)}>{selectedTask.status === "queued" ? "Ver última tentativa" : "Ver detalhes da execução"}</button>}
                      {selectedTask.status === "queued" && <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: selectedTask })}><Play size={16} aria-hidden="true" /> Executar tarefa</button>}
@@ -733,8 +766,16 @@ export function App({ client }: { client: ControlRoomClient }) {
                           </option>
                         ))}
                       </select>
+                      <div className="view-toggle" role="group" aria-label="Visualização das tarefas">
+                        <button type="button" aria-pressed={taskView === "board"} onClick={() => setTaskView("board")}><Kanban size={14} aria-hidden="true" /> Quadro</button>
+                        <button type="button" aria-pressed={taskView === "list"} onClick={() => setTaskView("list")}><List size={14} aria-hidden="true" /> Lista</button>
+                      </div>
                     </div>
-                    <div className="table-wrap">
+                    {taskView === "board" && filteredTasks.length > 0 && (
+                      <TaskBoard cards={filteredTasks.map(placed)} busy={busy} location={(task) => task.branch ?? directoryName(task)}
+                        onOpen={openTask} onExecute={(task) => { openTask(task.id); open({ kind: "execute", task }); }} />
+                    )}
+                    {taskView === "list" && <div className="table-wrap">
                       <table>
                         <thead>
                           <tr>
@@ -801,7 +842,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </div>}
                     {!filteredTasks.length && (
                       <div className="empty">
                         {tasks.length
@@ -810,7 +851,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       </div>
                     )}
                     <div className="panel-footer">
-                      <span>Ordenadas por prioridade e data de criação</span>
+                      <span>{taskView === "board" ? "Raias definidas pelo estado da tarefa, da execução e das publicações" : "Ordenadas por prioridade e data de criação"}</span>
                       <span>
                         <Clock3 size={13} /> Estado atual
                       </span>

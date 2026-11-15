@@ -49,9 +49,82 @@ export interface ControlRoomTask {
   directoryIds: string[];
   usesWorktree: boolean;
   worktreePath: string | null;
+  /** Branch dedicated to this task; null while it runs directly in a plain folder. */
+  branch?: string | null;
   dispatchLease: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** An isolated checkout of one scope directory, kept for the whole life of the task. */
+export interface TaskWorktree {
+  taskId: string;
+  directoryId: string;
+  path: string;
+  branch: string;
+  /** Commit the branch started from; used to count what the task added. */
+  baseCommit: string | null;
+  createdAt: string;
+}
+
+export const outboundActionKinds = ["commit", "push", "pull_request"] as const;
+export type OutboundActionKind = (typeof outboundActionKinds)[number];
+export type OutboundActionStatus = "pending" | "running" | "completed" | "failed" | "rejected";
+
+/** What an outbound action would touch in one directory, captured for the operator's review. */
+export interface OutboundActionTarget {
+  directoryId: string;
+  directoryName: string;
+  branch: string;
+  /** Remote URL without credentials; null when the repository has no `origin`. */
+  remote: string | null;
+  changedFiles: number;
+  /** First changed paths, capped for display. */
+  files: string[];
+  commitsAhead: number;
+}
+
+/** A commit, push or pull request that leaves the worktree only after explicit approval. */
+export interface TaskOutboundAction {
+  id: string;
+  taskId: string;
+  kind: OutboundActionKind;
+  status: OutboundActionStatus;
+  /** Commit subject or pull request title. */
+  title: string | null;
+  body: string | null;
+  targets: OutboundActionTarget[];
+  result: string | null;
+  requestedBy: string;
+  createdAt: string;
+  decidedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** What the forge reports for a branch's pull request, reduced to what places a task on the board. */
+export interface PullRequestState {
+  number: number;
+  url: string;
+  title: string;
+  state: "open" | "closed" | "merged";
+  isDraft: boolean;
+  reviewDecision: "approved" | "changes_requested" | "review_required" | null;
+  mergeable: "mergeable" | "conflicting" | "unknown";
+  checks: { total: number; passed: number; failed: number; pending: number; /** Names of failed checks, capped. */ failing: string[] };
+}
+
+/** Last known pull request of one task directory. */
+export interface TaskPullRequest extends PullRequestState {
+  taskId: string;
+  directoryId: string;
+  headBranch: string;
+  fetchedAt: string;
+}
+
+/** Read-only view of pull requests. Implementations use the user's own forge CLI and never read tokens. */
+export interface PullRequestInspector {
+  /** Null when the branch has no pull request. Rejects when the forge cannot be queried. */
+  find(path: string, branch: string): Promise<PullRequestState | null>;
 }
 
 export type ExecutionStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
@@ -65,6 +138,8 @@ export interface TaskExecution {
   startedAt: string | null;
   finishedAt: string | null;
   summary: string | null;
+  /** Follow-up message that started this turn; null when the turn ran the task's own prompt. */
+  prompt?: string | null;
   /** Full provider output, capped before persistence to protect the local database. */
   output?: string | null;
   /** Provider-reported token figures; absent when a CLI does not expose them. */
@@ -196,6 +271,8 @@ export interface ControlRoomSnapshot {
   tasks: ControlRoomTask[];
   executions: TaskExecution[];
   logs: ExecutionLog[];
+  actions: TaskOutboundAction[];
+  pullRequests: TaskPullRequest[];
 }
 
 export interface NewProject {
@@ -233,7 +310,7 @@ export interface ControlRoomStore {
   updateTask(task: ControlRoomTask): void;
   transitionTask(task: ControlRoomTask, transition: TaskTransition): ControlRoomTask | null;
   claimDispatch(taskId: string, attempt: DispatchAttempt): ControlRoomTask | null;
-  completeDispatchPreparation(taskId: string, leaseId: string, worktreePath: string | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null;
+  completeDispatchPreparation(taskId: string, leaseId: string, worktrees: readonly TaskWorktree[] | null, transition: TaskTransition, startedAt: string): ControlRoomTask | null;
   failDispatchAttempt(taskId: string, leaseId: string, transition: TaskTransition, executionSummary: string, log: ExecutionLog): ControlRoomTask | null;
   finishExecution(taskId: string, leaseId: string, provider: ProviderName, status: "completed" | "failed", transition: TaskTransition, summary: string, output: string, files: readonly ExecutionFileChange[], log: ExecutionLog, usage?: TokenUsage): ControlRoomTask | null;
   createExecution(execution: TaskExecution): void;
@@ -256,6 +333,23 @@ export interface ControlRoomStore {
   decideExecutionPermission(permissionId: string, optionId: string): { permission: ExecutionPermission; event: ExecutionEvent } | null;
   cancelActiveExecution(executionId: string, reason: string): { execution: TaskExecution; event: ExecutionEvent } | null;
   recoverInterruptedExecutions(reason: string): number;
+  listTaskWorktrees(taskId: string): TaskWorktree[];
+  deleteTaskWorktrees(taskId: string): void;
+  upsertTaskPullRequest(pullRequest: TaskPullRequest): void;
+  listTaskPullRequests(taskId?: string): TaskPullRequest[];
+  createOutboundAction(action: TaskOutboundAction): void;
+  getOutboundAction(id: string): TaskOutboundAction | null;
+  listOutboundActions(taskId?: string): TaskOutboundAction[];
+  /** Compare-and-set on the status so two decisions cannot both win. */
+  updateOutboundAction(id: string, fromStatus: OutboundActionStatus, patch: Pick<TaskOutboundAction, "status"> & Partial<Pick<TaskOutboundAction, "result" | "decidedAt" | "finishedAt">>): TaskOutboundAction | null;
+}
+
+/** Runs the Git/GitHub side of an approved outbound action. Implementations never print credentials. */
+export interface RepositoryPublisher {
+  inspect(worktree: TaskWorktree): Promise<{ remote: string | null; changedFiles: number; files: string[]; commitsAhead: number }>;
+  commit(worktree: TaskWorktree, message: string): Promise<string>;
+  push(worktree: TaskWorktree): Promise<string>;
+  openPullRequest(worktree: TaskWorktree, title: string, body: string): Promise<string>;
 }
 
 const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
@@ -263,8 +357,9 @@ const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   planning: ["queued", "running", "waiting_approval", "failed", "cancelled"],
   running: ["waiting_approval", "completed", "failed", "cancelled"],
   waiting_approval: ["queued", "cancelled"],
-  completed: [],
-  failed: ["queued", "cancelled"],
+  // A finished turn can be followed by another one in the same session.
+  completed: ["planning"],
+  failed: ["queued", "planning", "cancelled"],
   cancelled: []
 };
 

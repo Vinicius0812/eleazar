@@ -22,6 +22,7 @@ import {
   type NewProject,
   type NewTask,
   type TaskAction,
+  type TaskWorktree,
   type TaskPriority,
   type TaskStatus,
   taskPriorities
@@ -29,7 +30,9 @@ import {
 import { taskKinds, type AgentPermissionRequest, type AgentRunResult, type AgentUpdate, type ProviderName } from "./contracts.js";
 
 export interface WorktreeProvisioner {
-  prepare(project: LocalProject, task: ControlRoomTask): Promise<string>;
+  /** One worktree per scope directory, on a branch dedicated to the task. Must be idempotent per task. */
+  prepare(project: LocalProject, task: ControlRoomTask, directories: readonly LocalProjectDirectory[]): Promise<TaskWorktree[]>;
+  remove?(worktree: TaskWorktree, sourcePath: string): Promise<void>;
 }
 
 export interface DispatchRequest {
@@ -37,6 +40,10 @@ export interface DispatchRequest {
   reason: string;
   candidates: readonly DelegationCandidate[];
   requestedActions: readonly TaskAction[];
+  /** Status the task is claimed from. A follow-up turn starts from a finished one. */
+  fromStatus?: "queued" | "completed" | "failed";
+  /** Follow-up message for this turn; omitted when the turn runs the task's own prompt. */
+  prompt?: string;
 }
 
 /** When disabled, dispatches run in the selected directory and are protected by its lease. */
@@ -151,12 +158,13 @@ export class ControlRoomService {
     }
     const claimedAt = now();
     const leaseId = randomUUID();
-    const execution = { id: randomUUID(), taskId, leaseId, provider: request.selectedProvider, status: "planned" as const, startedAt: null, finishedAt: null, summary: null };
+    const execution = { id: randomUUID(), taskId, leaseId, provider: request.selectedProvider, status: "planned" as const, startedAt: null, finishedAt: null, summary: null, prompt: request.prompt?.trim() || null };
     const decision: DelegationDecision = { id: randomUUID(), taskId, selectedProvider: request.selectedProvider, reason: request.reason.trim(), candidates: request.candidates, requestedActions: request.requestedActions, createdAt: claimedAt };
     const attempt: DispatchAttempt = {
       leaseId,
       usesWorktree: this.useWorktrees && request.requestedActions.includes("create_worktree"),
-      transition: { id: randomUUID(), taskId, fromStatus: "queued", fromDispatchLease: null, toStatus: "planning", actor: "dispatcher", reason: "preparando despacho", createdAt: claimedAt },
+      transition: { id: randomUUID(), taskId, fromStatus: request.fromStatus ?? "queued", fromDispatchLease: null, toStatus: "planning", actor: "dispatcher",
+        reason: request.prompt ? "nova mensagem na mesma sessao" : "preparando despacho", createdAt: claimedAt },
       decision,
       execution
     };
@@ -167,12 +175,17 @@ export class ControlRoomService {
       return this.transitionTask(taskId, "waiting_approval", "dispatcher", "nenhum provedor selecionado");
     }
     try {
-      let worktreePath: string | null = null;
+      let worktrees: TaskWorktree[] | null = null;
       if (this.useWorktrees && request.requestedActions.includes("create_worktree")) {
-        if (!this.worktrees) throw new Error("Provisionador de worktree nao configurado.");
-        worktreePath = await this.worktrees.prepare(this.requireProject(task.projectId), task);
+        // The worktree belongs to the task, not to the attempt: later turns keep working in it.
+        worktrees = this.store.listTaskWorktrees(taskId);
+        if (!worktrees.length) {
+          if (!this.worktrees) throw new Error("Provisionador de worktree nao configurado.");
+          const project = this.requireProject(task.projectId);
+          worktrees = await this.worktrees.prepare(project, task, this.scopeDirectories(project, task));
+        }
       }
-      const completed = this.store.completeDispatchPreparation(taskId, leaseId, worktreePath, {
+      const completed = this.store.completeDispatchPreparation(taskId, leaseId, worktrees, {
         id: randomUUID(), taskId, fromStatus: "planning", fromDispatchLease: leaseId, toStatus: "running", actor: "dispatcher",
         reason: "despacho preparado; execucao do provedor e externa", createdAt: now()
       }, now());
@@ -185,6 +198,41 @@ export class ControlRoomService {
       }, message, { id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
       return failed ?? this.requireTask(taskId);
     }
+  }
+
+  /**
+   * True when the task should run in its own branch and worktree: the host supports it,
+   * every scope directory is a Git repository and the task did not already run directly.
+   * Plain folders always run in place.
+   */
+  isolatesTask(taskId: string): boolean {
+    if (!this.useWorktrees || !this.worktrees) return false;
+    const task = this.requireTask(taskId);
+    const directories = this.scopeDirectories(this.requireProject(task.projectId), task);
+    if (!directories.length || !directories.every((directory) => directory.isGitRepository)) return false;
+    if (this.store.listTaskWorktrees(taskId).length) return true;
+    return !this.store.listExecutions(taskId).some((execution) => execution.startedAt !== null);
+  }
+
+  /** Removes the task's worktrees and keeps its branch. Git refuses when there is uncommitted work. */
+  async removeTaskWorktrees(taskId: string): Promise<ControlRoomTask> {
+    const task = this.requireTask(taskId);
+    if (task.dispatchLease) throw conflict("A tarefa esta em execucao; aguarde ou cancele antes de remover a worktree.");
+    const worktrees = this.store.listTaskWorktrees(taskId);
+    if (!worktrees.length) throw conflict("Esta tarefa nao possui worktree.");
+    if (!this.worktrees?.remove) throw new Error("Provisionador de worktree nao configurado.");
+    const project = this.requireProject(task.projectId);
+    for (const worktree of worktrees) {
+      const source = project.directories.find((directory) => directory.id === worktree.directoryId);
+      if (source) await this.worktrees.remove(worktree, source.path);
+    }
+    this.store.deleteTaskWorktrees(taskId);
+    return this.requireTask(taskId);
+  }
+
+  private scopeDirectories(project: LocalProject, task: ControlRoomTask): LocalProjectDirectory[] {
+    return task.directoryIds.map((id) => project.directories.find((directory) => directory.id === id))
+      .filter((directory): directory is LocalProjectDirectory => Boolean(directory));
   }
 
   listTasks(projectId?: string): ControlRoomTask[] { return this.store.listTasks(projectId); }
@@ -293,7 +341,9 @@ export class ControlRoomService {
       projects: this.store.listProjects(),
       tasks,
       executions: executions.map(({ output: _output, ...execution }) => execution),
-      logs: executions.flatMap((execution) => this.store.listLogs(execution.id))
+      logs: executions.flatMap((execution) => this.store.listLogs(execution.id)),
+      actions: this.store.listOutboundActions(),
+      pullRequests: this.store.listTaskPullRequests()
     };
   }
 

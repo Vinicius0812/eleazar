@@ -80,10 +80,29 @@ export class ControlRoomTaskExecutor {
     pending.resolve(optionId);
   }
 
-  async start(taskId: string, preferredProvider?: ProviderName, model?: string, sessionId?: string): Promise<ControlRoomTask> {
-    const task = this.requireQueuedTask(taskId);
+  /**
+   * Sends another message to a task whose last turn finished. The turn reuses the task's
+   * worktree (or folder) and resumes the previous ACP session when the agent supports it.
+   */
+  async continueTask(taskId: string, message: string, preferredProvider?: ProviderName, model?: string): Promise<ControlRoomTask> {
+    if (!message.trim()) throw new Error("Escreva a mensagem para o agente.");
+    const previous = this.service.store.listExecutions(taskId).filter((execution) => execution.provider && execution.startedAt);
+    const provider = preferredProvider ?? previous[0]?.provider ?? undefined;
+    const task = this.service.getTask(taskId);
+    const resumable = previous.find((execution) => execution.provider === provider && execution.transport === "acp" &&
+      execution.sessionId && (execution.status === "completed" || execution.status === "failed"));
+    let sessionId: string | undefined;
+    if (task?.targetDirectoryId && resumable?.sessionId && (provider === "codex" || provider === "claude")) {
+      const canLoad = await this.providerConfig(provider, task.targetDirectoryId).then((config) => config.capabilities?.loadSession === true, () => false);
+      if (canLoad) sessionId = resumable.sessionId;
+    }
+    return this.start(taskId, provider, model, sessionId, message.trim());
+  }
+
+  async start(taskId: string, preferredProvider?: ProviderName, model?: string, sessionId?: string, followUp?: string): Promise<ControlRoomTask> {
+    const task = this.requireStartableTask(taskId, followUp !== undefined);
     const directory = this.requireTargetDirectory(task);
-    const request = makeRunRequest(task, directory);
+    const request = makeRunRequest(task, directory, null, followUp, Boolean(sessionId));
     const route = await this.runner.router.route({
       prompt: request.prompt,
       taskKind: task.kind,
@@ -108,19 +127,27 @@ export class ControlRoomTaskExecutor {
       selectedProvider: route.selected,
       reason: routeReason(route),
       candidates: route.candidates.map(toDelegationCandidate),
-      requestedActions: ["read_project"]
+      requestedActions: this.service.isolatesTask(task.id) ? ["read_project", "create_worktree"] : ["read_project"],
+      ...(followUp !== undefined ? { fromStatus: task.status as "completed" | "failed", prompt: followUp } : {})
     });
     if (dispatched.status !== "running" || !dispatched.dispatchLease) {
       throw new Error("A tarefa nao foi iniciada; releia o estado antes de tentar novamente.");
     }
 
-    const directories = this.requireTaskDirectories(dispatched);
+    // In worktree mode the agent works in the task's isolated checkouts, never in the user's folders.
+    const worktrees = dispatched.usesWorktree ? this.service.store.listTaskWorktrees(task.id) : [];
+    const located = (item: LocalProjectDirectory): LocalProjectDirectory => {
+      const worktree = worktrees.find((candidate) => candidate.directoryId === item.id);
+      return worktree ? { ...item, path: worktree.path } : item;
+    };
+    const directories = this.requireTaskDirectories(dispatched).map(located);
+    const workingRequest = worktrees.length ? makeRunRequest(task, located(directory), worktrees[0]!.branch, followUp, Boolean(sessionId)) : request;
     const execution = this.service.store.listExecutions(task.id).find((item) => item.leaseId === dispatched.dispatchLease);
     if (!execution) throw new Error("Execucao reservada nao encontrada.");
     const controller = new AbortController();
     this.active.set(execution.id, controller);
     this.service.setExecutionMetadata(execution.id, dispatched.dispatchLease, isAcp ? "acp" : "legacy", model ?? null, sessionId);
-    const runRequest: AgentRunRequest = { ...request, signal: controller.signal,
+    const runRequest: AgentRunRequest = { ...workingRequest, signal: controller.signal,
       ...(model ? { model } : {}), ...(sessionId ? { sessionId } : {}),
       ...(isAcp ? { additionalDirectories: directories.filter((item) => item.id !== directory.id).map((item) => item.path),
         onUpdate: (update) => this.service.recordAgentUpdate(execution.id, dispatched.dispatchLease!, update),
@@ -169,9 +196,13 @@ export class ControlRoomTaskExecutor {
     }
   }
 
-  private requireQueuedTask(taskId: string): ControlRoomTask {
+  private requireStartableTask(taskId: string, followUp: boolean): ControlRoomTask {
     const task = this.service.getTask(taskId);
     if (!task) throw new Error("Tarefa nao encontrada.");
+    if (followUp) {
+      if (task.status !== "completed" && task.status !== "failed") throw conflict("So e possivel enviar uma nova mensagem depois que o turno anterior terminar.");
+      return task;
+    }
     if (task.status === "waiting_approval") throw new Error("Esta tarefa precisa ser aprovada antes de ser executada.");
     if (task.status !== "queued") throw new Error("Apenas tarefas na fila podem ser executadas.");
     return task;
@@ -209,16 +240,19 @@ function catalogChoices(option: Extract<SessionOption, { type: "select" }>): Arr
 }
 function conflict(message: string): Error { return Object.assign(new Error(message), { statusCode: 409 }); }
 
-function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory): AgentRunRequest {
+function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory, branch: string | null, followUp?: string, resumed = false): AgentRunRequest {
   return {
     cwd: directory.path,
     taskKind: task.kind,
     prompt: [
       `Tarefa Eleazar: ${task.title}`,
       `Diretorio autorizado: ${directory.path}`,
+      ...(branch ? [`Branch da tarefa: ${branch} (worktree isolada; nao troque de branch nem crie commits, o operador faz o commit pelo Eleazar).`] : []),
       "Execute somente o pedido abaixo no diretorio autorizado. Nao faca push, merge, deploy, publicacao, login, logout ou leitura de credenciais. Relate de forma objetiva o resultado e os testes executados.",
       "",
-      task.prompt
+      // Without a resumed session the agent has no memory of the first request, so it is repeated.
+      ...(followUp !== undefined && !resumed ? ["Pedido original desta tarefa:", task.prompt, "", "Nova mensagem do operador, continuando o trabalho ja feito neste diretorio:"] : []),
+      followUp ?? task.prompt
     ].join("\n")
   };
 }

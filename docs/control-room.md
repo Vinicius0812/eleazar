@@ -34,7 +34,28 @@ A interface não inicia provedores automaticamente. O operador precisa clicar em
 
 Projetos usam `directories[]` no transporte. Cada item contém `name` opcional e `path` absoluto; o servidor devolve o ID, a ordem e a detecção de Git (incluindo metadata `.git` como arquivo de worktree). A UI permite adicionar, remover e reordenar entradas, e exige `targetDirectoryId` e `directoryIds` ao criar uma tarefa. O alvo precisa estar no escopo; diretórios repetidos ou de outro projeto são rejeitados. Escopos com mais de um diretório aparecem em `waiting_approval` até que o operador os mova para `queued`.
 
-O host de produção do Control Room cria `ControlRoomService` com `{ useWorktrees: false }` e sem provisionador Git. Nesse modo, a API não deve enviar `create_worktree`: o núcleo recusa a solicitação e aplica exclusão mútua persistida para qualquer interseção de `directoryIds`.
+O host de produção cria o serviço com `createLocalControlRoomService(store, { worktreeRoot })`, apontando para `.eleazar/worktrees`. O executor pede `create_worktree` somente quando `isolatesTask` é verdadeiro: todo o escopo é Git e a tarefa ainda não rodou direto na pasta. A worktree pertence à tarefa, não à tentativa: `task_worktrees` guarda caminho, branch e commit base por diretório, e os turnos seguintes a reutilizam. Pastas comuns, ou o host iniciado com `ELEAZAR_CONTROL_ROOM_WORKTREES=off`, rodam no lugar com exclusão mútua persistida para qualquer interseção de `directoryIds`; nesse último caso `create_worktree` é recusada.
+
+### Turnos, worktrees e ações de saída
+
+- `POST /tasks/:id/messages` recebe `{ "prompt": "...", "provider"?, "model"? }` e inicia outro turno em uma tarefa `completed` ou `failed`. O claim é atômico a partir desse status, o turno grava a mensagem em `executions.prompt` e retoma a sessão ACP anterior do mesmo provedor quando `capabilities.loadSession` é verdadeiro. Sem provedor informado, usa o do turno anterior.
+- `POST /tasks/:id/worktrees/remove` recebe `{}`, remove as worktrees da tarefa com `git worktree remove` (sem `--force`) e mantém a branch.
+- `GET /tasks/:id/actions` lista as ações da tarefa; `POST /tasks/:id/actions` recebe `{ "kind": "commit" | "push" | "pull_request", "title"?, "body"? }` e só registra a ação como `pending`, com os alvos inspecionados (arquivos alterados, commits à frente do commit base, remoto sem credenciais).
+- `POST /actions/:id/decision` recebe `{ "decision": "approve" | "reject" }`. A aprovação executa a ação no núcleo e grava `completed` ou `failed` com o resultado. Uma ação por tarefa pode estar pendente, nenhuma roda enquanto a tarefa tem `dispatchLease`, e ações `running` encontradas ao reiniciar o host viram `failed`.
+- O snapshot inclui `actions` e cada tarefa traz `branch` (nulo no modo direto).
+
+### Pull requests
+
+O host lê o pull request da branch de cada tarefa com `gh pr view <branch> --json number,url,title,state,isDraft,reviewDecision,mergeable,statusCheckRollup` e guarda o último estado em `task_pull_requests`: estado, rascunho, decisão de revisão, conflito e a contagem de checks (com os nomes dos que falharam). A leitura nunca escreve no GitHub.
+
+- `POST /tasks/:id/pull-requests/refresh` e `POST /pull-requests/refresh` recebem `{}` e devolvem `{ pullRequests, warnings }`. Falha de consulta (gh ausente, sem login, sem rede) vira aviso e preserva o último estado conhecido.
+- A varredura geral só consulta tarefas com push ou pull request concluído pelo painel e ainda não mescladas nem fechadas. Ela roda a cada 60 s no host; `ELEAZAR_CONTROL_ROOM_PR_POLL_SECONDS` muda o intervalo (mínimo 15) e `0` desliga.
+- Depois de um push ou pull request aprovado, o host relê o pull request da tarefa na mesma requisição.
+- O botão **Atualizar** do painel também pede a varredura. O snapshot traz `pullRequests`, e a interface o relê a cada 15 s enquanto houver pull request aberto.
+
+`PullRequestService` (`src/core/pull-requests.ts`) depende da porta `PullRequestInspector`; `GhPullRequestInspector` (`src/adapters/gh-pull-requests.ts`) é o adaptador do GitHub CLI.
+
+`OutboundActionService` (`src/core/outbound-actions.ts`) é a camada de aprovação; `GitRepositoryPublisher` (`src/adapters/git-publisher.ts`) executa `git` e `gh` sem shell, com `GIT_TERMINAL_PROMPT=0`. O commit usa `git add --all` na worktree, portanto a lista de arquivos da prévia é o que entra no commit.
 
 A execução comum do Codex usa o transporte ACP por stdio. `ELEAZAR_CODEX_PATH` pode apontar para um executável nativo do Codex; sem override, o adaptador procura a instalação desktop compatível e depois o binário da dependência ACP. Sem callback, o pedido de permissão é negado. O backend persiste eventos e permissões por execução, e a interface os apresenta por sessão. O Antigravity 1.2.7 permanece no transporte legado; seu ACP ainda não está implementado.
 
@@ -51,6 +72,23 @@ O Claude usa a ponte ACP `@agentclientprotocol/claude-agent-acp` `0.107.0` e o C
 `GET /api/control-room/providers/:provider/config?directoryId=...` (`codex` ou `claude`) consulta o catálogo de modelos e configurações sem enviar prompt, com cache breve por diretório. A resposta contém `runtime.path/version/source`, `protocolVersion`, `settings`, `models`, `defaultModel` e `capabilities.loadSession` booleano. O cliente usa `getProviderConfig(provider, directoryId)`; `getCodexConfig` e a rota `/providers/codex/config` continuam compatíveis. `POST /tasks/:id/execute` aceita `model` e `sessionId` opcionais para provedores ACP; o modelo deve estar anunciado e a sessão anterior deve pertencer ao mesmo provedor, projeto e escopo. `GET /executions/:id/events` transmite SSE ordenado com replay por `Last-Event-ID`. `POST /executions/:id/permissions/:permissionId` recebe `{ "optionId": "..." }`; `POST /executions/:id/cancel` recebe `{}`. Permissões ACP pausam a execução no mesmo lease e são distintas da aprovação inicial de escopo. Reiniciar o host marca execuções em andamento como falhas, invalida permissões pendentes e exige retry manual.
 
 O adaptador força `workspace-write`, `on-request` e rede de ferramentas desabilitada, sem expor modo full access. `allow_always` e pedidos com indicação explícita de ampliação de raiz, rede ou sandbox são recusados; `allow_once` exige resposta do operador. O sandbox do Codex é o limite efetivo para ações de ferramenta: metadados ACP podem não descrever todos os efeitos de um comando, então o bloqueio de push, merge, deploy e publicação no texto da tarefa e na decisão de despacho não substitui inspeção de cada comando executado.
+
+### Quadro de tarefas
+
+Em `#/tasks`, o alternador **Quadro | Lista** (lembrado em `localStorage`, padrão Quadro) troca a tabela por um quadro de seis raias. Ninguém move cartões: `placeTask` (`apps/control-room/src/services/board.ts`) decide a raia a partir do snapshot.
+
+- **Na fila**: tarefa `queued`.
+- **Trabalhando**: `planning` ou `running`.
+- **Precisa de você**: permissão ACP ou aprovação de escopo pendente, execução com falha, e commit, push ou pull request aguardando aprovação ou que falhou.
+- **Para revisar**: turno concluído sem pull request, ou pull request fechado sem merge.
+- **Em revisão**: pull request aberto em rascunho, com checks em execução ou com revisão pendente.
+- **Pronto para merge**: pull request aprovado com os checks verdes; em repositórios sem revisão obrigatória, bastam os checks verdes.
+
+Com pull request aberto, CI com falha, conflito de merge e alterações solicitadas levam o cartão para **Precisa de você**. Pull request mesclado vai para o Arquivo. Quando a tarefa tem pull requests em vários repositórios, vale o mais urgente. O merge continua manual: o cartão e o painel Publicação abrem o pull request no GitHub.
+
+Tarefas canceladas ficam no **Arquivo**, recolhido abaixo do quadro. Cada cartão mostra o agente, o título, a branch da tarefa (ou a pasta, no modo direto), o fato que definiu a raia e há quanto tempo. A barra lateral lista os projetos com as tarefas ativas de cada um, marcadas com a cor da raia.
+
+Os ícones em `apps/control-room/src/assets/icons` (marca do Eleazar e glifos dos agentes) são SVGs próprios; os glifos são genéricos e não reproduzem logotipos dos provedores.
 
 ## Limite de rede
 

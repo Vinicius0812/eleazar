@@ -58,7 +58,9 @@ SQLite: projects -> project_directories <- tasks.target_directory_id
 
 Cada tarefa declara um `targetDirectoryId` principal e uma lista `directoryIds` que sempre o inclui. Isso torna explícito que um projeto com vários checkouts não significa que toda tarefa tocará todos eles. Um escopo com mais de um diretório nasce em `waiting_approval`; o operador aprova a transição para `queued` antes de qualquer claim de despacho.
 
-O host local usa `useWorktrees: false`, portanto não invoca nem precisa de `GitWorktreeProvisioner`. O claim SQLite funciona como lock por interseção de escopo: duas tarefas diretas não podem ficar em `planning` ou `running` se compartilharem qualquer checkout, enquanto escopos disjuntos podem continuar em paralelo. A opção programática com worktree continua isolando a execução e não ocupa esse lock direto.
+O host local isola em worktree as tarefas cujo escopo inteiro é Git: `GitWorktreeProvisioner` cria uma branch por tarefa e uma worktree por diretório sob `.eleazar/worktrees`, reutilizadas por todos os turnos da tarefa. Pastas comuns rodam no lugar. O claim SQLite funciona como lock por interseção de escopo apenas para tarefas diretas: duas delas não podem ficar em `planning` ou `running` se compartilharem qualquer diretório. Tarefas em worktree não ocupam esse lock.
+
+Uma tarefa tem vários turnos: cada mensagem de continuação gera uma execução nova a partir de `completed` ou `failed`. Commit, push e pull request passam por `OutboundActionService`, que só executa uma ação registrada depois da aprovação do operador.
 
 ## Proximos marcos
 
