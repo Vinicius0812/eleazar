@@ -9,7 +9,7 @@ Eleazar e um orquestrador local-first de agentes de programacao. Ele classifica 
 - Node.js 22 ou superior (a ponte ACP do Claude, versão 0.107.0, exige Node 22; o ambiente de desenvolvimento usa Node 24);
 - Git, apenas para os recursos de branch por tarefa, commit, push e pull request. Uma pasta comum do disco, sem repositório, funciona normalmente;
 - GitHub CLI (`gh`) autenticado, somente se quiser abrir e acompanhar pull requests pelo painel;
-- Codex CLI, Claude Code CLI e/ou Antigravity CLI instalados; autentique o provedor que pretende executar.
+- Codex CLI, Claude Code CLI e/ou Antigravity CLI (`agy` 1.5 ou superior) instalados; autentique o provedor que pretende executar.
 
 Eleazar nao armazena senhas, cookies ou tokens de sessao.
 
@@ -78,7 +78,7 @@ Com `--json`, o resultado final sai no stdout. Progresso, prévias e confirmaç�
 
 A UI conversa somente com a API HTTP local em `/api/control-room` (projetos, tarefas, execuções, status e catálogo de provedores, eventos SSE, cancelamento e permissões de sessão); a lista completa de rotas e contratos está em [docs/control-room.md](docs/control-room.md). Os DTOs HTTP espelham os contratos de `src/core/control-room.ts`, mas ficam no pacote da UI sem importar Node, SQLite ou SDKs de provedores.
 
-O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar** e confirme o provedor. Codex e Claude Code usam sessões ACP com modelo selecionável (somente entre os anunciados pelo catálogo do provedor), texto do agente em streaming, atividade de ferramentas, decisões de permissão e cancelamento. Antigravity 1.2.7 continua no transporte legado; seu ACP ainda não está implementado. A API verifica a disponibilidade e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
+O painel mostra somente estado persistido: projetos e tarefas reais, execucoes registradas e logs. Tarefas em `waiting_approval` aparecem como aprovacoes; aprovar retorna a tarefa para `queued` e rejeitar faz a transicao para `cancelled`. Para uma tarefa em `queued`, use **Executar** e confirme o provedor. Codex, Claude Code e Antigravity usam sessões ACP com modelo selecionável (somente entre os anunciados pelo catálogo do provedor), texto do agente em streaming, atividade de ferramentas, decisões de permissão e cancelamento. A API verifica a disponibilidade e persiste o resultado, duração, tokens quando fornecidos e logs; o painel atualiza enquanto houver execução ativa. A visão geral mostra limites e reset do Codex apenas quando a sessão oficial os disponibiliza, e tokens observados do Antigravity sem estimar saldo. Ao abrir uma execução concluída ou com falha, a URL `#/executions/:id` mostra o retorno Markdown, tentativas anteriores e o resumo dos arquivos atribuídos àquela execução. Acoes de `push`, `merge` e `deploy` continuam bloqueadas pelo núcleo e a instrução enviada ao provedor também proíbe login, logout e acesso a credenciais.
 
 Consulte [o guia do Control Room](docs/control-room.md) para detalhes do transporte e operacao local.
 
@@ -124,6 +124,6 @@ A fila de tarefas abre como um quadro em que cada tarefa se posiciona sozinha: N
 ## Seguranca
 
 - O Eleazar nunca tenta extrair credenciais dos provedores.
-- O adaptador Antigravity ativa o sandbox no modo headless.
+- O adaptador Antigravity inicia `agy acp --sandbox` no modo `default`, que pede permissao antes de editar e executar comandos, e nunca usa `--dangerously-skip-permissions`. Permissoes que voce ja liberou nas configuracoes do proprio `agy` continuam valendo.
 - O roteador nao envia uma tarefa a um provedor explicitamente nao autenticado.
 - Commit, push e pull request so rodam depois da aprovacao explicita do operador no painel Publicacao. Merge, deploy e comandos destrutivos nao sao executados pelo Control Room.

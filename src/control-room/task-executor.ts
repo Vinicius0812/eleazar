@@ -1,6 +1,7 @@
 import type { AgentRunRequest, AgentRunResult, ProviderConfig, ProviderName, RouteDecision } from "../core/contracts.js";
 import { CodexAcpClient } from "../adapters/codex-acp.js";
 import { ClaudeAcpClient } from "../adapters/claude-acp.js";
+import { AntigravityAcpClient } from "../adapters/antigravity-acp.js";
 import type { AcpClient, AcpSessionInfo } from "../adapters/acp-client.js";
 import type { Orchestrator, OrchestratorRun } from "../core/orchestrator.js";
 import { ControlRoomService } from "../core/control-room-service.js";
@@ -25,12 +26,17 @@ export class ControlRoomTaskExecutor {
     private readonly runner: ControlRoomTaskRunner,
     private readonly changes = new GitChangeCollector(),
     private readonly codexClient = new CodexAcpClient(),
-    private readonly claudeClient = new ClaudeAcpClient()
-  ) { this.acpClients = new Map<ProviderName, AcpClient>([["codex", codexClient], ["claude", claudeClient]]); }
+    private readonly claudeClient = new ClaudeAcpClient(),
+    private readonly antigravityClient = new AntigravityAcpClient()
+  ) {
+    this.acpClients = new Map<ProviderName, AcpClient>([
+      ["codex", codexClient], ["claude", claudeClient], ["antigravity", antigravityClient]
+    ]);
+  }
 
   async codexConfig(directoryId: string): Promise<ProviderConfig> { return this.providerConfig("codex", directoryId); }
 
-  async providerConfig(provider: "codex" | "claude", directoryId: string): Promise<ProviderConfig> {
+  async providerConfig(provider: ProviderName, directoryId: string): Promise<ProviderConfig> {
     const directory = this.service.store.listProjects().flatMap((project) => project.directories).find((item) => item.id === directoryId);
     if (!directory) throw new Error(`Diretorio nao encontrado para catalogo ${provider}.`);
     const key = `${provider}\0${directory.path}`;
@@ -50,7 +56,7 @@ export class ControlRoomTaskExecutor {
             currentValue: item.currentValue,
             options: catalogChoices(item).filter((choice) =>
               item.category !== "mode" && item.id !== "mode" ||
-              (provider === "claude" ? choice.id === "default" : ["read-only", "workspace-write"].includes(choice.id))) }
+              (provider === "codex" ? ["read-only", "workspace-write"].includes(choice.id) : choice.id === "default")) }
           : { id: item.id, name: item.name, category: item.category ?? null, type: "boolean" as const,
             currentValue: item.currentValue, options: [] }),
       models: model ? catalogChoices(model) : [],
@@ -92,7 +98,7 @@ export class ControlRoomTaskExecutor {
     const resumable = previous.find((execution) => execution.provider === provider && execution.transport === "acp" &&
       execution.sessionId && (execution.status === "completed" || execution.status === "failed"));
     let sessionId: string | undefined;
-    if (task?.targetDirectoryId && resumable?.sessionId && (provider === "codex" || provider === "claude")) {
+    if (task?.targetDirectoryId && resumable?.sessionId && provider && this.acpClients.has(provider)) {
       const canLoad = await this.providerConfig(provider, task.targetDirectoryId).then((config) => config.capabilities?.loadSession === true, () => false);
       if (canLoad) sessionId = resumable.sessionId;
     }
@@ -118,10 +124,10 @@ export class ControlRoomTaskExecutor {
     if ((model || sessionId) && !isAcp) throw new Error("Modelo e sessao requerem um provedor ACP.");
     if (sessionId && !this.authorizedSession(task, route.selected, sessionId)) throw new Error("Sessao ACP nao pertence ao provedor e escopo desta tarefa.");
     if (model) {
-      const config = await this.providerConfig(route.selected as "codex" | "claude", directory.id);
+      const config = await this.providerConfig(route.selected, directory.id);
       if (!config.models.some((item) => item.id === model)) throw new Error(`Modelo ${route.selected} nao anunciado: ${model}`);
     }
-    if (sessionId && !(await this.providerConfig(route.selected as "codex" | "claude", directory.id)).capabilities?.loadSession) throw new Error("Agente ACP nao anuncia retomada de sessao.");
+    if (sessionId && !(await this.providerConfig(route.selected, directory.id)).capabilities?.loadSession) throw new Error("Agente ACP nao anuncia retomada de sessao.");
 
     const dispatched = await this.service.dispatch(task.id, {
       selectedProvider: route.selected,

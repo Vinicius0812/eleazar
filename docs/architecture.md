@@ -13,7 +13,7 @@ CLI / futura interface
         |
         +-------> CodexAdapter -------> @openai/codex-sdk
         |
-        +-------> AntigravityAdapter -> agy --output-format json
+        +-------> AntigravityAdapter -> ACP (agy acp --sandbox)
 ```
 
 ## Responsabilidades
@@ -33,7 +33,7 @@ O roteamento deterministico e intencional no inicio: ele e barato, auditavel e p
 Traduzem o contrato interno para a interface oficial de cada agente:
 
 - Codex: SDK TypeScript oficial, com threads locais retomaveis.
-- Antigravity: CLI headless com envelope JSON e sandbox habilitado.
+- Antigravity: servidor ACP nativo do CLI (`agy acp`), com sandbox habilitado e modo que pede permissao.
 
 ### Credenciais
 

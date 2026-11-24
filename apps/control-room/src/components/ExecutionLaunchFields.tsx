@@ -1,7 +1,7 @@
 import { providerLabels, type ExecutionLaunch } from "./useExecutionLaunch.js";
 import type { ExecutionProvider } from "../services/contracts.js";
 
-/** Provider, model and resume fields of the execution dialog; identical for Codex and Claude. */
+/** Provider, model and resume fields of the execution dialog; identical for every ACP provider. */
 export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunch; busy: boolean }) {
   const { acp, config } = launch;
   const name = acp ? providerLabels[acp] : "";
