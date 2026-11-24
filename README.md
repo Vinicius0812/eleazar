@@ -124,6 +124,6 @@ A fila de tarefas abre como um quadro em que cada tarefa se posiciona sozinha: N
 ## Seguranca
 
 - O Eleazar nunca tenta extrair credenciais dos provedores.
-- O adaptador Antigravity inicia `agy acp --sandbox` no modo `default`, que pede permissao antes de editar e executar comandos, e nunca usa `--dangerously-skip-permissions`. Permissoes que voce ja liberou nas configuracoes do proprio `agy` continuam valendo.
+- O adaptador Antigravity inicia `agy acp --sandbox` no modo `default` e nunca usa `--dangerously-skip-permissions`. **Limitacao conhecida:** em um teste real com a 1.5.9, o `agy` editou um arquivo da pasta de trabalho nesse modo sem pedir permissao; a causa ainda nao foi identificada. Prefira executar o Antigravity em worktree isolada.
 - O roteador nao envia uma tarefa a um provedor explicitamente nao autenticado.
 - Commit, push e pull request so rodam depois da aprovacao explicita do operador no painel Publicacao. Merge, deploy e comandos destrutivos nao sao executados pelo Control Room.

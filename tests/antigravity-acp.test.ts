@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AntigravityAcpClient, antigravityAcpLaunch } from "../src/adapters/antigravity-acp.js";
 import { antigravityAcpEnvironment, resolveAntigravityRuntime } from "../src/adapters/antigravity-runtime.js";
 import { AntigravityAdapter } from "../src/adapters/antigravity.js";
-import { nodeAcpLaunch } from "../src/adapters/acp-client.js";
+import { localPath, nodeAcpLaunch } from "../src/adapters/acp-client.js";
 import type { ProcessResult } from "../src/adapters/process-runner.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import type { ControlRoomService } from "../src/core/control-room-service.js";
@@ -28,7 +28,8 @@ describe("Antigravity ACP stdio", () => {
     const onPermission = vi.fn(async () => "allow");
     const result = await client().run({ cwd: process.cwd(), prompt: "Edit", model: "gemini-4-carbon",
       onUpdate: (update) => updates.push(update.kind), onPermission });
-    expect(result).toMatchObject({ provider: "antigravity", status: "success", sessionId: "agy-session", response: "allowed" });
+    expect(result).toMatchObject({ provider: "antigravity", status: "success", sessionId: "agy-session", response: "allowed",
+      usage: { input: 10, output: 4, thinking: 2, cacheRead: 3, total: 17 } });
     expect(updates).toEqual(["session_ready", "agent_message_chunk"]);
     expect(onPermission).toHaveBeenCalledWith(expect.objectContaining({ toolKind: "edit", requiresElevation: false }));
   });
@@ -47,6 +48,16 @@ describe("Antigravity ACP stdio", () => {
       expect(await client().run({ cwd: process.cwd(), prompt, onPermission })).toMatchObject({ response: "denied" });
       expect(onPermission).not.toHaveBeenCalled();
     }
+  });
+  it("accepts an edit whose Windows path comes in URI form", async () => {
+    const onPermission = vi.fn(async () => "allow");
+    expect(await client().run({ cwd: process.cwd(), prompt: "URI_PATH", onPermission })).toMatchObject({ response: "allowed" });
+    expect(onPermission).toHaveBeenCalledWith(expect.objectContaining({ requiresElevation: false }));
+  });
+  it("normalizes URI-form paths only on Windows", () => {
+    expect(localPath("/C:/dir/file.txt", "win32")).toBe("C:/dir/file.txt");
+    expect(localPath("/C:/dir/file.txt", "linux")).toBe("/C:/dir/file.txt");
+    expect(localPath("C:\\dir\\file.txt", "win32")).toBe("C:\\dir\\file.txt");
   });
   it("rejects an unannounced model", async () => {
     expect(await client().run({ cwd: process.cwd(), prompt: "Edit", model: "other" }))

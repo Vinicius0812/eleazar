@@ -147,7 +147,7 @@ export class AcpClient {
         const live = () => turn.active && !request.signal?.aborted;
         if (!live()) return cancelled;
         const options = params.options.map((item) => ({ id: item.optionId, name: item.name, kind: item.kind }));
-        const rawLocations = params.toolCall.locations ?? [];
+        const rawLocations = (params.toolCall.locations ?? []).map((item) => ({ path: localPath(item.path) }));
         const locations = rawLocations.slice(0, 20).map((item) => item.path.slice(0, 500));
         const roots = [request.cwd, ...(request.additionalDirectories ?? [])];
         if (this.deps.strictFileScope &&
@@ -263,6 +263,11 @@ async function ensureRequiredMode(
   }
 }
 
+/** agy reports Windows paths in URI form ("/C:/dir/file"), which Node would not match against the roots. */
+export function localPath(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" && /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path;
+}
+
 function pathWithinRoots(path: string, roots: string[]): boolean {
   if (!isAbsolute(path)) return false;
   return roots.some((root) => {
@@ -288,10 +293,10 @@ function parseUsage(value: unknown): TokenUsage | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   const count = (name: string) => typeof raw[name] === "number" && Number.isSafeInteger(raw[name]) && (raw[name] as number) >= 0 ? raw[name] as number : undefined;
-  const input = count("inputTokens"), output = count("outputTokens"), cacheRead = count("cachedReadTokens"), total = count("totalTokens");
-  if ([input, output, cacheRead, total].every((item) => item === undefined)) return undefined;
+  const input = count("inputTokens"), output = count("outputTokens"), thinking = count("thoughtTokens"), cacheRead = count("cachedReadTokens"), total = count("totalTokens");
+  if ([input, output, thinking, cacheRead, total].every((item) => item === undefined)) return undefined;
   return { ...(input === undefined ? {} : { input }), ...(output === undefined ? {} : { output }),
-    ...(cacheRead === undefined ? {} : { cacheRead }), ...(total === undefined ? {} : { total }) };
+    ...(thinking === undefined ? {} : { thinking }), ...(cacheRead === undefined ? {} : { cacheRead }), ...(total === undefined ? {} : { total }) };
 }
 
 async function openSession(agent: acp.ClientContext, capabilities: acp.AgentCapabilities, cwd: string, sessionId?: string, additionalDirectories: string[] = [], sessionMeta?: Record<string, unknown>): Promise<acp.NewSessionResponse> {

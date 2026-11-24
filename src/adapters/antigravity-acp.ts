@@ -12,7 +12,10 @@ export function antigravityAcpLaunch(runtime: { path: string }): AcpLaunch {
 /** Same limit as the previous headless transport. */
 const turnTimeoutMs = 16 * 60_000;
 
-/** Antigravity policy: `default` mode (asks before edits and commands) and the terminal sandbox. */
+/**
+ * Antigravity policy: `default` mode and the terminal sandbox. agy documents `default` as asking before
+ * edits, but 1.5.9 was observed editing inside the workspace without a permission request.
+ */
 export class AntigravityAcpClient extends AcpClient {
   constructor(deps: {
     launch: (runtime: { path: string }) => AcpLaunch;

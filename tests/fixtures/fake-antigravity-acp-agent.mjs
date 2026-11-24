@@ -45,7 +45,8 @@ function handle(message) {
     if (text === "HANG") return;
     if (text === "EXIT") process.exit(4);
     pending = { id, sessionId: params.sessionId };
-    const locations = text === "NO_LOCATION" ? [] : [{ path: text === "OUTSIDE" ? process.execPath : `${process.cwd()}/sample.txt` }];
+    const uriPath = `${/^[A-Za-z]:/.test(process.cwd()) ? "/" : ""}${process.cwd().replaceAll("\\", "/")}/sample.txt`;
+    const locations = text === "URI_PATH" ? [{ path: uriPath }] : text === "NO_LOCATION" ? [] : [{ path: text === "OUTSIDE" ? process.execPath : `${process.cwd()}/sample.txt` }];
     return send({ id: 100, method: "session/request_permission", params: { sessionId: params.sessionId,
       toolCall: { toolCallId: "edit-1", title: "Write", kind: "edit", locations },
       options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } });
@@ -54,7 +55,8 @@ function handle(message) {
   if (id === 100 && pending) {
     const allowed = message.result?.outcome?.outcome === "selected" && message.result.outcome.optionId === "allow";
     update(pending.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: allowed ? "allowed" : "denied" } });
-    send({ id: pending.id, result: { stopReason: "end_turn" } });
+    send({ id: pending.id, result: { stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 4, cachedReadTokens: 3, cachedWriteTokens: 0, thoughtTokens: 2, totalTokens: 17 } } });
     pending = undefined;
   }
 }

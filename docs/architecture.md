@@ -33,7 +33,7 @@ O roteamento deterministico e intencional no inicio: ele e barato, auditavel e p
 Traduzem o contrato interno para a interface oficial de cada agente:
 
 - Codex: SDK TypeScript oficial, com threads locais retomaveis.
-- Antigravity: servidor ACP nativo do CLI (`agy acp`), com sandbox habilitado e modo que pede permissao.
+- Antigravity: servidor ACP nativo do CLI (`agy acp`), com sandbox habilitado e modo `default`.
 
 ### Credenciais
 
