@@ -13,8 +13,8 @@ export function antigravityAcpLaunch(runtime: { path: string }): AcpLaunch {
 const turnTimeoutMs = 16 * 60_000;
 
 /**
- * Antigravity policy: `default` mode and the terminal sandbox. agy documents `default` as asking before
- * edits, but 1.5.9 was observed editing inside the workspace without a permission request.
+ * Antigravity policy: `default` mode (asks before edits) and the terminal sandbox. agy 1.5.9 was observed
+ * editing without a permission request when the workspace is inside the system temporary directory.
  */
 export class AntigravityAcpClient extends AcpClient {
   constructor(deps: {
