@@ -148,6 +148,8 @@ export function useExecutionSession(client: ControlRoomClient, executionId: stri
               failures = 0; setError(""); setConnection("live");
               absorb([event]);
               if (event.kind.startsWith("permission_")) void refresh().catch(() => undefined);
+              // The preparation ended: the host screen also has to leave "Planejada".
+              if (event.kind === "started") void refresh().then(() => { if (!signal.aborted) changed.current?.(); }, () => undefined);
             }
           });
           if (signal.aborted) return;

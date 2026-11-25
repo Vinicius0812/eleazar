@@ -9,7 +9,9 @@ export type ExecutionStatus = "planned" | "running" | "completed" | "failed" | "
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export interface TokenUsage { input?: number; output?: number; thinking?: number; cacheRead?: number; total?: number; }
 export interface ProjectDirectory { id: string; name: string; path: string; createdAt: string; isGitRepository: boolean; }
-export interface Project { id: string; name: string; path: string; directories: ProjectDirectory[]; createdAt: string; }
+/** Where agents work: an isolated worktree per task, or the project's own folders. */
+export type ProjectIsolation = "worktree" | "direct";
+export interface Project { id: string; name: string; path: string; directories: ProjectDirectory[]; isolation: ProjectIsolation; createdAt: string; }
 export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; branch?: string | null; dispatchLease?: string | null; createdAt: string; updatedAt: string; }
 export interface Run { id: string; taskId: string; provider: string | null; status: ExecutionStatus; startedAt: string | null; finishedAt: string | null; summary: string | null; prompt?: string | null; output?: string | null; usage?: TokenUsage | null; transport?: "acp" | "legacy" | null; model?: string | null; sessionId?: string | null; }
 export interface LogEntry { id: string; executionId: string; level: LogLevel; message: string; createdAt: string; }
@@ -55,7 +57,7 @@ export type ProviderPreferencesPatch = Partial<ProviderPreferences>;
 export interface ProviderVerification { connected: boolean; authenticated: boolean | null; detail: string; models: Array<{ id: string; name: string }>; defaultModel: string | null; checkedAt: string; }
 export interface ProviderStatus { provider: string; label: string; available: boolean; authenticated: boolean | null; version: string | null; detail: string; executable: { path: string; source: string } | null; transport: "acp" | "legacy"; roles: { implementer: boolean; reviewer: boolean }; login: { command: string; hint: string }; preferences: ProviderPreferences; verification: ProviderVerification | null; fetchedAt: string; usage: ProviderUsageStatus; }
 export interface ControlRoomSnapshot { projects: Project[]; tasks: Task[]; runs: Run[]; logs: LogEntry[]; approvals: Approval[]; alerts: Alert[]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; }
-export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; }
+export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; isolation?: ProjectIsolation; }
 export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
 /** `auto` or a registered provider id. */
 export type ExecutionProvider = string;
@@ -67,6 +69,7 @@ export interface ControlRoomClient {
   verifyProvider(provider: string): Promise<ProviderStatus[]>;
   updateProvider(provider: string, patch: ProviderPreferencesPatch): Promise<ProviderStatus[]>;
   registerProject(input: RegisterProjectInput): Promise<Project>;
+  updateProjectIsolation(projectId: string, isolation: ProjectIsolation): Promise<Project>;
   createTask(input: CreateTaskInput): Promise<Task>;
   getProviderConfig(provider: AcpProvider, directoryId: string): Promise<ProviderConfig>;
   getCodexConfig(directoryId: string): Promise<CodexConfig>;

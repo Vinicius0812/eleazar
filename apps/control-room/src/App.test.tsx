@@ -541,6 +541,46 @@ describe("Control Room routes", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
+  it("lets the operator choose per project where agents work and starts new projects from the last choice", async () => {
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    snapshot.projects[0]!.isolation = "direct";
+    const update = vi.spyOn(controlled, "updateProjectIsolation"); const register = vi.spyOn(controlled, "registerProject");
+    window.location.hash = "#/projects";
+    render(<App client={controlled} />);
+    await userEvent.selectOptions(await screen.findByLabelText("Onde o agente trabalha em Projeto"), "worktree");
+    expect(update).toHaveBeenCalledWith("project-1", "worktree");
+    await userEvent.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
+    await userEvent.type(screen.getByLabelText("Nome do projeto"), "Novo");
+    await userEvent.type(screen.getByLabelText("Caminho local absoluto"), "C:/novo");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cadastrar projeto" }));
+    await waitFor(() => expect(register).toHaveBeenCalledWith(expect.objectContaining({ name: "Novo", isolation: "direct" })));
+  });
+
+  it("covers the screen with a loading overlay instead of leaving it blank", async () => {
+    const controlled = client();
+    let deliver: () => void = () => undefined;
+    const original = controlled.getSnapshot;
+    controlled.getSnapshot = () => new Promise((resolve) => { deliver = () => void original().then(resolve); });
+    window.location.hash = "#/overview";
+    const { container } = render(<App client={controlled} />);
+    expect(container.querySelector(".loading-overlay")).toHaveTextContent("Carregando sala de controle…");
+    deliver();
+    await waitFor(() => expect(screen.queryByText("Carregando sala de controle…")).not.toBeInTheDocument());
+  });
+
+  it("closes the launch dialog while the host still prepares the worktree", async () => {
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    snapshot.tasks[0]!.status = "queued";
+    controlled.executeTask = () => { snapshot.tasks[0]!.status = "planning"; return new Promise(() => undefined); };
+    window.location.hash = "#/tasks/task-1";
+    render(<App client={controlled} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Executar agora" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument(), { timeout: 4_000 });
+  });
+
   it("creates a related task with the complete execution context inherited", async () => {
     window.location.hash = "#/executions/run-1";
     const controlled = client(); const createTask = vi.spyOn(controlled, "createTask");
@@ -565,7 +605,7 @@ function providerStatus(provider: string, fields: Partial<ProviderStatus> = {}):
     usage: { source: "eleazar_executions", usedPercent: null, resetAt: null, windowDurationMins: null, totalTokens: 0, lifetimeTokens: null, todayTokens: null }, ...fields };
 }
 function client(): ControlRoomClient {
-  const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
+  const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], isolation: "worktree", createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }) };
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }) };
 }

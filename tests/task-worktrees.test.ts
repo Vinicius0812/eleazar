@@ -63,6 +63,106 @@ describe("tarefa isolada em worktree", () => {
     await vi.waitFor(() => expect(store.getTask(second.id)?.status).toBe("completed"));
   });
 
+  it("um projeto em modo direto roda na propria pasta, mesmo sendo Git", async () => {
+    const { service, store, repository } = await fixture();
+    const project = service.registerProject({ name: "Repo", path: repository });
+    expect(project.isolation).toBe("worktree");
+    const isolatedTask = service.createTask({ projectId: project.id, title: "Isolada", prompt: "Crie nota.txt" });
+    const runner = writingRunner("nota.txt");
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
+    await executor.start(isolatedTask.id, "codex");
+    await vi.waitFor(() => expect(store.getTask(isolatedTask.id)?.status).toBe("completed"));
+
+    const server = createControlRoomServer(service, executor);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+      const send = (id: string, isolation: string) => fetch(`http://127.0.0.1:${address.port}/api/control-room/projects/${id}/settings`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ isolation }) });
+      expect(await (await send(project.id, "direct")).json()).toMatchObject({ isolation: "direct" });
+      expect((await send(project.id, "qualquer")).status).toBe(400);
+      expect((await send("ausente", "direct")).status).toBe(404);
+    } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+
+    const task = service.createTask({ projectId: project.id, title: "Direta", prompt: "Crie nota.txt" });
+    await executor.start(task.id, "codex");
+    await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
+    expect(runner.requests.at(-1)!.cwd).toBe(repository);
+    expect(existsSync(join(repository, "nota.txt"))).toBe(true);
+    expect(store.getTask(task.id)).toMatchObject({ usesWorktree: false, branch: null });
+    // A task that already owns a worktree keeps its unfinished work there.
+    expect(service.isolatesTask(isolatedTask.id)).toBe(true);
+    const direct = service.registerProject({ name: "Direto", path: await temporary("eleazar-direct-"), isolation: "direct" });
+    expect(store.getProject(direct.id)?.isolation).toBe("direct");
+  });
+
+  it("anuncia a falha de preparo com o motivo do Git e nao deixa restos no repositorio", async () => {
+    const { service, store, repository } = await fixture();
+    await writeFile(join(repository, ".gitattributes"), "*.txt filter=quebrado\n");
+    await writeFile(join(repository, "dados.txt"), "x\n");
+    await git(repository, ["add", "."]);
+    await git(repository, ["commit", "-m", "dados"]);
+    await git(repository, ["config", "filter.quebrado.smudge", "comando-que-nao-existe-eleazar"]);
+    await git(repository, ["config", "filter.quebrado.required", "true"]);
+    const project = service.registerProject({ name: "Repo", path: repository });
+    const task = service.createTask({ projectId: project.id, title: "Falhar", prompt: "Leia" });
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
+    const published: string[] = [];
+    const started = executor.start(task.id, "codex");
+    started.catch(() => undefined);
+    await vi.waitFor(() => expect(store.listExecutions(task.id)).toHaveLength(1));
+    const execution = store.listExecutions(task.id)[0]!;
+    service.onExecutionEvent(execution.id, (event) => published.push(event.kind));
+
+    await expect(started).rejects.toThrow(/A execucao nao foi preparada: git worktree falhou \(codigo 128\): .+/);
+    expect(published).toEqual(["failed"]);
+    expect(store.getExecution(execution.id)).toMatchObject({ status: "failed", summary: expect.stringMatching(/dados\.txt|quebrado|comando-que/) });
+    expect((await git(repository, ["worktree", "list", "--porcelain"])).match(/^worktree /gm)).toHaveLength(1);
+    expect(await git(repository, ["branch", "--list", "eleazar/*"])).toBe("");
+  });
+
+  it("cancelar durante o preparo interrompe o Git e limpa a worktree parcial", async () => {
+    const { service, store, repository } = await fixture();
+    await writeFile(join(repository, ".gitattributes"), "*.txt filter=lento\n");
+    await writeFile(join(repository, "dados.txt"), "x\n");
+    await git(repository, ["add", "."]);
+    await git(repository, ["commit", "-m", "dados"]);
+    await git(repository, ["config", "filter.lento.smudge", "sleep 30"]);
+    const project = service.registerProject({ name: "Repo", path: repository });
+    const task = service.createTask({ projectId: project.id, title: "Cancelar", prompt: "Leia" });
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
+    const started = executor.start(task.id, "codex");
+    started.catch(() => undefined);
+    await vi.waitFor(async () => expect((await git(repository, ["worktree", "list", "--porcelain"])).match(/^worktree /gm)).toHaveLength(2), { timeout: 10_000 });
+    const before = Date.now();
+    executor.cancel(store.listExecutions(task.id)[0]!.id);
+    await expect(started).rejects.toThrow("cancelada durante a preparacao");
+    expect(Date.now() - before).toBeLessThan(15_000);
+    expect(store.getTask(task.id)).toMatchObject({ status: "cancelled", dispatchLease: null });
+    expect((await git(repository, ["worktree", "list", "--porcelain"])).match(/^worktree /gm)).toHaveLength(1);
+    expect(await git(repository, ["branch", "--list", "eleazar/*"])).toBe("");
+  }, 40_000);
+
+  it.runIf(process.platform === "win32")("cria e le arquivos cujo caminho passa do limite do Windows", async () => {
+    const { service, store, repository } = await fixture();
+    const name = `${"pasta-".repeat(12)}/${"longa-".repeat(12)}/${"arquivo-".repeat(8)}.md`;
+    const hash = (await git(repository, ["rev-parse", "HEAD:README.md"])).trim();
+    // Straight into the index, because the test's own checkout would also exceed the limit.
+    await git(repository, ["update-index", "--add", "--cacheinfo", `100644,${hash},${name}`]);
+    await git(repository, ["commit", "-m", "caminho longo"]);
+    const project = service.registerProject({ name: "Repo", path: repository });
+    const task = service.createTask({ projectId: project.id, title: "Longa", prompt: "Crie nota.txt" });
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
+    await executor.start(task.id, "codex");
+    await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
+    const [worktree] = store.listTaskWorktrees(task.id);
+    expect(join(worktree!.path, name).length).toBeGreaterThan(260);
+    // Without the setting Git would list the long file as deleted.
+    expect(store.listExecutionFiles(store.listExecutions(task.id)[0]!.id)).toMatchObject([{ path: "nota.txt" }]);
+    const state = await new GitRepositoryPublisher().inspect(worktree!);
+    expect(state.files).toEqual(["nota.txt"]);
+  }, 20_000);
+
   it("uma pasta comum, sem Git, roda direto no lugar e aceita continuacao", async () => {
     const { service, store } = await fixture();
     const folder = await temporary("eleazar-plain-folder-");

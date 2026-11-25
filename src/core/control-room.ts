@@ -17,12 +17,18 @@ export type TaskStatus = (typeof taskStatuses)[number];
 export const taskActions = ["read_project", "create_worktree", "run_tests", "push", "merge", "deploy"] as const;
 export type TaskAction = (typeof taskActions)[number];
 
+/** Where agents work: an isolated worktree per task, or the project's own folders. */
+export const projectIsolations = ["worktree", "direct"] as const;
+export type ProjectIsolation = (typeof projectIsolations)[number];
+
 export interface LocalProject {
   id: string;
   name: string;
   /** Primary directory kept for callers that only understand the original format. */
   path: string;
   directories: LocalProjectDirectory[];
+  /** Plain folders always run in place, whatever this says. */
+  isolation: ProjectIsolation;
   createdAt: string;
 }
 
@@ -291,6 +297,8 @@ export interface NewProject {
   /** Legacy single-directory input. New callers should use directories. */
   path?: string;
   directories?: readonly NewProjectDirectory[];
+  /** Defaults to `worktree`. */
+  isolation?: ProjectIsolation;
 }
 
 export interface NewProjectDirectory {
@@ -314,6 +322,7 @@ export interface ControlRoomStore {
   createProject(project: LocalProject): void;
   getProject(id: string): LocalProject | null;
   listProjects(): LocalProject[];
+  setProjectIsolation(id: string, isolation: ProjectIsolation): LocalProject | null;
   hasActiveDispatchForDirectories(directoryIds: readonly string[], excludingTaskId?: string): boolean;
   createTask(task: ControlRoomTask): void;
   getTask(id: string): ControlRoomTask | null;

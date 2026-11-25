@@ -1,9 +1,10 @@
 import { ArrowLeft, FileCode2, History, Terminal } from "lucide-react";
 
 import { ExecutionSession } from "./ExecutionSession.js";
+import { LoadingOverlay } from "./LoadingOverlay.js";
 import type { ControlRoomClient, ExecutionDetail, ExecutionFileChange, Run, Task } from "../services/contracts.js";
 
-const executionStatus: Record<Run["status"], string> = { planned: "Planejada", running: "Em execução", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada" };
+const executionStatus: Record<Run["status"], string> = { planned: "Preparando", running: "Em execução", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada" };
 
 export function ExecutionResultPage({ client, onSessionChanged, detail, loading, error, onBack, onSelect, onCreateRelated }: {
   client: ControlRoomClient;
@@ -15,7 +16,7 @@ export function ExecutionResultPage({ client, onSessionChanged, detail, loading,
   onSelect(executionId: string): void;
   onCreateRelated(task: Task): void;
 }) {
-  if (loading) return <main className="execution-page"><div className="empty">Carregando resultado da execução…</div></main>;
+  if (loading) return <main className="execution-page"><div className="loading-area page"><LoadingOverlay label="Carregando resultado da execução…" /></div></main>;
   if (!detail) return <main className="execution-page"><button className="text-button" onClick={onBack}><ArrowLeft size={16} /> Voltar ao painel</button><div className="error" role="alert">{error || "A execução não foi encontrada."}</div></main>;
   const { execution, task, project, history, files } = detail;
   const directories = new Map(project.directories.map((directory) => [directory.id, directory.name]));
@@ -76,7 +77,8 @@ function FileChangeCard({ file }: { file: ExecutionFileChange }) {
 function label(kind: ExecutionFileChange["kind"]): string { return ({ added: "Adicionado", modified: "Alterado", deleted: "Removido", untracked: "Não rastreado", preexisting: "Preexistente" })[kind]; }
 function formatDate(value: string | null): string { return value ? new Date(value).toLocaleString("pt-BR") : "Não informado"; }
 function duration(execution: Run): string {
-  if (!execution.startedAt || !execution.finishedAt) return "Em andamento";
+  if (!execution.startedAt) return execution.finishedAt ? "Não iniciada" : "Ainda não iniciada";
+  if (!execution.finishedAt) return "Em andamento";
   const milliseconds = Math.max(0, new Date(execution.finishedAt).getTime() - new Date(execution.startedAt).getTime());
   return `${(milliseconds / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} s`;
 }

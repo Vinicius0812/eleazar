@@ -3,6 +3,7 @@ import { Copy, PlugZap, RefreshCw } from "lucide-react";
 
 import type { ProviderPreferencesPatch, ProviderStatus } from "../services/contracts.js";
 import { AgentGlyph } from "./AgentGlyph.js";
+import { LoadingOverlay } from "./LoadingOverlay.js";
 
 type Tone = "completed" | "failed" | "waiting_approval" | "queued";
 
@@ -39,8 +40,9 @@ export function ProvidersPage({ providers, loading, error, pending, onRefresh, o
         <button className="secondary" onClick={onRefresh} disabled={loading || pending !== null}><RefreshCw size={16} className={loading ? "spinning" : ""} aria-hidden="true" /> Atualizar status</button>
       </div>
       {error && <div className="error" role="alert">{error}</div>}
-      {!providers.length && <div className="empty" role="status">{loading ? "Consultando os provedores…" : "Nenhum provedor registrado."}</div>}
-      <div className="provider-cards">
+      {!providers.length && !loading && <div className="empty" role="status">Nenhum provedor registrado.</div>}
+      <div className={`provider-cards loading-host${loading && !providers.length ? " loading-area" : ""}`}>
+        {loading && <LoadingOverlay label="Consultando os provedores…" />}
         {providers.map((status) => (
           <ProviderCard key={status.provider} status={status} busy={pending !== null || loading} verifying={pending === status.provider} onVerify={onVerify} onChange={onChange} />
         ))}
@@ -56,7 +58,8 @@ function ProviderCard({ status, busy, verifying, onVerify, onChange }: { status:
   const models = verification?.models ?? [];
   const savedModel = preferences.defaultModel;
   return (
-    <article className="panel provider-card" aria-labelledby={`provider-${provider}`}>
+    <article className="panel provider-card loading-host" aria-labelledby={`provider-${provider}`}>
+      {verifying && <LoadingOverlay label={`Aguardando o ${label}…`} />}
       <header>
         <AgentGlyph provider={provider} size={22} />
         <h2 id={`provider-${provider}`}>{label}</h2>

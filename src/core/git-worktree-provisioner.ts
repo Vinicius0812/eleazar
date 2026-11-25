@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
 
 import type { ControlRoomTask, LocalProject, LocalProjectDirectory, TaskWorktree } from "./control-room.js";
 import type { WorktreeProvisioner } from "./control-room-service.js";
@@ -14,9 +13,9 @@ import type { WorktreeProvisioner } from "./control-room-service.js";
  */
 export class GitWorktreeProvisioner implements WorktreeProvisioner {
   private readonly root: string;
-  constructor(root: string, private readonly run: GitRunner = runGit) { this.root = resolve(root); }
+  constructor(root: string, private readonly run: GitRunner) { this.root = resolve(root); }
 
-  async prepare(_project: LocalProject, task: ControlRoomTask, directories: readonly LocalProjectDirectory[]): Promise<TaskWorktree[]> {
+  async prepare(_project: LocalProject, task: ControlRoomTask, directories: readonly LocalProjectDirectory[], signal?: AbortSignal): Promise<TaskWorktree[]> {
     const branch = taskBranchName(task);
     const taskRoot = join(this.root, safePathSegment(task.id));
     await mkdir(taskRoot, { recursive: true });
@@ -28,10 +27,15 @@ export class GitWorktreeProvisioner implements WorktreeProvisioner {
       catch { throw new Error(`O repositorio ${directory.name} ainda nao tem commits; crie um commit inicial para isolar a tarefa em uma branch.`); }
       if (!existsSync(join(target, ".git"))) {
         const branchExists = await this.run(directory.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).then(() => true, () => false);
+        const targetExisted = existsSync(target);
         const emptyHooksDirectory = await mkdtemp(join(tmpdir(), "eleazar-empty-git-hooks-"));
         try {
           await this.run(directory.path, ["-c", `core.hooksPath=${emptyHooksDirectory}`, "worktree", "add",
-            ...(branchExists ? [target, branch] : ["-b", branch, target, baseCommit])]);
+            ...(branchExists ? [target, branch] : ["-b", branch, target, baseCommit])], signal);
+        } catch (error) {
+          // A partial checkout would be mistaken for a ready worktree by the next attempt.
+          await this.discard(directory.path, target, targetExisted, branchExists ? null : { branch, baseCommit });
+          throw error;
         } finally {
           await rm(emptyHooksDirectory, { recursive: true, force: true });
         }
@@ -39,6 +43,21 @@ export class GitWorktreeProvisioner implements WorktreeProvisioner {
       worktrees.push({ taskId: task.id, directoryId: directory.id, path: target, branch, baseCommit, createdAt: new Date().toISOString() });
     }
     return worktrees;
+  }
+
+  /** Undoes only what a failed attempt created. Best effort: the original error is what matters to the operator. */
+  private async discard(source: string, target: string, targetExisted: boolean, created: { branch: string; baseCommit: string } | null): Promise<void> {
+    const attempt = (args: readonly string[]) => this.run(source, args).catch(() => undefined);
+    if (!targetExisted) {
+      // Forced twice, because Git keeps a worktree locked while it is being created.
+      const remove = ["worktree", "remove", "--force", "--force", target];
+      await attempt(remove);
+      await rm(target, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+      // Drops only this worktree's record; `prune` would also drop the user's own offline worktrees.
+      await attempt(remove);
+    }
+    // Git deletes the branch only while it still points at the commit it was created from.
+    if (created) await attempt(["update-ref", "-d", `refs/heads/${created.branch}`, created.baseCommit]);
   }
 
   /** Git itself refuses to remove a worktree with uncommitted changes; the branch is kept. */
@@ -49,23 +68,12 @@ export class GitWorktreeProvisioner implements WorktreeProvisioner {
   }
 }
 
-export type GitRunner = (cwd: string, args: readonly string[]) => Promise<string>;
+export type GitRunner = (cwd: string, args: readonly string[], signal?: AbortSignal) => Promise<string>;
 
 /** `eleazar/<titulo>-<id curto>`: readable, unique per task and always a valid ref name. */
 export function taskBranchName(task: Pick<ControlRoomTask, "id" | "title">): string {
   return `eleazar/${slug(task.title, 40)}-${slug(task.id, 8)}`;
 }
-
-const runGit: GitRunner = (cwd, args) => {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", ["-C", cwd, ...args], { shell: false, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-    let output = "";
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => { output += chunk; });
-    child.once("error", reject);
-    child.once("exit", (code) => code === 0 ? resolvePromise(output) : reject(new Error(`git ${args.find((item) => !item.startsWith("-") && !item.includes("=")) ?? ""} falhou (codigo ${code ?? "desconhecido"}).`)));
-  });
-};
 
 function slug(value: string, maxLength: number): string {
   const text = value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase()

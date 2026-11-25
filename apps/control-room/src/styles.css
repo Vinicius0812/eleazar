@@ -72,9 +72,68 @@ button {
   cursor: pointer;
   border: 0;
 }
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
 button:disabled {
-  cursor: wait;
   opacity: 0.55;
+}
+.loading-host,
+.loading-area {
+  position: relative;
+}
+.loading-area {
+  min-height: 140px;
+}
+.loading-area.page {
+  min-height: 50vh;
+}
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  color: var(--text-strong);
+  cursor: progress;
+  /* Short waits end before the overlay becomes visible. */
+  animation: loading-appear 0.2s ease-out 0.15s both;
+}
+.loading-overlay > span {
+  position: sticky;
+  top: 40vh;
+  bottom: 40px;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 14px;
+}
+/* Nothing is behind it yet, so there is nothing to flash over. */
+.loading-area > .loading-overlay {
+  animation: none;
+}
+/* A dialog scrolls, so its overlay covers the window instead of the first screen of the form. */
+dialog > .loading-overlay {
+  position: fixed;
+  border-radius: 0;
+}
+dialog > .loading-overlay > span {
+  bottom: auto;
+}
+@keyframes loading-appear {
+  from {
+    opacity: 0;
+  }
 }
 a {
   color: inherit;
@@ -473,6 +532,18 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.project-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.project-isolation {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .project-card {
   text-align: left;

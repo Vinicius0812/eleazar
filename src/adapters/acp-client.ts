@@ -6,6 +6,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import * as acp from "@agentclientprotocol/sdk";
 
+import { gitEnvironment } from "../core/git-environment.js";
 import { terminateProcessTree } from "./process-tree.js";
 import type { AgentRunRequest, AgentRunResult, ProviderName, TokenUsage } from "../core/contracts.js";
 
@@ -135,7 +136,7 @@ export class AcpClient {
     const { command, args } = this.deps.launch(runtime);
     const child = spawn(command, args, {
       cwd: request.cwd, stdio: "pipe", shell: false, windowsHide: true,
-      detached: process.platform !== "win32", env: this.deps.environment(runtime)
+      detached: process.platform !== "win32", env: gitEnvironment(this.deps.environment(runtime))
     });
     child.stderr.resume();
     const stream = acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);

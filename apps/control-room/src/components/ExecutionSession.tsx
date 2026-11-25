@@ -2,6 +2,7 @@ import { Ban, MessageSquare, ShieldQuestion, Terminal } from "lucide-react";
 
 import { AgentConversation } from "./AgentConversation.js";
 import { AgentMarkdown } from "./AgentMarkdown.js";
+import { LoadingOverlay } from "./LoadingOverlay.js";
 import { useExecutionSession, type ConnectionState } from "./useExecutionSession.js";
 import { terminalEventKinds, type ControlRoomClient, type ExecutionDetail, type ExecutionEvent, type ExecutionPermission } from "../services/contracts.js";
 import { readableSummary } from "../services/run-messages.js";
@@ -32,10 +33,10 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
 }) {
   const session = useExecutionSession(client, executionId, onChanged, retryDelayMs);
   const { detail, permissions, items, plan, connection, error, actionError, pendingAction } = session;
+  if (!detail && connection !== "error") return <div className="loading-area"><LoadingOverlay label="Carregando sessão…" /></div>;
   if (!detail) {
-    return <div className={connection === "error" ? "error" : "empty"} role={connection === "error" ? "alert" : "status"}>
-      {connection === "error" ? error || "Não foi possível carregar a sessão." : "Carregando sessão…"}
-      {connection === "error" && <> <button className="text-button" onClick={session.retry}>Tentar novamente</button></>}
+    return <div className="error" role="alert">
+      {error || "Não foi possível carregar a sessão."} <button className="text-button" onClick={session.retry}>Tentar novamente</button>
     </div>;
   }
   const { execution, task } = detail;
@@ -44,7 +45,8 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
   const active = (execution.status === "running" || execution.status === "planned") && !settled;
   const pending = permissions.filter((permission) => permission.status === "pending");
   const decided = permissions.filter((permission) => permission.status !== "pending");
-  const hasEvents = session.events.length > 0;
+  const preparing = active && execution.status === "planned" && !session.events.some((event) => event.kind === "started");
+  const hasEvents = session.events.some((event) => event.kind !== "started");
   // Persisted fallback for runs without streamed text (legacy history or a reload). For a failed or
   // cancelled run it is kept as partial output, unless it merely repeats the reason shown above.
   const persisted = execution.output?.trim() || "";
@@ -52,7 +54,9 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
     ? (persisted && !repeatsReason(persisted, outcome.message) ? persisted : "")
     : persisted || execution.summary?.trim() || "";
   const body = !active && !items.some((item) => item.kind === "message") ? persistedBody : "";
-  const waiting = !active ? null : pending.length ? "O agente aguarda a sua decisão para continuar."
+  const waiting = !active ? null : preparing
+    ? task.usesWorktree ? "Criando a worktree da tarefa. Em repositórios grandes isso pode levar alguns minutos." : "Preparando a execução…"
+    : pending.length ? "O agente aguarda a sua decisão para continuar."
     : hasEvents ? "O agente está trabalhando…" : "Aguardando a primeira resposta do agente…";
 
   return (
@@ -64,7 +68,7 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
         </article>
       )}
       <div className="session-status" role="status" aria-live="polite">
-        <span className={`connection-pill ${connection}`}>{connectionCopy[connection]}</span>
+        <span className={`connection-pill ${connection}`}>{preparing && (connection === "connecting" || connection === "live") ? "Preparando…" : connectionCopy[connection]}</span>
         {execution.model && <span className="provider-tag">{execution.model}</span>}
         {execution.transport === "legacy" && <span className="provider-tag">Legado</span>}
         {active && (
