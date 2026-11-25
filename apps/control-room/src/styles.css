@@ -2498,8 +2498,14 @@ select,
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.conversation-tools li {
+  position: relative;
+  padding-left: 21px;
+}
 .conversation-tools svg {
-  align-self: center;
+  position: absolute;
+  top: 3px;
+  left: 0;
   color: var(--text-muted);
 }
 .conversation-tools strong {

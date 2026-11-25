@@ -59,6 +59,11 @@ export function AgentConversation({ provider, items, plan, active, waiting, chil
   );
 }
 
+/** Some agents already put the full path in the title. */
+function extraLocations(tool: ToolActivity): string[] {
+  return tool.locations.filter((path) => !tool.title.includes(path));
+}
+
 function ToolGroup({ tools }: { tools: ToolActivity[] }) {
   return (
     <ul className="conversation-tools" aria-label="Atividade de ferramentas">
@@ -66,7 +71,7 @@ function ToolGroup({ tools }: { tools: ToolActivity[] }) {
         <Wrench size={13} aria-hidden="true" />
         <strong>{tool.title}</strong>
         {tool.status && <span className={`tool-status ${tool.status}`}>{toolStatusCopy[tool.status] ?? tool.status}</span>}
-        {tool.locations.length > 0 && <small>{tool.locations.join(", ")}</small>}
+        {extraLocations(tool).length > 0 && <small>{extraLocations(tool).join(", ")}</small>}
       </li>)}
     </ul>
   );

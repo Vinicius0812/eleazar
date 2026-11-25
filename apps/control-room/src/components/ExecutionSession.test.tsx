@@ -68,6 +68,14 @@ describe("ExecutionSession", () => {
     expect(steps[2]).toContain("Pronto.");
   });
 
+  it("does not repeat a path the tool title already shows", async () => {
+    const path = "C:\P\a.ts";
+    const done = detail({ status: "completed", events: [event(1, "tool_call", { toolCallId: "t1", title: `Read file '${path}'`, status: "completed", locations: [path, "C:\P\b.ts"] }), event(2, "completed", {})] });
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => done })} executionId="run-1" />);
+    expect(await screen.findByText("C:\P\b.ts")).toBeInTheDocument();
+    expect(screen.getAllByText(/a.ts/)).toHaveLength(1);
+  });
+
   it("starts a new message when the agent changes the message id", () => {
     const { items } = deriveSession([
       event(1, "agent_message_chunk", { text: "A", messageId: "m1" }), event(2, "agent_message_chunk", { text: "B", messageId: "m1" }),
