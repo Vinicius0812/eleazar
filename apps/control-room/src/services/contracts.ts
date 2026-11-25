@@ -29,7 +29,7 @@ export function isLiveExecution(task: Task, run: Run): boolean {
 }
 export interface ExecutionPermissionOption { id: string; name: string; kind: string; }
 export interface ExecutionPermission { id: string; executionId: string; toolCallId: string; title: string; toolKind: string | null; toolName: string | null; locations: string[]; requiresElevation: boolean; options: ExecutionPermissionOption[]; status: "pending" | "selected" | "cancelled"; selectedOptionId: string | null; createdAt: string; resolvedAt: string | null; }
-export type AcpProvider = "codex" | "claude";
+export type AcpProvider = "codex" | "claude" | "antigravity";
 /** Operational catalog of an ACP provider. `capabilities` is optional and only present when the backend announces it. */
 export interface ProviderConfig { directoryId: string; runtime: { path: string; version: string; source: string }; protocolVersion: number; settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean"; currentValue: string | boolean; options: Array<{ id: string; name: string }> }>; models: Array<{ id: string; name: string }>; defaultModel: string | null; capabilities?: { loadSession?: boolean }; }
 /** Kept for compatibility with the original Codex-only catalog. */

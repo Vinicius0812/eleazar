@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
 import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
-import { isAutomaticProvider, isProviderName, taskKinds } from "../core/contracts.js";
+import { isAutomaticProvider, isProviderName, taskKinds, type ProviderName } from "../core/contracts.js";
 import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
 import type { OutboundActionService } from "../core/outbound-actions.js";
@@ -42,12 +42,12 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (!providers) return json(response, 200, []);
     return json(response, 200, await providers.list(url.searchParams.get("refresh") === "true"));
   }
-  const providerConfigMatch = /^\/api\/control-room\/providers\/(codex|claude)\/config$/.exec(url.pathname);
+  const providerConfigMatch = /^\/api\/control-room\/providers\/(codex|claude|antigravity)\/config$/.exec(url.pathname);
   if (method === "GET" && providerConfigMatch?.[1]) {
     if (!executor) throw new Error("Executor ACP nao configurado.");
     const directoryId = url.searchParams.get("directoryId");
     if (!directoryId) throw new Error("Informe directoryId para o catalogo ACP.");
-    return json(response, 200, await executor.providerConfig(providerConfigMatch[1] as "codex" | "claude", directoryId));
+    return json(response, 200, await executor.providerConfig(providerConfigMatch[1] as ProviderName, directoryId));
   }
   const eventsMatch = /^\/api\/control-room\/executions\/([^/]+)\/events$/.exec(url.pathname);
   if (method === "GET" && eventsMatch?.[1]) {

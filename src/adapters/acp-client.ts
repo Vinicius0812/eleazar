@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
@@ -9,6 +10,8 @@ import { terminateProcessTree } from "./process-tree.js";
 import type { AgentRunRequest, AgentRunResult, ProviderName, TokenUsage } from "../core/contracts.js";
 
 export interface AcpRuntime { path: string; version: string; source: string; }
+/** Executable and fixed arguments of the ACP server. Never built from user input. */
+export interface AcpLaunch { command: string; args: readonly string[]; }
 export interface AcpSessionInfo {
   runtime: AcpRuntime;
   protocolVersion: number;
@@ -19,10 +22,18 @@ export interface AcpSessionInfo {
   configOptions: acp.SessionConfigOption[];
 }
 
+/** How long to wait for the agent to confirm the required mode after session/set_mode. */
+const modeConfirmationMs = 2_000;
+
+/** Launch of a JavaScript ACP bridge with the current Node executable. */
+export function nodeAcpLaunch(entryPath: string | (() => string)): AcpLaunch {
+  return { command: process.execPath, args: [typeof entryPath === "string" ? entryPath : entryPath()] };
+}
+
 /** One process per turn. Policy and runtime selection remain provider-owned. */
 export class AcpClient {
   constructor(private readonly provider: ProviderName, private readonly deps: {
-    entryPath: string | (() => string);
+    launch: (runtime: AcpRuntime) => AcpLaunch;
     resolveRuntime: () => Promise<AcpRuntime>;
     environment: (runtime: AcpRuntime) => NodeJS.ProcessEnv;
     requiredMode: string;
@@ -118,8 +129,8 @@ export class AcpClient {
     turn: TurnState = { active: false }
   ): Promise<T> {
     const runtime = await this.deps.resolveRuntime();
-    const entryPath = typeof this.deps.entryPath === "string" ? this.deps.entryPath : this.deps.entryPath();
-    const child = spawn(process.execPath, [entryPath], {
+    const { command, args } = this.deps.launch(runtime);
+    const child = spawn(command, args, {
       cwd: request.cwd, stdio: "pipe", shell: false, windowsHide: true,
       detached: process.platform !== "win32", env: this.deps.environment(runtime)
     });
@@ -136,7 +147,7 @@ export class AcpClient {
         const live = () => turn.active && !request.signal?.aborted;
         if (!live()) return cancelled;
         const options = params.options.map((item) => ({ id: item.optionId, name: item.name, kind: item.kind }));
-        const rawLocations = params.toolCall.locations ?? [];
+        const rawLocations = (params.toolCall.locations ?? []).map((item) => ({ path: localPath(item.path) }));
         const locations = rawLocations.slice(0, 20).map((item) => item.path.slice(0, 500));
         const roots = [request.cwd, ...(request.additionalDirectories ?? [])];
         if (this.deps.strictFileScope &&
@@ -239,12 +250,22 @@ async function ensureRequiredMode(
   }
   if (session.modes.currentModeId === requiredMode) return session;
   await agent.request(acp.methods.agent.session.setMode, { sessionId: session.sessionId, modeId: requiredMode });
-  const options = observedOptions();
-  const mode = options?.find((item) => item.type === "select" && (item.category === "mode" || item.id === "mode"));
-  if (!options || !mode || mode.type !== "select" || mode.currentValue !== requiredMode) {
-    throw new Error(`${provider} ACP nao confirmou modo ${requiredMode}.`);
+  // Some agents (agy) answer session/set_mode before emitting the config update that confirms it.
+  const deadline = Date.now() + modeConfirmationMs;
+  for (;;) {
+    const options = observedOptions();
+    const mode = options?.find((item) => item.type === "select" && (item.category === "mode" || item.id === "mode"));
+    if (options && mode?.type === "select" && mode.currentValue === requiredMode) {
+      return { ...session, modes: { ...session.modes, currentModeId: requiredMode }, configOptions: options };
+    }
+    if (Date.now() >= deadline) throw new Error(`${provider} ACP nao confirmou modo ${requiredMode}.`);
+    await delay(20);
   }
-  return { ...session, modes: { ...session.modes, currentModeId: requiredMode }, configOptions: options };
+}
+
+/** agy reports Windows paths in URI form ("/C:/dir/file"), which Node would not match against the roots. */
+export function localPath(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" && /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path;
 }
 
 function pathWithinRoots(path: string, roots: string[]): boolean {
@@ -272,10 +293,10 @@ function parseUsage(value: unknown): TokenUsage | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   const count = (name: string) => typeof raw[name] === "number" && Number.isSafeInteger(raw[name]) && (raw[name] as number) >= 0 ? raw[name] as number : undefined;
-  const input = count("inputTokens"), output = count("outputTokens"), cacheRead = count("cachedReadTokens"), total = count("totalTokens");
-  if ([input, output, cacheRead, total].every((item) => item === undefined)) return undefined;
+  const input = count("inputTokens"), output = count("outputTokens"), thinking = count("thoughtTokens"), cacheRead = count("cachedReadTokens"), total = count("totalTokens");
+  if ([input, output, thinking, cacheRead, total].every((item) => item === undefined)) return undefined;
   return { ...(input === undefined ? {} : { input }), ...(output === undefined ? {} : { output }),
-    ...(cacheRead === undefined ? {} : { cacheRead }), ...(total === undefined ? {} : { total }) };
+    ...(thinking === undefined ? {} : { thinking }), ...(cacheRead === undefined ? {} : { cacheRead }), ...(total === undefined ? {} : { total }) };
 }
 
 async function openSession(agent: acp.ClientContext, capabilities: acp.AgentCapabilities, cwd: string, sessionId?: string, additionalDirectories: string[] = [], sessionMeta?: Record<string, unknown>): Promise<acp.NewSessionResponse> {

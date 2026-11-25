@@ -1,4 +1,4 @@
-import { AcpClient, type AcpSessionInfo } from "./acp-client.js";
+import { AcpClient, nodeAcpLaunch, type AcpSessionInfo } from "./acp-client.js";
 import { claudeAcpEntry, claudeAcpEnvironment, resolveClaudeRuntime, type ClaudeRuntime } from "./claude-runtime.js";
 
 export type ClaudeAcpSessionInfo = AcpSessionInfo & { runtime: ClaudeRuntime };
@@ -9,7 +9,8 @@ export class ClaudeAcpClient extends AcpClient {
     entryPath: claudeAcpEntry, resolveRuntime: resolveClaudeRuntime
   }) {
     super("claude", {
-      ...deps,
+      resolveRuntime: deps.resolveRuntime,
+      launch: () => nodeAcpLaunch(deps.entryPath),
       requiredMode: "default",
       strictFileScope: true,
       environment: (runtime) => claudeAcpEnvironment(runtime.path),

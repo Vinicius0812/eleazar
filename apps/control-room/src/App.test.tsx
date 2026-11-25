@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
-import type { ControlRoomClient, ControlRoomSnapshot, ExecutionDetail } from "./services/contracts.js";
+import type { AcpProvider, ControlRoomClient, ControlRoomSnapshot, ExecutionDetail } from "./services/contracts.js";
 
 afterEach(() => {
   cleanup();
@@ -163,6 +163,24 @@ describe("Task workspace", () => {
     expect(await screen.findByLabelText("Modelo")).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "Executar agora" }));
     expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
+  });
+
+  it("loads the Antigravity catalog and sends the selected model", async () => {
+    window.location.hash = "#/tasks/task-9";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, id: "task-9", status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    const config = vi.spyOn(controlled, "getProviderConfig").mockImplementation(async (provider) => catalog(provider, "1.5.9", ["gemini-4-neon"], null, true));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    await user.selectOptions(screen.getByLabelText("Provedor"), "antigravity");
+    await user.selectOptions(await screen.findByLabelText("Modelo"), "gemini-4-neon");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(config).toHaveBeenCalledWith("antigravity", queued.targetDirectoryId);
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "antigravity", { model: "gemini-4-neon" });
   });
 
   it("offers resume only for the same provider, scope and announced loadSession", async () => {
@@ -491,7 +509,7 @@ describe("Control Room routes", () => {
   });
 });
 
-function catalog(provider: "codex" | "claude", version: string, models: string[], defaultModel: string | null, loadSession?: boolean) {
+function catalog(provider: AcpProvider, version: string, models: string[], defaultModel: string | null, loadSession?: boolean) {
   return { directoryId: "directory-1", runtime: { path: provider, version, source: "path" }, protocolVersion: 1, settings: [], models: models.map((id) => ({ id, name: id })), defaultModel, ...(loadSession === undefined ? {} : { capabilities: { loadSession } }) };
 }
 

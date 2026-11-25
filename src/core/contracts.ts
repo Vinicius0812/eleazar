@@ -92,7 +92,7 @@ export interface AgentAdapter {
 
 /** Stable provider-neutral catalog returned by the local Control Room API. */
 export interface ProviderConfig {
-  provider?: "codex" | "claude";
+  provider?: ProviderName;
   directoryId: string;
   runtime: { path: string; version: string; source: string };
   protocolVersion: number;
