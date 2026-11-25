@@ -1,8 +1,10 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ExecutionSession } from "./ExecutionSession.js";
+import { PreviousTurns } from "./PreviousTurns.js";
+import { deriveSession } from "./useExecutionSession.js";
 import type { ControlRoomClient, EventStreamOptions, ExecutionDetail, ExecutionEvent, ExecutionPermission } from "../services/contracts.js";
 
 afterEach(cleanup);
@@ -46,6 +48,80 @@ describe("ExecutionSession", () => {
     emit(event(5, "agent_message_chunk", { text: " e mais" }));
     expect(await screen.findByText(/e mais/)).toBeInTheDocument();
     finish(true);
+  });
+
+  it("keeps agent messages and tool calls in the order they happened", async () => {
+    const done = detail({ status: "completed", events: [
+      event(1, "agent_message_chunk", { text: "Vou ler " }), event(2, "agent_message_chunk", { text: "o arquivo." }),
+      event(3, "tool_call", { toolCallId: "t1", title: "Ler a.ts", status: "pending", locations: ["C:\\P\\a.ts"] }),
+      event(4, "agent_message_chunk", { text: "\n\n" }),
+      event(5, "tool_call", { toolCallId: "t2", title: "Editar b.ts", status: "pending", locations: [] }),
+      event(6, "tool_call_update", { toolCallId: "t1", title: null, status: "completed", locations: [] }),
+      event(7, "agent_message_chunk", { text: "Pronto." }), event(8, "completed", {})
+    ] });
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => done })} executionId="run-1" />);
+    const log = await screen.findByRole("log", { name: "Conversa com o agente" });
+    const steps = [...log.children].map((step) => step.textContent);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain("Vou ler o arquivo.");
+    expect(steps[1]).toMatch(/Ler a\.tsConcluída.*a\.ts.*Editar b\.tsPendente/);
+    expect(steps[2]).toContain("Pronto.");
+  });
+
+  it("starts a new message when the agent changes the message id", () => {
+    const { items } = deriveSession([
+      event(1, "agent_message_chunk", { text: "A", messageId: "m1" }), event(2, "agent_message_chunk", { text: "B", messageId: "m1" }),
+      event(3, "agent_message_chunk", { text: "C", messageId: "m2" })
+    ]);
+    expect(items.map((item) => item.kind === "message" && item.text)).toEqual(["AB", "C"]);
+  });
+
+  it("shows only the latest plan with its progress", async () => {
+    const running = detail({ events: [
+      event(1, "plan", { entries: [{ content: "Passo antigo", status: "pending" }] }),
+      event(2, "plan", { entries: [{ content: "Ler o código", status: "completed" }, { content: "Escrever testes", status: "in_progress" }] })
+    ] });
+    render(<ExecutionSession client={fakeClient({ getExecutionDetail: async () => running, streamExecutionEvents: () => new Promise<boolean>(() => undefined) })} executionId="run-1" />);
+    expect(await screen.findByText("Escrever testes")).toBeInTheDocument();
+    expect(screen.getByText("1 de 2")).toBeInTheDocument();
+    expect(screen.queryByText("Passo antigo")).not.toBeInTheDocument();
+    expect(screen.getByText("O agente está trabalhando…")).toBeInTheDocument();
+  });
+
+  it("follows live text to the end until the operator scrolls up", async () => {
+    let emit: (e: ExecutionEvent) => void = () => undefined;
+    const client = fakeClient({ streamExecutionEvents: (_id: string, options: EventStreamOptions) => new Promise<boolean>(() => { emit = options.onEvent; }) });
+    render(<ExecutionSession client={client} executionId="run-1" />);
+    const log = await screen.findByRole("log");
+    await screen.findByText("Conectando ao agente…");
+    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 200 });
+    emit(event(1, "agent_message_chunk", { text: "Um" }));
+    await screen.findByText("Um");
+    expect(log.scrollTop).toBe(1_000);
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    emit(event(2, "agent_message_chunk", { text: " dois" }));
+    await screen.findByText("Um dois");
+    expect(log.scrollTop).toBe(100);
+    await userEvent.click(screen.getByRole("button", { name: "Ir para o fim" }));
+    expect(log.scrollTop).toBe(1_000);
+    expect(screen.queryByRole("button", { name: "Ir para o fim" })).not.toBeInTheDocument();
+  });
+
+  it("loads an earlier turn only when it is opened", async () => {
+    const first = detail({ status: "completed", events: [event(1, "agent_message_chunk", { text: "Resposta do turno 1" }), event(2, "completed", {})] });
+    const getExecutionDetail = vi.fn(async () => first);
+    render(<PreviousTurns client={fakeClient({ getExecutionDetail })} runs={[first.execution, { ...first.execution, id: "run-2", prompt: "Agora corrija o teste" }]} />);
+    expect(screen.getByText("Pedido original")).toBeInTheDocument();
+    expect(screen.getByText("Agora corrija o teste")).toBeInTheDocument();
+    expect(getExecutionDetail).not.toHaveBeenCalled();
+    const turn = screen.getByText("Turno 1").closest("details")!;
+    turn.open = true;
+    fireEvent(turn, new Event("toggle"));
+    expect(await screen.findByText("Resposta do turno 1")).toBeInTheDocument();
+    expect(getExecutionDetail).toHaveBeenCalledTimes(1);
+    expect(getExecutionDetail).toHaveBeenCalledWith("run-1");
   });
 
   it("replays from the last event id after a dropped stream without duplicating text, and stops after a terminal event", async () => {

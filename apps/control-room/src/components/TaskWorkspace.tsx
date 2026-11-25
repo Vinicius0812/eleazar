@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ArrowLeft, MessageSquare, Terminal } from "lucide-react";
 
+import { PreviousTurns } from "./PreviousTurns.js";
 import { ExecutionSession } from "./ExecutionSession.js";
 import { isLiveExecution, type ControlRoomClient, type LogEntry, type Run, type Task } from "../services/contracts.js";
 
@@ -14,7 +15,7 @@ const statusCopy: Record<Task["status"], string> = {
   cancelled: "A tarefa foi cancelada.",
 };
 
-export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, latestLog, failure, actions, followUp, publishing }: {
+export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, previousRuns = [], latestLog, failure, actions, followUp, publishing }: {
   client: ControlRoomClient;
   onSessionChanged?: () => void;
   task: Task;
@@ -23,6 +24,8 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
   directoryName: string;
   scopeNames: string;
   run: Run | undefined;
+  /** Earlier turns of the task, oldest first. */
+  previousRuns?: Run[];
   latestLog: LogEntry | undefined;
   failure: string | undefined;
   actions: ReactNode;
@@ -45,7 +48,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           <time dateTime={task.createdAt}>{new Date(task.createdAt).toLocaleString("pt-BR")}</time>
         </div>
         <p className="task-request-text">{task.prompt}</p>
-        {run?.prompt && <div className="task-follow-up-message"><strong>Última mensagem enviada</strong><p className="task-request-text">{run.prompt}</p></div>}
+        {run?.prompt && !showSession && <div className="task-follow-up-message"><strong>Última mensagem enviada</strong><p className="task-request-text">{run.prompt}</p></div>}
         <details className="task-context">
           <summary>Contexto da tarefa</summary>
           <dl>
@@ -57,6 +60,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           </dl>
         </details>
       </article>
+      {previousRuns.length > 0 && <PreviousTurns client={client} runs={previousRuns} />}
       <article className="task-turn task-agent" aria-labelledby="task-agent-title">
         <div className="task-turn-heading">
           <Terminal size={17} aria-hidden="true" />
@@ -75,7 +79,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
             <p>{latestLog.message}</p>
           </div>
         )}
-        {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={false} showOutcome={!failure} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
+        {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={Boolean(run.prompt)} showOutcome={!failure} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
         {followUp}
         <div className="task-next-actions">
           <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>

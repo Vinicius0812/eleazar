@@ -2445,3 +2445,125 @@ select,
   padding-inline: 0;
   font-size: 12px;
 }
+
+/* Conversation with the agent: messages and tool activity in the order they happened. */
+.conversation {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.conversation-log {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.conversation.bounded .conversation-log {
+  max-height: min(64vh, 680px);
+  padding: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.conversation-message {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  color: var(--accent);
+}
+.conversation-message > .agent-glyph {
+  margin-top: 3px;
+}
+.conversation-message .markdown-output,
+.task-agent .conversation-message .markdown-output {
+  padding: 0;
+}
+.conversation-tools {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 0 28px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--border-strong);
+  list-style: none;
+  color: var(--text);
+  font-size: 13px;
+}
+.conversation-tools li,
+.conversation-plan li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 9px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.conversation-tools svg {
+  align-self: center;
+  color: var(--text-muted);
+}
+.conversation-tools strong {
+  font-weight: 600;
+}
+.conversation-tools small {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+.conversation-plan {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-size: 13px;
+}
+.conversation-plan summary {
+  cursor: pointer;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.conversation-plan summary svg {
+  vertical-align: -2px;
+}
+.conversation-plan ol {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.conversation-follow {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  box-shadow: 0 4px 14px rgba(29, 44, 73, .16);
+}
+.result-document .execution-session {
+  padding: 0 20px 20px;
+}
+.previous-turn {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+.previous-turn:last-child {
+  padding-bottom: 0;
+}
+.previous-turn summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.previous-turn-message {
+  margin: 0 10px;
+  overflow-wrap: anywhere;
+}
+.previous-turn summary small {
+  color: var(--text-muted);
+}
+:root[data-theme="dark"] .markdown-output pre code {
+  background: transparent;
+}
+.session-request h3 {
+  margin: 0;
+  font-size: 14px;
+}

@@ -376,9 +376,18 @@ function visibleAgentPayload(update: AgentUpdate): Record<string, unknown> | nul
   if (update.kind === "agent_message_chunk" || update.kind === "user_message_chunk") {
     const content = value.content;
     if (content && typeof content === "object" && "type" in content && content.type === "text" && "text" in content && typeof content.text === "string") {
-      return { text: content.text };
+      // The id only tells where one message ends and the next begins.
+      return { text: content.text, ...(typeof value.messageId === "string" ? { messageId: value.messageId.slice(0, 200) } : {}) };
     }
     return null;
+  }
+  if (update.kind === "plan") {
+    if (!Array.isArray(value.entries)) return null;
+    return { entries: value.entries.slice(0, 50).flatMap((item) => {
+      const entry = item as { content?: unknown; status?: unknown } | null;
+      return entry && typeof entry.content === "string" && entry.content.trim()
+        ? [{ content: entry.content.slice(0, 500), status: typeof entry.status === "string" ? entry.status.slice(0, 40) : "pending" }] : [];
+    }) };
   }
   if (update.kind === "tool_call" || update.kind === "tool_call_update") {
     return { toolCallId: typeof value.toolCallId === "string" ? value.toolCallId : "",

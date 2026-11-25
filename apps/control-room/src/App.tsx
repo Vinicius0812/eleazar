@@ -413,6 +413,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   const latestRunForTask = (taskId: string) => data?.runs.find((run) => run.taskId === taskId);
   const latestLogForRun = (runId: string) => data?.logs.filter((log) => log.executionId === runId).at(-1);
   const selectedRun = selectedTask && latestRunForTask(selectedTask.id);
+  // Runs come newest first; a conversation reads oldest first. The newest one is the turn already on screen.
+  const selectedPreviousRuns = selectedTask ? (data?.runs ?? []).filter((run) => run.taskId === selectedTask.id).slice(1).reverse() : [];
   const placed = (task: Task) => placeTask(task, data?.runs ?? [], data?.actions ?? [], data?.pullRequests ?? []);
   const projectsWithTasks = projects.map((project) => ({ project, cards: tasks.filter((task) => task.projectId === project.id).map(placed) }));
   const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
@@ -521,6 +523,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                    directoryName={directoryName(selectedTask)}
                    scopeNames={directoryNames(selectedTask)}
                    run={selectedRun}
+                  previousRuns={selectedPreviousRuns}
                    latestLog={selectedRun && latestLogForRun(selectedRun.id)}
                    failure={selectedTask.status === "failed" && selectedRun ? readableRunSummary(selectedRun.summary) : undefined}
                    followUp={selectedTaskFinished && selectedRun ? <TaskFollowUp busy={busy} resumesSession={selectedRun.transport === "acp" && Boolean(selectedRun.sessionId)}

@@ -158,6 +158,32 @@ describe("ACP Control Room backend", () => {
     reopened.close();
   });
 
+  it("records message boundaries and a bounded plan without free-form fields", async () => {
+    const { store, service } = await fixture();
+    const project = service.registerProject({ name: "P", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "T", prompt: "P" });
+    const dispatched = await service.dispatch(task.id, { selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [] });
+    const execution = store.listExecutions(task.id)[0]!;
+    const record = (kind: string, payload: Record<string, unknown>) =>
+      service.recordAgentUpdate(execution.id, dispatched.dispatchLease!, { sessionId: "s1", kind, payload });
+    record("agent_message_chunk", { messageId: "m1", content: { type: "text", text: "one" } });
+    record("agent_message_chunk", { messageId: 7, content: { type: "text", text: "two" } });
+    record("plan", { entries: [
+      { content: "x".repeat(600), status: "in_progress", priority: "high", _meta: { secret: "hidden" } },
+      { content: "  ", status: "pending" }, null, { content: "no status" }
+    ] });
+    record("plan", { entries: Array.from({ length: 60 }, (_, index) => ({ content: `step ${index}`, status: "pending" })) });
+    record("plan", { entries: "invalid" });
+    const events = service.listExecutionEvents(execution.id);
+    expect(events.map((event) => event.kind)).toEqual(["agent_message_chunk", "agent_message_chunk", "plan", "plan"]);
+    expect(events[0]!.payload).toEqual({ text: "one", messageId: "m1" });
+    expect(events[1]!.payload).toEqual({ text: "two" });
+    expect(events[2]!.payload).toEqual({ entries: [{ content: "x".repeat(500), status: "in_progress" }, { content: "no status", status: "pending" }] });
+    expect(events[3]!.payload.entries).toHaveLength(50);
+    expect(JSON.stringify(events)).not.toContain("hidden");
+    store.close();
+  });
+
   it("accepts model before dispatch, streams replay in order and resolves permission once", async () => {
     const { store, service } = await fixture();
     const project = service.registerProject({ name: "P", path: process.cwd() });
