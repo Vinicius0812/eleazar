@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { SqliteControlRoomStore } from "../persistence/sqlite-control-room-store.js";
-import { createEleazar } from "../create-eleazar.js";
+import { createEleazar, loadCustomProviders } from "../create-eleazar.js";
 import { createControlRoomServer } from "./local-api.js";
 import { createLocalControlRoomService } from "./local-service.js";
 import { ControlRoomTaskExecutor } from "./task-executor.js";
@@ -27,8 +27,10 @@ const pollSeconds = Number(process.env.ELEAZAR_CONTROL_ROOM_PR_POLL_SECONDS ?? "
 if (Number.isFinite(pollSeconds) && pollSeconds > 0) {
   setInterval(() => { void pullRequests.refreshAll().catch(() => undefined); }, Math.max(pollSeconds, 15) * 1_000).unref();
 }
-const orchestrator = createEleazar();
-const executor = new ControlRoomTaskExecutor(service, orchestrator);
+const custom = await loadCustomProviders(process.cwd());
+for (const warning of custom.warnings) console.warn(warning);
+const orchestrator = createEleazar({ customProviders: custom.specs, preferences: (id) => store.getProviderPreferences(id) });
+const executor = new ControlRoomTaskExecutor(service, orchestrator, orchestrator.registry);
 const providers = new ProviderStatusService(orchestrator, service);
 const server = createControlRoomServer(service, executor, providers, actions, pullRequests);
 server.listen(port, "127.0.0.1", () => {

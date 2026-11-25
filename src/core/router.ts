@@ -1,14 +1,5 @@
-import { isAutomaticProvider } from "./contracts.js";
-import type {
-  AgentAdapter,
-  AgentHealth,
-  AutomaticProviderName,
-  ProviderName,
-  RouteCandidate,
-  RouteDecision,
-  RouteRequest,
-  TaskKind
-} from "./contracts.js";
+import type { AgentAdapter, AgentHealth, RouteCandidate, RouteDecision, RouteRequest, TaskKind } from "./contracts.js";
+import type { ProviderRegistration, ProviderRegistry } from "./provider-registry.js";
 
 const taskPatterns: ReadonlyArray<readonly [TaskKind, RegExp]> = [
   ["review", /\b(review|revis(?:ar|e|ao)|auditar|avaliar|code review)\b/i],
@@ -25,15 +16,8 @@ const taskPatterns: ReadonlyArray<readonly [TaskKind, RegExp]> = [
   ]
 ];
 
-const baseScores: Record<TaskKind, Record<AutomaticProviderName, number>> = {
-  implementation: { codex: 90, antigravity: 72 },
-  review: { codex: 86, antigravity: 80 },
-  planning: { codex: 78, antigravity: 84 },
-  research: { codex: 65, antigravity: 90 },
-  testing: { codex: 92, antigravity: 70 },
-  documentation: { codex: 78, antigravity: 78 },
-  unknown: { codex: 75, antigravity: 75 }
-};
+/** Weight of a provider whose descriptor declares no affinity at all. */
+const neutralScore = 50;
 
 export function classifyTask(prompt: string): TaskKind {
   const normalizedPrompt = prompt.normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -47,57 +31,53 @@ export function classifyTask(prompt: string): TaskKind {
   return "unknown";
 }
 
+/**
+ * Automatico compares every enabled provider that takes part in it and only selects one whose login is confirmed.
+ * An explicit choice is never replaced by another provider: the task would go to a company the operator did not pick.
+ */
 export class Router {
-  readonly #adapters: ReadonlyMap<ProviderName, AgentAdapter>;
-
-  constructor(adapters: readonly AgentAdapter[]) {
-    this.#adapters = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
-  }
+  constructor(private readonly registry: ProviderRegistry) {}
 
   async route(request: RouteRequest): Promise<RouteDecision> {
     const taskKind = request.taskKind ?? classifyTask(request.prompt);
-    const preferred = request.preferredProvider;
-    const explicitOnly = preferred !== undefined && !isAutomaticProvider(preferred);
-    const eligible = [...this.#adapters.values()].filter((adapter) =>
-      explicitOnly ? adapter.provider === preferred : isAutomaticProvider(adapter.provider)
-    );
-    const healthEntries = await Promise.all(
-      eligible.map(async (adapter) => [adapter, await adapter.health()] as const)
-    );
-
-    const candidates = healthEntries
-      .map(([adapter, health]) => this.#score(adapter, health, taskKind, request.preferredProvider))
+    const explicit = request.preferredProvider !== undefined;
+    const pool = this.registry.list().filter(({ descriptor }) => {
+      if (explicit) return descriptor.id === request.preferredProvider;
+      const preferences = this.registry.preferences(descriptor.id);
+      return preferences.enabled && preferences.automatic && descriptor.roles.implementer;
+    });
+    const candidates = (await Promise.all(pool.map(async (registration) =>
+      this.#score(registration, await this.#health(registration), taskKind, explicit))))
       .sort((left, right) => right.score - left.score);
-
-    return {
-      taskKind,
-      selected: candidates.find((candidate) => candidate.health.available && (
-        explicitOnly
-          ? candidate.health.authenticated === true && this.#adapters.get(candidate.provider)?.supportedTasks.has(taskKind)
-          : candidate.health.authenticated !== false
-      ))
-        ?.provider ?? null,
-      candidates
-    };
+    const selected = candidates.find((candidate) => {
+      const adapter = this.registry.get(candidate.provider)!.adapter;
+      return candidate.health.available && adapter.supportedTasks.has(taskKind) && loginAccepted(candidate.health, adapter, explicit);
+    });
+    return { taskKind, selected: selected?.provider ?? null, candidates };
   }
 
-  #score(
-    adapter: AgentAdapter,
-    health: AgentHealth,
-    taskKind: TaskKind,
-    preferredProvider?: ProviderName
-  ): RouteCandidate {
-    const reasons: string[] = [];
-    let score = isAutomaticProvider(adapter.provider) ? baseScores[taskKind][adapter.provider] : 80;
+  async #health({ descriptor, adapter }: ProviderRegistration): Promise<AgentHealth> {
+    if (!this.registry.preferences(descriptor.id).enabled) {
+      return { provider: descriptor.id, available: false, authenticated: null, detail: "Desativado na tela Provedores." };
+    }
+    const health = await adapter.health();
+    if (!health.available || health.authenticated !== null || !adapter.verify) return health;
+    // The CLI cannot tell whether it is signed in: opening a session, without a prompt, can.
+    const verification = await adapter.verify();
+    return { ...health, authenticated: verification.authenticated, detail: verification.detail };
+  }
 
+  #score({ descriptor, adapter }: ProviderRegistration, health: AgentHealth, taskKind: TaskKind, explicit: boolean): RouteCandidate {
+    const reasons: string[] = [];
+    let score = descriptor.affinity[taskKind] ?? descriptor.affinity.unknown ?? neutralScore;
     reasons.push(`afinidade ${taskKind}: ${score}`);
 
-    if (!adapter.supportedTasks.has(taskKind) && (taskKind !== "unknown" || !isAutomaticProvider(adapter.provider))) {
+    if (!adapter.supportedTasks.has(taskKind)) {
       score -= 30;
       reasons.push("tarefa fora das capacidades declaradas: -30");
     }
 
-    if (preferredProvider === adapter.provider) {
+    if (explicit) {
       score += 100;
       reasons.push("preferencia explicita: +100");
     }
@@ -108,8 +88,16 @@ export class Router {
     } else if (health.authenticated === false) {
       score = -900;
       reasons.push("provedor sem autenticacao");
+    } else if (health.authenticated === null && !explicit) {
+      score = -800;
+      reasons.push("autenticacao nao confirmada");
     }
 
-    return { provider: adapter.provider, score, reasons, health };
+    return { provider: descriptor.id, score, reasons, health };
   }
+}
+
+/** An explicit choice may try a provider whose login only shows up when a session is opened. */
+function loginAccepted(health: AgentHealth, adapter: AgentAdapter, explicit: boolean): boolean {
+  return health.authenticated === true || (explicit && health.authenticated === null && adapter.verify !== undefined);
 }

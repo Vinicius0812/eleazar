@@ -20,6 +20,8 @@ export interface AcpSessionInfo {
   sessionId: string;
   modes: acp.SessionModeState | null;
   configOptions: acp.SessionConfigOption[];
+  /** Extension data of the session answer; its content is provider specific. */
+  meta?: Record<string, unknown> | null;
 }
 
 /** How long to wait for the agent to confirm the required mode after session/set_mode. */
@@ -41,15 +43,15 @@ export class AcpClient {
     strictFileScope?: boolean;
   }) {}
 
-  async inspect(cwd: string, sessionId?: string): Promise<AcpSessionInfo> {
+  async inspect(cwd: string, sessionId?: string, timeoutMs?: number): Promise<AcpSessionInfo> {
     let modeOptions: acp.SessionConfigOption[] | undefined;
-    return this.withConnection({ cwd, prompt: "", ...(sessionId ? { sessionId } : {}) }, async (agent, state, setActiveSession) => {
+    return this.withConnection({ cwd, prompt: "", ...(sessionId ? { sessionId } : {}), ...(timeoutMs ? { timeoutMs } : {}) }, async (agent, state, setActiveSession) => {
       const session = await openSession(agent, state.capabilities, cwd, sessionId, [], this.deps.sessionMeta?.({ cwd, prompt: "" }));
       setActiveSession(session.sessionId);
       try {
         modeOptions = undefined;
         const ready = await ensureRequiredMode(agent, session, this.provider, this.deps.requiredMode, () => modeOptions);
-        return { ...state, sessionId: ready.sessionId, modes: ready.modes ?? null, configOptions: ready.configOptions ?? [] };
+        return { ...state, sessionId: ready.sessionId, modes: ready.modes ?? null, configOptions: ready.configOptions ?? [], meta: session._meta ?? null };
       } finally {
         if (!sessionId && state.capabilities.sessionCapabilities?.close) {
           await agent.request(acp.methods.agent.session.close, { sessionId: session.sessionId }).catch(() => {});
@@ -125,7 +127,7 @@ export class AcpClient {
 
   private async withConnection<T>(
     request: AgentRunRequest,
-    operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes">, setActiveSession: (id: string) => void) => Promise<T>,
+    operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes" | "meta">, setActiveSession: (id: string) => void) => Promise<T>,
     onUpdate?: (notification: acp.SessionNotification) => void,
     turn: TurnState = { active: false }
   ): Promise<T> {
@@ -200,7 +202,7 @@ export class AcpClient {
       const reason = error instanceof Error && "data" in error && error.data && typeof error.data === "object" &&
         "startupFailureReason" in error.data && typeof error.data.startupFailureReason === "string"
         ? error.data.startupFailureReason : null;
-      if (reason) throw new Error(`${error instanceof Error ? error.message : String(error)} [startupFailureReason=${reason}]`);
+      if (reason) throw new Error(`${error instanceof Error ? error.message : String(error)} [startupFailureReason=${reason}]`, { cause: error });
       throw error;
     } finally {
       turn.active = false;
@@ -214,6 +216,13 @@ export class AcpClient {
       child.stderr.destroy();
     }
   }
+}
+
+/** True only for the protocol's own "Authentication required" answer; any other failure says nothing about the login. */
+export function isAuthenticationRequired(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if ("code" in error && error.code === -32000 && /\bauth/i.test(error.message)) return true;
+  return error.cause !== undefined && isAuthenticationRequired(error.cause);
 }
 
 /**

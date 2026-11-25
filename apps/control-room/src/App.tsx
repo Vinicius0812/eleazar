@@ -24,6 +24,7 @@ import {
   Play,
   PanelLeftClose,
   PanelLeftOpen,
+  PlugZap,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -41,6 +42,8 @@ import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
+import { AgentGlyph } from "./components/AgentGlyph.js";
+import { ProvidersPage, providerState } from "./components/ProvidersPage.js";
 import { placeTask } from "./services/board.js";
 import markUrl from "./assets/icons/eleazar-mark.svg";
 import type {
@@ -67,17 +70,13 @@ const statuses = {
   cancelled: "Cancelada",
 };
 const runStatuses = { ...statuses, planned: "Planejada" };
-const providerLabels: Record<ProviderStatus["provider"], { name: string; symbol: string }> = {
-  codex: { name: "Codex", symbol: "C" },
-  antigravity: { name: "Antigravity", symbol: "A" },
-  claude: { name: "Claude Code", symbol: "Cl" },
-};
 const navigation = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "projects", label: "Projetos", icon: FolderGit2 },
   { id: "tasks", label: "Fila de tarefas", icon: ListTodo },
   { id: "executions", label: "Execuções", icon: Activity },
   { id: "approvals", label: "Aprovações", icon: ShieldCheck },
+  { id: "providers", label: "Provedores", icon: PlugZap },
   { id: "logs", label: "Logs", icon: Terminal },
 ];
 type DialogState =
@@ -128,7 +127,7 @@ function routeId(hash: string, page: "executions" | "tasks"): string | null {
     return null;
   }
 }
-type PageRoute = "overview" | "projects" | "tasks" | "executions" | "approvals" | "logs" | "not-found";
+type PageRoute = "overview" | "projects" | "tasks" | "executions" | "approvals" | "providers" | "logs" | "not-found";
 type Theme = "light" | "dark";
 
 const narrowScreen = "(max-width: 760px)";
@@ -141,7 +140,7 @@ function preferredTheme(): Theme {
 
 function pageFromHash(hash: string): PageRoute {
   const value = hash.replace(/^#\/?/, "").split("/")[0] || "overview";
-  return ["overview", "projects", "tasks", "executions", "approvals", "logs"].includes(value) ? value as PageRoute : "not-found";
+  return ["overview", "projects", "tasks", "executions", "approvals", "providers", "logs"].includes(value) ? value as PageRoute : "not-found";
 }
 function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry | undefined }) {
   const failed = run.status === "failed";
@@ -159,19 +158,19 @@ function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry 
   );
 }
 function ProviderStatusPanel({ providers, loading, error, onRefresh }: { providers: ProviderStatus[]; loading: boolean; error: string; onRefresh(): void }) {
-  return <Panel id="providers" title="Provedores" eyebrow="CAPACIDADE LOCAL" action={<button className="text-button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} className={loading ? "spinning" : ""} /> Atualizar status</button>}>
+  return <Panel id="provider-summary" title="Provedores" eyebrow="CAPACIDADE LOCAL" action={<button className="text-button" onClick={onRefresh} disabled={loading}><RefreshCw size={14} className={loading ? "spinning" : ""} /> Atualizar status</button>}>
     {error && <div className="provider-note error">{error}</div>}
     <div className="provider-list">
       {providers.map((provider) => <article className="provider-row" key={provider.provider}>
-        <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}>{providerLabels[provider.provider].symbol}</span>
-        <div><strong>{providerLabels[provider.provider].name}</strong><small>{provider.detail}</small></div>
+        <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}><AgentGlyph provider={provider.provider} /></span>
+        <div><strong>{provider.label}</strong><small>{providerState(provider).label}</small></div>
         <div className="provider-usage">
-          {provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.provider}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
+          {provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.label}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
         </div>
-        <span className={`dot ${provider.available ? "green" : ""}`} title={provider.available ? "Disponível" : "Indisponível"} />
       </article>)}
       {!providers.length && !loading && <div className="empty">Nenhum provedor respondeu ao diagnóstico local.</div>}
     </div>
+    <p className="provider-note"><a className="text-button" href="#/providers">Gerenciar provedores <ArrowRight size={14} aria-hidden="true" /></a></p>
     {providers[0] && <p className="provider-note">Dados atualizados em {new Date(providers[0].fetchedAt).toLocaleString("pt-BR")}. O saldo é exibido apenas quando o provedor o informa.</p>}
   </Panel>;
 }
@@ -204,6 +203,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState("");
+  const [providerPending, setProviderPending] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(() => window.matchMedia?.(narrowScreen).matches ?? false);
   const [narrowCollapsed, setNarrowCollapsed] = useState(true);
   const [desktopCollapsed, setDesktopCollapsed] = useState(() => window.localStorage.getItem("eleazar.sidebarCollapsed") === "true");
@@ -266,13 +266,13 @@ export function App({ client }: { client: ControlRoomClient }) {
     window.localStorage.setItem("eleazar.theme", theme);
   }, [theme]);
   useEffect(() => {
-    if (active !== "overview") return;
+    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute") return;
     let alive = true;
     setProvidersLoading(true); setProvidersError("");
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
-  }, [active, client]);
-  const launch = useExecutionLaunch(client, data?.runs ?? [], data?.tasks ?? [], dialog?.kind === "execute" ? dialog.task : null);
+  }, [active, client, dialog?.kind]);
+  const launch = useExecutionLaunch(client, data?.runs ?? [], data?.tasks ?? [], dialog?.kind === "execute" ? dialog.task : null, providers);
   const refreshSession = useCallback(() => {
     void client.getSnapshot().then(setData).catch(() => undefined);
     if (executionRoute) void client.getExecutionDetail(executionRoute).then((detail) => setExecutionDetail((current) => current?.execution.id === detail.execution.id ? detail : current)).catch(() => undefined);
@@ -312,6 +312,12 @@ export function App({ client }: { client: ControlRoomClient }) {
   function openTask(taskId: string) { window.location.hash = `/tasks/${encodeURIComponent(taskId)}`; }
   function backToDashboard() { navigate("overview"); }
   function refreshProviders(): void { setProvidersLoading(true); setProvidersError(""); client.getProviderStatuses(true).then(setProviders).catch((reason) => setProvidersError(message(reason))).finally(() => setProvidersLoading(false)); }
+  async function changeProvider(provider: string, operation: () => Promise<ProviderStatus[]>) {
+    setProviderPending(provider); setProvidersError("");
+    try { setProviders(await operation()); }
+    catch (reason) { setProvidersError(message(reason)); }
+    finally { setProviderPending(null); }
+  }
   async function refresh() {
     setBusy(true);
     setError("");
@@ -420,7 +426,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
   const selectedTaskFinished = selectedTask?.status === "completed" || selectedTask?.status === "failed";
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
-    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
+    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
   return (
     <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
@@ -627,6 +633,9 @@ export function App({ client }: { client: ControlRoomClient }) {
                   </div>
                 ))}
               </section>}
+              {active === "providers" ? <ProvidersPage providers={providers} loading={providersLoading} error={providersError} pending={providerPending} onRefresh={refreshProviders}
+                onVerify={(provider) => void changeProvider(provider, () => client.verifyProvider(provider))}
+                onChange={(provider, patch) => void changeProvider(provider, () => client.updateProvider(provider, patch))} /> :
               <div className={`dashboard-grid page-${active}`}>
                 <div className="primary-column">
                   {active === "overview" && <div className="executive-column">
@@ -1029,7 +1038,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                     </div>
                   </Panel>}
                 </div>}
-              </div>
+              </div>}
               <footer className="page-footer">
                 <span>ELEAZAR CONTROL ROOM</span>
                 <span>Local first · Interface v0.1</span>
@@ -1146,6 +1155,7 @@ export function App({ client }: { client: ControlRoomClient }) {
               <p className="form-intro">
                 A execução usa uma sessão já autenticada do provedor. O resultado e os logs ficarão no histórico desta tarefa.
               </p>
+              {providersError && <div className="error" role="alert">Não foi possível consultar os provedores: {providersError}</div>}
               <ExecutionLaunchFields launch={launch} busy={busy} />
               <div className="form-actions">
                 <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>

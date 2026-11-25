@@ -14,6 +14,7 @@ import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
+import { acpRegistry } from "./helpers.js";
 
 const temporaryDirectories: string[] = [];
 const stores: SqliteControlRoomStore[] = [];
@@ -143,7 +144,7 @@ async function finishedTask() {
     candidates: [{ provider: "codex", score: 100, reasons: ["teste"], health: { provider: "codex", available: true, authenticated: true, detail: "teste" } }] };
   const runner: ControlRoomTaskRunner = { router: { route: async () => route },
     run: async (_request: AgentRunRequest) => ({ route, result: { provider: "codex", status: "success", response: "feito", durationMs: 1 } }) };
-  await new ControlRoomTaskExecutor(service, runner).start(task.id, "codex");
+  await new ControlRoomTaskExecutor(service, runner, acpRegistry()).start(task.id, "codex");
   await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
   return { service, store, task };
 }

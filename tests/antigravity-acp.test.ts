@@ -8,6 +8,7 @@ import { localPath, nodeAcpLaunch, ResponseText } from "../src/adapters/acp-clie
 import type { ProcessResult } from "../src/adapters/process-runner.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import type { ControlRoomService } from "../src/core/control-room-service.js";
+import { acpRegistry } from "./helpers.js";
 
 const entryPath = fileURLToPath(new URL("./fixtures/fake-antigravity-acp-agent.mjs", import.meta.url));
 const runtime = { path: process.execPath, version: "1.5.9", source: "user" as const };
@@ -127,7 +128,7 @@ describe("Antigravity adapter", () => {
   });
   it("publishes only the asking mode in the Control Room catalog", async () => {
     const service = { store: { listProjects: () => [{ directories: [{ id: "dir", path: process.cwd() }] }] } } as unknown as ControlRoomService;
-    const executor = new ControlRoomTaskExecutor(service, {} as ControlRoomTaskRunner, undefined, undefined, undefined, client());
+    const executor = new ControlRoomTaskExecutor(service, {} as ControlRoomTaskRunner, acpRegistry({ antigravity: client() }));
     const config = await executor.providerConfig("antigravity", "dir");
     expect(config).toMatchObject({ provider: "antigravity", defaultModel: "gemini-4-neon", capabilities: { loadSession: true },
       models: [{ id: "gemini-4-neon" }, { id: "gemini-4-carbon" }] });

@@ -1,10 +1,5 @@
-import type {
-  AgentAdapter,
-  AgentRunRequest,
-  AgentRunResult,
-  ProviderName,
-  RouteDecision
-} from "./contracts.js";
+import type { AgentHealth, AgentRunRequest, AgentRunResult, ProviderName, RouteDecision } from "./contracts.js";
+import type { ProviderRegistry } from "./provider-registry.js";
 import { Router } from "./router.js";
 
 export interface OrchestratorRun {
@@ -13,12 +8,10 @@ export interface OrchestratorRun {
 }
 
 export class Orchestrator {
-  readonly #adapters: ReadonlyMap<ProviderName, AgentAdapter>;
   readonly #router: Router;
 
-  constructor(adapters: readonly AgentAdapter[]) {
-    this.#adapters = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
-    this.#router = new Router(adapters);
+  constructor(readonly registry: ProviderRegistry) {
+    this.#router = new Router(registry);
   }
 
   get router(): Router {
@@ -26,8 +19,8 @@ export class Orchestrator {
   }
 
   /** Read-only provider diagnostics for local operator interfaces. */
-  async health(): Promise<import("./contracts.js").AgentHealth[]> {
-    return await Promise.all([...this.#adapters.values()].map((adapter) => adapter.health()));
+  async health(): Promise<AgentHealth[]> {
+    return await Promise.all(this.registry.list().map(({ adapter }) => adapter.health()));
   }
 
   async run(request: AgentRunRequest, preferredProvider?: ProviderName): Promise<OrchestratorRun> {
@@ -41,14 +34,9 @@ export class Orchestrator {
       throw new Error("Nenhum provedor apto para esta tarefa. Consulte `eleazar doctor` e `eleazar plan`.");
     }
 
-    const adapter = this.#adapters.get(route.selected);
-    if (!adapter) {
-      throw new Error(`Adaptador nao registrado: ${route.selected}`);
-    }
-
     return {
       route,
-      result: await adapter.run({ ...request, taskKind: route.taskKind })
+      result: await this.registry.get(route.selected)!.adapter.run({ ...request, taskKind: route.taskKind })
     };
   }
 }

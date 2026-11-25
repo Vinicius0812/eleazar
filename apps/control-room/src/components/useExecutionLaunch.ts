@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { AcpProvider, ControlRoomClient, ExecuteOptions, ExecutionProvider, ProviderConfig, Run, Task } from "../services/contracts.js";
+import type { AcpProvider, ControlRoomClient, ExecuteOptions, ExecutionProvider, ProviderConfig, ProviderStatus, Run, Task } from "../services/contracts.js";
 
-export const providerLabels: Record<AcpProvider, string> = { codex: "Codex", claude: "Claude Code", antigravity: "Antigravity" };
 type LoadedCatalog = { key: string; config: ProviderConfig | null; error: string };
 type Choice = { key: string; model: string; resume: boolean };
 
@@ -18,11 +17,12 @@ const sameScope = (a: Task, b: Task) => a.projectId === b.projectId && a.targetD
  * previous provider/task can never leak into the current one. `auto` has no catalog and never
  * sends a model or session.
  */
-export function useExecutionLaunch(client: ControlRoomClient, runs: Run[], tasks: Task[], task: Task | null) {
+export function useExecutionLaunch(client: ControlRoomClient, runs: Run[], tasks: Task[], task: Task | null, providers: ProviderStatus[]) {
   const [provider, setProvider] = useState<ExecutionProvider>("auto");
   const [loaded, setLoaded] = useState<LoadedCatalog | null>(null);
   const [choice, setChoice] = useState<Choice>({ key: "", model: "", resume: false });
-  const acp: AcpProvider | null = provider === "auto" ? null : provider;
+  const chosen = providers.find((item) => item.provider === provider) ?? null;
+  const acp: AcpProvider | null = chosen?.transport === "acp" ? provider : null;
   const directoryId = task?.targetDirectoryId ?? null;
   const key = acp && task && directoryId ? `${acp}:${task.id}:${directoryId}` : null;
 
@@ -56,6 +56,9 @@ export function useExecutionLaunch(client: ControlRoomClient, runs: Run[], tasks
   /** Changing the provider always discards the model and resume choice made for the previous one. */
   const changeProvider = (next: ExecutionProvider) => { setProvider(next); setChoice({ key: "", model: "", resume: false }); };
   return {
+    /** Providers the operator can pick: enabled and able to implement. */
+    choices: providers.filter((item) => item.preferences.enabled && item.roles.implementer),
+    chosen,
     provider, setProvider: changeProvider, acp, status, config, error: catalog?.error ?? "", reset,
     model, setModel: (value: string) => key && setChoice({ ...selected, key, model: value }),
     resumableRun: canOfferResume ? resumableRun : undefined, resume,

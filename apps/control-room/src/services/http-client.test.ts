@@ -72,6 +72,16 @@ describe("HTTP Control Room client", () => {
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:4317/api/control-room/providers/status?refresh=true", expect.any(Object));
   });
 
+  it("checks and configures a provider through its own local routes", async () => {
+    const fetch = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const controlled = createHttpControlRoomClient("http://127.0.0.1:4317/api/control-room");
+    await controlled.verifyProvider("quarto");
+    await controlled.updateProvider("quarto", { automatic: false });
+    expect(fetch).toHaveBeenNthCalledWith(1, "http://127.0.0.1:4317/api/control-room/providers/quarto/verify", expect.objectContaining({ method: "POST", body: "{}" }));
+    expect(fetch).toHaveBeenNthCalledWith(2, "http://127.0.0.1:4317/api/control-room/providers/quarto/settings", expect.objectContaining({ method: "POST", body: JSON.stringify({ automatic: false }) }));
+  });
+
   it("turns persisted provider failures into actionable dashboard alerts", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       projects: [], tasks: [], logs: [],

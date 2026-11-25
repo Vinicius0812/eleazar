@@ -12,12 +12,14 @@ const acpRequire = createRequire(acpEntry);
 export interface CodexRuntime { path: string; version: string; source: "override" | "desktop" | "bundled"; }
 
 /** An explicit override is authoritative; an invalid override never silently falls back. */
-export async function resolveCodexRuntime(): Promise<CodexRuntime> {
-  const override = process.env.ELEAZAR_CODEX_PATH?.trim();
+export async function resolveCodexRuntime(executablePath?: string | null): Promise<CodexRuntime> {
+  const environment = process.env.ELEAZAR_CODEX_PATH?.trim();
+  const override = environment || executablePath;
   if (override) {
-    if (override.endsWith(".js")) throw new Error("ELEAZAR_CODEX_PATH deve apontar para o executavel nativo, nao para codex.js.");
+    const origin = environment ? "ELEAZAR_CODEX_PATH" : "O caminho configurado";
+    if (override.endsWith(".js")) throw new Error(`${origin} deve apontar para o executavel nativo, nao para codex.js.`);
     const runtime = await probe(override, "override");
-    if (!runtime) throw new Error(`ELEAZAR_CODEX_PATH nao aponta para um Codex executavel: ${override}`);
+    if (!runtime) throw new Error(`${origin} nao aponta para um Codex executavel: ${override}`);
     return runtime;
   }
 

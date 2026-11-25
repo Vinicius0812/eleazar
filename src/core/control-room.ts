@@ -1,4 +1,4 @@
-import type { ProviderName, TaskKind, TokenUsage } from "./contracts.js";
+import type { AgentVerification, ProviderDescriptor, ProviderName, ProviderPreferences, TaskKind, TokenUsage } from "./contracts.js";
 
 export const taskPriorities = ["low", "normal", "high", "critical"] as const;
 export type TaskPriority = (typeof taskPriorities)[number];
@@ -187,13 +187,24 @@ export interface ProviderUsageStatus {
 }
 export interface ProviderStatus {
   provider: ProviderName;
+  label: string;
   available: boolean;
   authenticated: boolean | null;
   version: string | null;
   detail: string;
+  executable: { path: string; source: string } | null;
+  transport: ProviderDescriptor["transport"];
+  roles: ProviderDescriptor["roles"];
+  login: { command: string; hint: string };
+  preferences: ProviderPreferences;
+  /** Last connection check without a prompt; null until one runs in this host session. */
+  verification: Omit<AgentVerification, "provider"> | null;
   fetchedAt: string;
   usage: ProviderUsageStatus;
 }
+
+/** Fields the operator may change; omitted fields keep their value. */
+export type ProviderPreferencesPatch = Partial<ProviderPreferences>;
 
 export type ExecutionFileChangeKind = "added" | "modified" | "deleted" | "untracked" | "preexisting";
 
@@ -337,6 +348,8 @@ export interface ControlRoomStore {
   deleteTaskWorktrees(taskId: string): void;
   upsertTaskPullRequest(pullRequest: TaskPullRequest): void;
   listTaskPullRequests(taskId?: string): TaskPullRequest[];
+  getProviderPreferences(providerId: ProviderName): ProviderPreferences | null;
+  saveProviderPreferences(providerId: ProviderName, preferences: ProviderPreferences, updatedAt: string): void;
   createOutboundAction(action: TaskOutboundAction): void;
   getOutboundAction(id: string): TaskOutboundAction | null;
   listOutboundActions(taskId?: string): TaskOutboundAction[];

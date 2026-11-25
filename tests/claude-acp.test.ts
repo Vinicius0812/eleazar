@@ -8,6 +8,7 @@ import { ClaudeAcpClient } from "../src/adapters/claude-acp.js";
 import { CodexAcpClient } from "../src/adapters/codex-acp.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import type { ControlRoomService } from "../src/core/control-room-service.js";
+import { acpRegistry } from "./helpers.js";
 
 // Test seam: before the real process termination, optionally wait (bounded) for a report file that the fixture
 // writes after it receives the client's response to a permission request. That proves the late traffic was
@@ -62,7 +63,7 @@ describe("Claude ACP stdio", () => {
     });
     const codex = { inspect: () => inspect("codex") } as unknown as CodexAcpClient;
     const claude = { inspect: () => inspect("claude") } as unknown as ClaudeAcpClient;
-    const executor = new ControlRoomTaskExecutor(service, runner, undefined, codex, claude);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry({ codex: codex, claude: claude }));
     const codexConfig = await executor.providerConfig("codex", "dir");
     const claudeConfig = await executor.providerConfig("claude", "dir");
     expect(codexConfig.settings.find((item) => item.id === "mode")?.options.map((item) => item.id)).toEqual(["read-only", "workspace-write"]);

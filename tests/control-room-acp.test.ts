@@ -11,6 +11,7 @@ import { createLocalControlRoomService } from "../src/control-room/local-service
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
+import { acpRegistry } from "./helpers.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -50,7 +51,7 @@ describe("ACP Control Room backend", () => {
       configOptions: [{ id: "model", category: "model", name: "Model", type: "select", currentValue: "sonnet",
         options: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] }] }) } as unknown as ClaudeAcpClient;
     const executor = new ControlRoomTaskExecutor(service, runner(async () => ({ route,
-      result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), undefined, acpInspector, claudeInspector);
+      result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), acpRegistry({ codex: acpInspector, claude: claudeInspector }));
     const api = await serve(service, executor);
     try {
       const id = project.directories[0]!.id;
@@ -78,7 +79,7 @@ describe("ACP Control Room backend", () => {
     const run = vi.fn<ControlRoomTaskRunner["run"]>(async () => ({ route: claudeRoute,
       result: { provider: "claude", status: "success", response: "ok", durationMs: 1 } }));
     const fake: ControlRoomTaskRunner = { router: { route: async () => claudeRoute }, run };
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector, claudeInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector, claude: claudeInspector }));
     await expect(executor.start(next.id, "claude", undefined, "same-id")).rejects.toThrow("nao pertence");
     expect(store.listExecutions(next.id)).toHaveLength(0);
     const claudeTask = service.createTask({ projectId: project.id, title: "Claude previous", prompt: "P" });
@@ -198,7 +199,7 @@ describe("ACP Control Room backend", () => {
         { id: "allow", name: "Allow", kind: "allow_once" }, { id: "deny", name: "Deny", kind: "reject_once" }] });
       return { route, result: { provider: "codex", status: "success", response: String(choice), durationMs: 1, sessionId: "s1" } };
     });
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector }));
     const api = await serve(service, executor);
     try {
       const config = await (await fetch(`${api.base}/providers/codex/config?directoryId=${project.directories[0]!.id}`)).json();
@@ -251,7 +252,7 @@ describe("ACP Control Room backend", () => {
       await request.onPermission?.({ sessionId: "s1", toolCallId: "tool", title: "Read", options: [{ id: "deny", name: "Deny", kind: "reject_once" }] });
       return { route, result: { provider: "codex", status: "success", response: "late", durationMs: 1 } };
     });
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector }));
     await executor.start(task.id, "codex");
     const execution = store.listExecutions(task.id)[0]!;
     await vi.waitFor(() => expect(store.listExecutionPermissions(execution.id)).toHaveLength(1));
@@ -282,7 +283,7 @@ describe("ACP Control Room backend", () => {
       await gate;
       return { route, result: { provider: "codex", status: "success", response: "done", durationMs: 1 } };
     });
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector }));
     await executor.start(task.id, "codex");
     const execution = store.listExecutions(task.id)[0]!;
     await vi.waitFor(() => expect(store.listExecutionPermissions(execution.id)).toHaveLength(1));
@@ -306,7 +307,7 @@ describe("ACP Control Room backend", () => {
     const task = service.createTask({ projectId: project.id, title: "T", prompt: "P" });
     const dispatched = await service.dispatch(task.id, { selectedProvider: "codex", reason: "test", candidates: [], requestedActions: [] });
     const execution = store.listExecutions(task.id)[0]!;
-    const executor = new ControlRoomTaskExecutor(service, runner(async () => ({ route, result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })));
+    const executor = new ControlRoomTaskExecutor(service, runner(async () => ({ route, result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), acpRegistry());
     let removed = false;
     const original = service.onExecutionEvent.bind(service);
     vi.spyOn(service, "onExecutionEvent").mockImplementation((id, listener) => {
@@ -359,7 +360,7 @@ describe("ACP Control Room backend", () => {
     let requestSeen: AgentRunRequest | undefined;
     const fake = runner(async (request) => { requestSeen = request; return { route,
       result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } }; });
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector }));
     await expect(executor.start(next.id, "codex", undefined, "foreign-session")).rejects.toThrow("nao pertence");
     expect(store.listExecutions(next.id)).toHaveLength(0);
     await executor.start(next.id, "codex", undefined, "owned-session");
@@ -378,7 +379,7 @@ describe("ACP Control Room backend", () => {
         { id: "allow", name: "Allow", kind: "allow_once" }] });
       return { route, result: { provider: "codex", status: "error", response: "", error: "Tempo ACP esgotado", durationMs: 50 } };
     });
-    const executor = new ControlRoomTaskExecutor(service, fake, undefined, acpInspector);
+    const executor = new ControlRoomTaskExecutor(service, fake, acpRegistry({ codex: acpInspector }));
     await executor.start(task.id, "codex");
     const execution = store.listExecutions(task.id)[0]!;
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("failed"));
@@ -395,7 +396,7 @@ describe("ACP Control Room backend", () => {
     const project = service.registerProject({ name: "P", path: process.cwd() });
     const unavailable = { inspect: async () => { throw new Error("runtime ausente"); } } as unknown as CodexAcpClient;
     const executor = new ControlRoomTaskExecutor(service, runner(async () => ({ route,
-      result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), undefined, unavailable);
+      result: { provider: "codex", status: "success", response: "ok", durationMs: 1 } })), acpRegistry({ codex: unavailable }));
     const api = await serve(service, executor);
     try {
       const response = await fetch(`${api.base}/providers/codex/config?directoryId=${project.directories[0]!.id}`);

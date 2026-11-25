@@ -13,6 +13,7 @@ import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
+import { acpRegistry } from "./helpers.js";
 
 const temporaryDirectories: string[] = [];
 const stores: SqliteControlRoomStore[] = [];
@@ -27,7 +28,7 @@ describe("tarefa isolada em worktree", () => {
     const project = service.registerProject({ name: "Repo", path: repository });
     const task = service.createTask({ projectId: project.id, title: "Criar nota", prompt: "Crie nota.txt" });
     const runner = writingRunner("nota.txt");
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
 
     await executor.start(task.id, "codex");
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
@@ -54,7 +55,7 @@ describe("tarefa isolada em worktree", () => {
     const first = service.createTask({ projectId: project.id, title: "A", prompt: "Planeje A" });
     const second = service.createTask({ projectId: project.id, title: "B", prompt: "Planeje B" });
     const runner = writingRunner("a.txt", true);
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
     await executor.start(first.id, "codex");
     await expect(executor.start(second.id, "codex")).resolves.toMatchObject({ status: "running", usesWorktree: true });
     expect(store.listTaskWorktrees(first.id)[0]!.path).not.toBe(store.listTaskWorktrees(second.id)[0]!.path);
@@ -68,7 +69,7 @@ describe("tarefa isolada em worktree", () => {
     const project = service.registerProject({ name: "Pasta", path: folder });
     const task = service.createTask({ projectId: project.id, title: "Anotar", prompt: "Crie nota.txt" });
     const runner = writingRunner("nota.txt");
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
 
     await executor.start(task.id, "codex");
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
@@ -90,7 +91,7 @@ describe("tarefa isolada em worktree", () => {
     const project = service.registerProject({ name: "Repo", path: repository });
     const task = service.createTask({ projectId: project.id, title: "A", prompt: "Planeje A" });
     const runner = writingRunner("a.txt");
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
     await expect(executor.continueTask(task.id, "cedo demais")).rejects.toThrow("depois que o turno anterior terminar");
     await executor.start(task.id, "codex");
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
@@ -112,7 +113,7 @@ describe("tarefa isolada em worktree", () => {
     const { service, store, repository } = await fixture();
     const project = service.registerProject({ name: "Repo", path: repository });
     const task = service.createTask({ projectId: project.id, title: "Limpar", prompt: "Crie nota.txt" });
-    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"));
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
     await executor.start(task.id, "codex");
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
     const [worktree] = store.listTaskWorktrees(task.id);
@@ -134,7 +135,7 @@ describe("acoes de saida com aprovacao", () => {
     await git(repository, ["remote", "add", "origin", remote]);
     const project = service.registerProject({ name: "Repo", path: repository });
     const task = service.createTask({ projectId: project.id, title: "Publicar", prompt: "Crie nota.txt" });
-    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"));
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
     await executor.start(task.id, "codex");
     await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
     const [worktree] = store.listTaskWorktrees(task.id);
@@ -167,7 +168,7 @@ describe("acoes de saida com aprovacao", () => {
     const project = service.registerProject({ name: "Repo", path: repository });
     const task = service.createTask({ projectId: project.id, title: "PR", prompt: "Crie nota.txt" });
     const runner = writingRunner("nota.txt", true);
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
     await executor.start(task.id, "codex");
     const calls: string[][] = [];
     const publisher = new GitRepositoryPublisher(async (command, args) => {

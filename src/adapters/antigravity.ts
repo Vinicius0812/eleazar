@@ -30,6 +30,8 @@ export class AntigravityAdapter implements AgentAdapter {
         available: true,
         authenticated: null,
         version: runtime.version,
+        executablePath: runtime.path,
+        executableSource: runtime.source,
         detail: `ACP ${runtime.source}: ${runtime.path}. O login sera confirmado ao abrir a primeira sessao.`
       };
     } catch (error) {

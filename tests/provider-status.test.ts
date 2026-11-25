@@ -9,6 +9,7 @@ import { ControlRoomService } from "../src/core/control-room-service.js";
 import { Orchestrator } from "../src/core/orchestrator.js";
 import { ProviderStatusService } from "../src/control-room/provider-status.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
+import { registryOf } from "./helpers.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -23,7 +24,7 @@ describe("provider status service", () => {
     const running = await service.dispatch(task.id, { selectedProvider: "antigravity", reason: "teste", candidates: [], requestedActions: [] });
     service.finishProviderRun(task.id, running.dispatchLease!, { provider: "antigravity", status: "success", response: "ok", durationMs: 1, usage: { total: 42 } });
 
-    const statuses = await new ProviderStatusService(new Orchestrator([adapter("codex"), adapter("antigravity")]), service, {
+    const statuses = await new ProviderStatusService(new Orchestrator(registryOf([adapter("codex"), adapter("antigravity")])), service, {
       read: async () => ({ usedPercent: 35, resetAt: "2026-09-21T00:00:00.000Z", windowDurationMins: 300, lifetimeTokens: 500, todayTokens: 120 })
     }).list();
 
@@ -38,7 +39,7 @@ describe("provider status service", () => {
     const directory = await mkdtemp(join(tmpdir(), "eleazar-provider-status-")); temporaryDirectories.push(directory);
     const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
     const service = new ControlRoomService(store, undefined, { useWorktrees: false });
-    const statuses = await new ProviderStatusService(new Orchestrator([adapter("codex"), adapter("antigravity")]), service, { read: async () => null }).list();
+    const statuses = await new ProviderStatusService(new Orchestrator(registryOf([adapter("codex"), adapter("antigravity")])), service, { read: async () => null }).list();
     expect(statuses.find((status) => status.provider === "codex")?.usage).toMatchObject({ source: "eleazar_executions", usedPercent: null, resetAt: null, totalTokens: 0 });
     store.close();
   });

@@ -6,8 +6,8 @@ import { parseArgs } from "node:util";
 
 import { ClaudeAdapter } from "./adapters/claude.js";
 import { CodexAdapter } from "./adapters/codex.js";
-import { createEleazar } from "./create-eleazar.js";
-import { providerNames, type ProviderName } from "./core/contracts.js";
+import { createLocalEleazar } from "./create-eleazar.js";
+import type { ProviderName } from "./core/contracts.js";
 import { escapeTerminal, runCrossReviewCommand, safeResultJson } from "./cross-review-cli.js";
 
 const parsed = parseArgs({
@@ -24,7 +24,8 @@ const parsed = parseArgs({
 });
 
 const [command = "help", ...positionals] = parsed.positionals;
-const eleazar = createEleazar();
+const eleazar = await createLocalEleazar(process.cwd(), (message) => console.error(message));
+const providerNames = eleazar.registry.ids();
 
 try {
   switch (command) {
@@ -188,9 +189,7 @@ function readProvider(value: string | undefined): ProviderName | undefined {
   if (!value || value === "auto") {
     return undefined;
   }
-  if (providerNames.includes(value as ProviderName)) {
-    return value as ProviderName;
-  }
+  if (providerNames.includes(value)) return value;
   throw new Error(`Provedor invalido: ${value}. Use auto, ${providerNames.join(", ")}.`);
 }
 
@@ -204,7 +203,7 @@ Uso:
 
 Opcoes:
   -p, --prompt      Texto da tarefa
-  -P, --provider    Provedor preferido (padrao: auto). Claude exige selecao explicita e aceita apenas revisao e planejamento.
+  -P, --provider    Provedor preferido (padrao: auto, que escolhe so entre os ativos com autenticacao confirmada).
   -m, --model       Modelo especifico do provedor
   -s, --session     ID de sessao a retomar
   -C, --cwd         Diretorio de trabalho

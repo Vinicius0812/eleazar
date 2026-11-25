@@ -1,15 +1,9 @@
-export const automaticProviderNames = ["codex", "antigravity"] as const;
-export const providerNames = [...automaticProviderNames, "claude"] as const;
+/** Stable provider id. Which ids exist is decided by the descriptors registered in the host. */
+export type ProviderName = string;
 
-export type ProviderName = (typeof providerNames)[number];
-export type AutomaticProviderName = (typeof automaticProviderNames)[number];
-
+/** Shape of a provider id; `auto` is reserved for the router. */
 export function isProviderName(value: string): value is ProviderName {
-  return providerNames.some((provider) => provider === value);
-}
-
-export function isAutomaticProvider(value: string): value is AutomaticProviderName {
-  return automaticProviderNames.some((provider) => provider === value);
+  return /^[a-z][a-z0-9-]{0,31}$/.test(value) && value !== "auto";
 }
 
 export const taskKinds = [
@@ -34,12 +28,51 @@ export interface TokenUsage {
   total?: number;
 }
 
+/** Everything the core needs to know about a provider; how it is launched stays in the adapters. */
+export interface ProviderDescriptor {
+  id: ProviderName;
+  label: string;
+  transport: "acp" | "legacy";
+  roles: { implementer: boolean; reviewer: boolean };
+  /** Router weight for each task kind; kinds left out use `unknown`. */
+  affinity: Readonly<Partial<Record<TaskKind, number>>>;
+  /** Whether the provider takes part in Automatico until the operator says otherwise. */
+  automaticByDefault: boolean;
+  /** Official command the operator runs in their own terminal. Eleazar never runs it. */
+  loginCommand: string;
+  loginHint: string;
+  /** File names accepted when the operator overrides the executable path. */
+  executableNames: readonly string[];
+}
+
+/** Operator choices for one provider. They never hold credentials. */
+export interface ProviderPreferences {
+  enabled: boolean;
+  automatic: boolean;
+  executablePath: string | null;
+  defaultModel: string | null;
+}
+
 export interface AgentHealth {
   provider: ProviderName;
   available: boolean;
   authenticated: boolean | null;
   version?: string;
   detail: string;
+  executablePath?: string;
+  executableSource?: string;
+}
+
+/** Result of opening and closing one agent session. No prompt is ever sent. */
+export interface AgentVerification {
+  provider: ProviderName;
+  /** Whether the agent answered over its protocol. */
+  connected: boolean;
+  authenticated: boolean | null;
+  detail: string;
+  models: Array<{ id: string; name: string }>;
+  defaultModel: string | null;
+  checkedAt: string;
 }
 
 export interface AgentRunRequest {
@@ -88,12 +121,15 @@ export interface AgentAdapter {
   readonly supportedTasks: ReadonlySet<TaskKind>;
   health(): Promise<AgentHealth>;
   run(request: AgentRunRequest): Promise<AgentRunResult>;
+  /** Opens a session without a prompt to confirm connection and login. */
+  verify?(force?: boolean): Promise<AgentVerification>;
+  /** Last verification still valid for the current executable. */
+  lastVerification?(): AgentVerification | null;
+  /** Models and settings announced for a folder. Only agents with selectable sessions implement it. */
+  catalog?(cwd: string): Promise<ProviderCatalog>;
 }
 
-/** Stable provider-neutral catalog returned by the local Control Room API. */
-export interface ProviderConfig {
-  provider?: ProviderName;
-  directoryId: string;
+export interface ProviderCatalog {
   runtime: { path: string; version: string; source: string };
   protocolVersion: number;
   settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean";
@@ -101,6 +137,12 @@ export interface ProviderConfig {
   models: Array<{ id: string; name: string }>;
   defaultModel: string | null;
   capabilities?: { loadSession?: boolean };
+}
+
+/** Stable provider-neutral catalog returned by the local Control Room API. */
+export interface ProviderConfig extends ProviderCatalog {
+  provider?: ProviderName;
+  directoryId: string;
 }
 
 export interface RouteRequest {
