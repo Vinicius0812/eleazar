@@ -61,7 +61,7 @@ export class AcpClient {
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
     let sessionId: string | undefined;
-    let response = "";
+    const response = new ResponseText();
     let modeOptions: acp.SessionConfigOption[] | undefined;
     const turn: TurnState = { active: false };
     try {
@@ -106,18 +106,19 @@ export class AcpClient {
         // Configuration updates always feed the mode confirmation; nothing else counts outside the turn.
         modeOptions = configOptionsUpdate(notification) ?? modeOptions;
         if (!turn.active) return;
+        if (notification.update.sessionUpdate === "tool_call") response.toolCall();
         if (notification.update.sessionUpdate === "agent_message_chunk" && notification.update.content.type === "text") {
-          response += notification.update.content.text;
+          response.append(notification.update.content.text, notification.update.messageId ?? null);
         }
         request.onUpdate?.({ sessionId: notification.sessionId, kind: notification.update.sessionUpdate,
           payload: notification.update as unknown as Record<string, unknown> });
       }, turn);
-      return { provider: this.provider, status: result.stopReason === "end_turn" ? "success" : "error", response,
+      return { provider: this.provider, status: result.stopReason === "end_turn" ? "success" : "error", response: response.text,
         durationMs: Date.now() - startedAt, ...(sessionId ? { sessionId } : {}),
         ...(result.usage ? { usage: result.usage } : {}),
         ...(result.stopReason === "end_turn" ? {} : { error: `Turno ACP encerrado: ${result.stopReason}` }) };
     } catch (error) {
-      return { provider: this.provider, status: "error", response, durationMs: Date.now() - startedAt,
+      return { provider: this.provider, status: "error", response: response.text, durationMs: Date.now() - startedAt,
         ...(sessionId ? { sessionId } : {}), error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -212,6 +213,29 @@ export class AcpClient {
       child.stdout.destroy();
       child.stderr.destroy();
     }
+  }
+}
+
+/**
+ * Text of a turn. A turn may hold several messages, streamed without any separator between them; they are
+ * kept apart by a blank line. A message ends when its id changes or, for agents that send no id, at a tool call.
+ */
+export class ResponseText {
+  text = "";
+  #messageId: string | null = null;
+  #afterTool = false;
+  toolCall(): void { this.#afterTool = true; }
+  append(chunk: string, messageId: string | null): void {
+    if (chunk.trim()) {
+      const boundary = messageId !== this.#messageId || (messageId === null && this.#afterTool);
+      if (boundary && this.text.trim()) {
+        const breaks = /\n*$/.exec(this.text)![0].length + /^\n*/.exec(chunk)![0].length;
+        this.text += "\n".repeat(Math.max(0, 2 - breaks));
+      }
+      this.#messageId = messageId;
+      this.#afterTool = false;
+    }
+    this.text += chunk;
   }
 }
 

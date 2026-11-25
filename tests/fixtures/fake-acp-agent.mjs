@@ -70,9 +70,9 @@ function handle(message) {
     if (text === "EXIT") { process.exit(3); return; }
     if (text === "HANG") return;
     const sessionId = message.params.sessionId;
-    notify(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "parte 1 " } });
+    notify(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "parte 1 " } });
     notify(sessionId, { sessionUpdate: "tool_call", toolCallId: "tool-1", title: "ler arquivo", status: "pending" });
-    notify(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "parte 2" } });
+    notify(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "parte 2" } });
     pendingPrompt = { id: message.id, sessionId, late: text === "LATE", slow: text === "SLOW" };
     ignoreCancel = pendingPrompt.slow;
     send({ jsonrpc: "2.0", id: nextId++, method: "session/request_permission", params: {
@@ -86,7 +86,7 @@ function handle(message) {
   } else if (message.id === 100 && pendingPrompt) {
     const choice = message.result?.outcome?.outcome;
     notify(pendingPrompt.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "tool-1", status: "completed" });
-    notify(pendingPrompt.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: (choice === "selected" ? " permitiu" : " negou") + (prePermission ? ` pre:${prePermission}` : "") } });
+    notify(pendingPrompt.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: (choice === "selected" ? " permitiu" : " negou") + (prePermission ? ` pre:${prePermission}` : "") } });
     reply(pendingPrompt.id, { stopReason: "end_turn" });
     if (pendingPrompt.late) lateTraffic(pendingPrompt.sessionId);
   }

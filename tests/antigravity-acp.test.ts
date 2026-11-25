@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AntigravityAcpClient, antigravityAcpLaunch } from "../src/adapters/antigravity-acp.js";
 import { antigravityAcpEnvironment, resolveAntigravityRuntime } from "../src/adapters/antigravity-runtime.js";
 import { AntigravityAdapter } from "../src/adapters/antigravity.js";
-import { localPath, nodeAcpLaunch } from "../src/adapters/acp-client.js";
+import { localPath, nodeAcpLaunch, ResponseText } from "../src/adapters/acp-client.js";
 import type { ProcessResult } from "../src/adapters/process-runner.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import type { ControlRoomService } from "../src/core/control-room-service.js";
@@ -32,6 +32,22 @@ describe("Antigravity ACP stdio", () => {
       usage: { input: 10, output: 4, thinking: 2, cacheRead: 3, total: 17 } });
     expect(updates).toEqual(["session_ready", "agent_message_chunk"]);
     expect(onPermission).toHaveBeenCalledWith(expect.objectContaining({ toolKind: "edit", requiresElevation: false }));
+  });
+  it("keeps the messages before and after a tool call apart in the saved response", async () => {
+    expect(await client().run({ cwd: process.cwd(), prompt: "TWO_MESSAGES" })).toMatchObject({ status: "success", response: "Vou ler.\n\nSão 3." });
+  });
+  it("separates messages by id, without splitting one message or doubling existing breaks", () => {
+    const join = (...steps: Array<[string, string | null] | "tool">) => {
+      const response = new ResponseText();
+      for (const step of steps) { if (step === "tool") response.toolCall(); else response.append(step[0], step[1]); }
+      return response.text;
+    };
+    expect(join(["lista.", "m1"], "tool", ["Não consegui", "m2"])).toBe("lista.\n\nNão consegui");
+    expect(join(["uma ", "m1"], "tool", ["frase", "m1"])).toBe("uma frase");
+    expect(join(["um.\n", "m1"], ["dois", "m2"])).toBe("um.\n\ndois");
+    expect(join(["um.\n", null], "tool", ["\ndois", null])).toBe("um.\n\ndois");
+    expect(join(["um.", null], "tool", ["\n\n", null], ["dois", null])).toBe("um.\n\ndois");
+    expect(join("tool", ["só uma", "m1"])).toBe("só uma");
   });
   it("returns a resumed session to the asking mode even when the confirmation arrives after the response", async () => {
     const result = await client().run({ cwd: process.cwd(), prompt: "Edit", sessionId: "plan-late", onPermission: () => "allow" });
