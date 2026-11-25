@@ -29,7 +29,8 @@ export function isLiveExecution(task: Task, run: Run): boolean {
 }
 export interface ExecutionPermissionOption { id: string; name: string; kind: string; }
 export interface ExecutionPermission { id: string; executionId: string; toolCallId: string; title: string; toolKind: string | null; toolName: string | null; locations: string[]; requiresElevation: boolean; options: ExecutionPermissionOption[]; status: "pending" | "selected" | "cancelled"; selectedOptionId: string | null; createdAt: string; resolvedAt: string | null; }
-export type AcpProvider = "codex" | "claude" | "antigravity";
+/** Provider id as registered in the host; the interface never lists providers on its own. */
+export type AcpProvider = string;
 /** Operational catalog of an ACP provider. `capabilities` is optional and only present when the backend announces it. */
 export interface ProviderConfig { directoryId: string; runtime: { path: string; version: string; source: string }; protocolVersion: number; settings: Array<{ id: string; name: string; category: string | null; type: "select" | "boolean"; currentValue: string | boolean; options: Array<{ id: string; name: string }> }>; models: Array<{ id: string; name: string }>; defaultModel: string | null; capabilities?: { loadSession?: boolean }; }
 /** Kept for compatibility with the original Codex-only catalog. */
@@ -48,15 +49,23 @@ export interface Approval { id: string; taskId: string; title: string; descripti
 export interface Alert { id: string; level: "warning" | "info" | "error"; title: string; message: string; }
 export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
 export interface ProviderUsageStatus { source: ProviderUsageSource; usedPercent: number | null; resetAt: string | null; windowDurationMins: number | null; totalTokens: number | null; lifetimeTokens: number | null; todayTokens: number | null; }
-export interface ProviderStatus { provider: "codex" | "antigravity" | "claude"; available: boolean; authenticated: boolean | null; version: string | null; detail: string; fetchedAt: string; usage: ProviderUsageStatus; }
+export interface ProviderPreferences { enabled: boolean; automatic: boolean; executablePath: string | null; defaultModel: string | null; }
+export type ProviderPreferencesPatch = Partial<ProviderPreferences>;
+/** Result of opening and closing one session of the provider, without a prompt. */
+export interface ProviderVerification { connected: boolean; authenticated: boolean | null; detail: string; models: Array<{ id: string; name: string }>; defaultModel: string | null; checkedAt: string; }
+export interface ProviderStatus { provider: string; label: string; available: boolean; authenticated: boolean | null; version: string | null; detail: string; executable: { path: string; source: string } | null; transport: "acp" | "legacy"; roles: { implementer: boolean; reviewer: boolean }; login: { command: string; hint: string }; preferences: ProviderPreferences; verification: ProviderVerification | null; fetchedAt: string; usage: ProviderUsageStatus; }
 export interface ControlRoomSnapshot { projects: Project[]; tasks: Task[]; runs: Run[]; logs: LogEntry[]; approvals: Approval[]; alerts: Alert[]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; }
 export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; }
 export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
-export type ExecutionProvider = "auto" | ProviderStatus["provider"];
+/** `auto` or a registered provider id. */
+export type ExecutionProvider = string;
 export interface ControlRoomClient {
   getSnapshot(): Promise<ControlRoomSnapshot>;
   getExecutionDetail(executionId: string): Promise<ExecutionDetail>;
   getProviderStatuses(refresh?: boolean): Promise<ProviderStatus[]>;
+  /** Opens and closes one session, without a prompt, to confirm connection and login. */
+  verifyProvider(provider: string): Promise<ProviderStatus[]>;
+  updateProvider(provider: string, patch: ProviderPreferencesPatch): Promise<ProviderStatus[]>;
   registerProject(input: RegisterProjectInput): Promise<Project>;
   createTask(input: CreateTaskInput): Promise<Task>;
   getProviderConfig(provider: AcpProvider, directoryId: string): Promise<ProviderConfig>;

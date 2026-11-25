@@ -36,6 +36,8 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     },
     getExecutionDetail(executionId: string) { return request<ExecutionDetail>(`/executions/${encodeURIComponent(executionId)}`); },
     getProviderStatuses(refresh = false) { return request<ProviderStatus[]>(`/providers/status${refresh ? "?refresh=true" : ""}`); },
+    verifyProvider(provider) { return request<ProviderStatus[]>(`/providers/${encodeURIComponent(provider)}/verify`, { method: "POST", body: "{}" }); },
+    updateProvider(provider, patch) { return request<ProviderStatus[]>(`/providers/${encodeURIComponent(provider)}/settings`, { method: "POST", body: JSON.stringify(patch) }); },
     registerProject(input: RegisterProjectInput) { return request<Project>("/projects", { method: "POST", body: JSON.stringify(input) }); },
     createTask(input: CreateTaskInput) { return request<Task>("/tasks", { method: "POST", body: JSON.stringify(input) }); },
     getProviderConfig(provider: AcpProvider, directoryId: string) { return request<ProviderConfig>(`/providers/${provider}/config?directoryId=${encodeURIComponent(directoryId)}`); },

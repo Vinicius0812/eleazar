@@ -24,7 +24,7 @@ export function acpRegistry(clients: Record<string, Pick<AcpClient, "inspect">> 
     provider: id, supportedTasks: new Set(taskKinds),
     health: async () => ({ provider: id, available: true, authenticated: true, version: "test", executablePath: id, detail: "teste" }),
     run: async () => ({ provider: id, status: "success", response: "ok", durationMs: 1 })
-  }, { client: clients[id] ?? { inspect: refuse }, sessionConfirmsLogin: false,
+  }, { client: clients[id] ?? { inspect: refuse }, confirmsLogin: () => false,
     catalogPolicy: { selectableModes: modes[id] ?? ["default"], allSettings: id === "claude" } })), stored);
 }
 

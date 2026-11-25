@@ -1,22 +1,34 @@
-import { providerLabels, type ExecutionLaunch } from "./useExecutionLaunch.js";
-import type { ExecutionProvider } from "../services/contracts.js";
+import type { ProviderStatus } from "../services/contracts.js";
+import type { ExecutionLaunch } from "./useExecutionLaunch.js";
+
+function choiceLabel({ label, available, authenticated }: ProviderStatus): string {
+  if (!available) return `${label} (não encontrado)`;
+  return authenticated === false ? `${label} (falta entrar na conta)` : label;
+}
 
 /** Provider, model and resume fields of the execution dialog; identical for every ACP provider. */
 export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunch; busy: boolean }) {
-  const { acp, config } = launch;
-  const name = acp ? providerLabels[acp] : "";
-  const defaultName = config?.models.find((item) => item.id === config.defaultModel)?.name ?? config?.defaultModel;
+  const { acp, config, choices, chosen } = launch;
+  const name = chosen?.label ?? "";
+  const automatic = choices.filter((item) => item.preferences.automatic);
+  const modelName = (id: string | null | undefined) => config?.models.find((item) => item.id === id)?.name;
+  const saved = modelName(chosen?.preferences.defaultModel);
+  const announced = modelName(config?.defaultModel) ?? config?.defaultModel;
+  const defaultText = saved ? `Seu padrão (${saved})` : announced ? `Padrão anunciado (${announced})` : `Padrão do ${name}`;
   return (
     <>
       <label>
         Provedor
-        <select value={launch.provider} onChange={(event) => launch.setProvider(event.target.value as ExecutionProvider)} disabled={busy}>
+        <select value={launch.provider} onChange={(event) => launch.setProvider(event.target.value)} disabled={busy}>
           <option value="auto">Automático (recomendado)</option>
-          <option value="codex">Codex</option>
-          <option value="antigravity">Antigravity</option>
-          <option value="claude">Claude Code</option>
+          {choices.map((item) => <option key={item.provider} value={item.provider} disabled={!item.available || item.authenticated === false}>{choiceLabel(item)}</option>)}
         </select>
       </label>
+      {launch.provider === "auto" && choices.length > 0 && (
+        <small>{automatic.length
+          ? `Escolhe entre ${automatic.map((item) => item.label).join(", ")} conforme o tipo da tarefa, e só usa quem tiver o login confirmado.`
+          : "Nenhum provedor participa do Automático. Ajuste na tela Provedores ou escolha um acima."}</small>
+      )}
       {acp && (
         <div className="model-picker">
           {launch.status === "loading" && <small role="status">Carregando modelos do {name}…</small>}
@@ -26,7 +38,7 @@ export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunc
               <label>
                 Modelo
                 <select value={launch.model} onChange={(event) => launch.setModel(event.target.value)} disabled={busy}>
-                  <option value="">{defaultName ? `Padrão anunciado (${defaultName})` : `Padrão do ${name}`}</option>
+                  <option value="">{defaultText}</option>
                   {config.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
               </label>
@@ -50,8 +62,8 @@ export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunc
           )}
         </div>
       )}
-      {launch.provider === "claude" ? (
-        <small>O Claude Code usa a sua sessão oficial já autenticada e trabalha no escopo aprovado da tarefa. O título e a solicitação são enviados ao provedor; inclua apenas o que você autoriza compartilhar. Pedidos de permissão aparecem na sessão e esperam a sua decisão. Push, merge, deploy, publicação e credenciais são proibidos na instrução enviada.</small>
+      {chosen ? (
+        <small>O {name} usa a sua sessão oficial já autenticada e trabalha no escopo aprovado da tarefa. O título e a solicitação são enviados ao provedor; inclua apenas o que você autoriza compartilhar. Pedidos de permissão aparecem na sessão e esperam a sua decisão. Push, merge, deploy, publicação e credenciais são proibidos na instrução enviada.</small>
       ) : (
         <small>O provedor executa no diretório-alvo. Push, merge, deploy, publicação e manipulação de credenciais estão bloqueados neste fluxo.</small>
       )}

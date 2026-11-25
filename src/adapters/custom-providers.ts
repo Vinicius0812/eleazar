@@ -67,7 +67,7 @@ export function customProvider(spec: CustomProviderSpec, executablePath: () => s
       executableNames: [executableName(spec.executable)]
     },
     adapter: new AcpAgentAdapter(base, {
-      client, sessionConfirmsLogin: spec.sessionConfirmsLogin, catalogPolicy: { selectableModes: [spec.requiredMode] }
+      client, confirmsLogin: () => spec.sessionConfirmsLogin, catalogPolicy: { selectableModes: [spec.requiredMode] }
     })
   };
 }

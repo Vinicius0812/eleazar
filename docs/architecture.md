@@ -11,9 +11,11 @@ CLI / futura interface
         v
       Router ----> diagnostico e pontuacao
         |
-        +-------> CodexAdapter -------> @openai/codex-sdk
+  ProviderRegistry ----> descritor + AgentAdapter de cada provedor
         |
-        +-------> AntigravityAdapter -> ACP (agy acp --sandbox)
+        +-------> Codex, Claude Code, Antigravity -> ACP
+        |
+        +-------> agentes de .eleazar/providers.json -> ACP, politica generica
 ```
 
 ## Responsabilidades
@@ -24,7 +26,7 @@ Coordena uma execucao e mantem a interface publica independente dos provedores. 
 
 ### Router
 
-Classifica a tarefa com regras deterministicas e pontua cada provedor. Provedores ausentes ou explicitamente nao autenticados sao removidos da selecao.
+Classifica a tarefa com regras deterministicas e pontua cada provedor. A afinidade vem do descritor de cada provedor. O Automatico so escolhe provedores ativos com autenticacao confirmada, e uma escolha explicita nunca e trocada por outro provedor.
 
 O roteamento deterministico e intencional no inicio: ele e barato, auditavel e pode ser testado sem consumir creditos. Telemetria e avaliacao historica poderao ajustar as pontuacoes no futuro.
 
@@ -32,7 +34,8 @@ O roteamento deterministico e intencional no inicio: ele e barato, auditavel e p
 
 Traduzem o contrato interno para a interface oficial de cada agente:
 
-- Codex: SDK TypeScript oficial, com threads locais retomaveis.
+- Codex: ponte ACP oficial sobre o Codex nativo; o SDK fica restrito a revisao cruzada.
+- Claude Code: ponte ACP sobre o CLI nativo, so com ferramentas de arquivo.
 - Antigravity: servidor ACP nativo do CLI (`agy acp`), com sandbox habilitado e modo `default`.
 
 ### Credenciais

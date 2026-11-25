@@ -1,6 +1,7 @@
 import type { ProviderName } from "../core/contracts.js";
 import type { ProviderRegistration } from "../core/provider-registry.js";
 import { AcpAgentAdapter } from "./acp-agent-adapter.js";
+import type { AcpSessionInfo } from "./acp-client.js";
 import { AntigravityAcpClient, antigravityAcpLaunch } from "./antigravity-acp.js";
 import { antigravityCandidates, resolveAntigravityRuntime } from "./antigravity-runtime.js";
 import { AntigravityAdapter } from "./antigravity.js";
@@ -29,7 +30,7 @@ function codex(executablePath: () => string | null): ProviderRegistration {
       executableNames: ["codex.exe", "codex"]
     },
     adapter: new AcpAgentAdapter(new CodexAdapter("default", resolveRuntime, client), {
-      client, sessionConfirmsLogin: false, catalogPolicy: { selectableModes: ["read-only", "workspace-write"] }
+      client, confirmsLogin: () => false, catalogPolicy: { selectableModes: ["read-only", "workspace-write"] }
     })
   };
 }
@@ -46,7 +47,7 @@ function claude(executablePath: () => string | null): ProviderRegistration {
       executableNames: ["claude.exe", "claude"]
     },
     adapter: new AcpAgentAdapter(new ClaudeAdapter(undefined, "default", resolveRuntime, client), {
-      client, sessionConfirmsLogin: false, catalogPolicy: { selectableModes: ["default"], allSettings: true }
+      client, confirmsLogin: () => false, catalogPolicy: { selectableModes: ["default"], allSettings: true }
     })
   };
 }
@@ -61,9 +62,15 @@ function antigravity(executablePath: () => string | null): ProviderRegistration 
       loginCommand: "agy", loginHint: "Abra o agy uma vez e entre com a sua conta Google.",
       executableNames: ["agy.exe", "agy"]
     },
-    // The agy CLI has no login status command; it refuses session/new when nobody is signed in.
+    // The agy CLI has no login status command; the session answer carries the plan of the signed-in account.
     adapter: new AcpAgentAdapter(new AntigravityAdapter(resolveRuntime, client), {
-      client, sessionConfirmsLogin: true, catalogPolicy: { selectableModes: ["default"] }
+      client, confirmsLogin: reportsAccountTier, catalogPolicy: { selectableModes: ["default"] }
     })
   };
+}
+
+/** Observed on agy 1.5.9: `_meta.antigravity.tier` names the account's plan. Only its presence is used. */
+export function reportsAccountTier({ meta }: Pick<AcpSessionInfo, "meta">): boolean {
+  const antigravity = meta?.antigravity as { tier?: { id?: unknown } | null } | null | undefined;
+  return typeof antigravity?.tier?.id === "string" && antigravity.tier.id.length > 0;
 }

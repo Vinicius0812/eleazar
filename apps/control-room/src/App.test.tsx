@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
-import type { AcpProvider, ControlRoomClient, ControlRoomSnapshot, ExecutionDetail } from "./services/contracts.js";
+import type { AcpProvider, ControlRoomClient, ControlRoomSnapshot, ExecutionDetail, ProviderStatus } from "./services/contracts.js";
 
 afterEach(() => {
   cleanup();
@@ -33,6 +33,50 @@ describe("Task workspace", () => {
     expect(screen.getByText(/sua sessão oficial já autenticada e trabalha no escopo aprovado/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Executar agora" }));
     expect(executeTask).toHaveBeenCalledWith(queued.id, "claude");
+  });
+
+  it("offers the providers the host registered, without the disabled or signed-out ones", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const queued = { ...snapshot.tasks[0]!, status: "queued" as const };
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [queued], runs: [] });
+    vi.spyOn(controlled, "getProviderStatuses").mockResolvedValue([
+      providerStatus("codex", { authenticated: false }), providerStatus("quarto", { label: "Quarto agente" }),
+      providerStatus("claude", { preferences: { enabled: false, automatic: true, executablePath: null, defaultModel: null } }),
+      providerStatus("antigravity", { preferences: { enabled: true, automatic: false, executablePath: null, defaultModel: "m-b" } })]);
+    vi.spyOn(controlled, "getProviderConfig").mockImplementation(async (provider) => catalog(provider, "1", ["m-a", "m-b"], "m-a"));
+    const executeTask = vi.spyOn(controlled, "executeTask").mockResolvedValue(queued);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Executar tarefa" }));
+    const provider = screen.getByLabelText("Provedor");
+    await within(provider).findByRole("option", { name: "Quarto agente" });
+    expect(within(provider).getAllByRole("option").map((option) => option.textContent)).toEqual(["Automático (recomendado)", "Codex (falta entrar na conta)", "Quarto agente", "Antigravity"]);
+    expect(within(provider).getByRole("option", { name: /Codex/ })).toBeDisabled();
+    expect(screen.getByText(/Escolhe entre Codex, Quarto agente conforme/)).toBeInTheDocument();
+    await user.selectOptions(provider, "antigravity");
+    expect(await screen.findByRole("option", { name: "Seu padrão (m-b)" })).toBeInTheDocument();
+    await user.selectOptions(provider, "quarto");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+    expect(executeTask).toHaveBeenCalledWith(queued.id, "quarto");
+  });
+
+  it("opens the providers screen and applies what the host answers", async () => {
+    window.location.hash = "#/providers";
+    const controlled = client();
+    vi.spyOn(controlled, "getProviderStatuses").mockResolvedValue([providerStatus("antigravity", { authenticated: null })]);
+    const verify = vi.spyOn(controlled, "verifyProvider").mockResolvedValue([providerStatus("antigravity")]);
+    vi.spyOn(controlled, "updateProvider").mockRejectedValue(new Error("O executavel informado nao existe."));
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    const card = within(await screen.findByRole("article", { name: "Antigravity" }));
+    expect(card.getByText("Login não confirmado")).toBeInTheDocument();
+    await user.click(card.getByRole("button", { name: /Verificar conexão/ }));
+    expect(verify).toHaveBeenCalledWith("antigravity");
+    expect(await card.findByText("Pronto")).toBeInTheDocument();
+    await user.click(card.getByLabelText("Ativo"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("O executavel informado nao existe.");
   });
 
   it("offers only the announced Codex models and sends the chosen one", async () => {
@@ -513,8 +557,15 @@ function catalog(provider: AcpProvider, version: string, models: string[], defau
   return { directoryId: "directory-1", runtime: { path: provider, version, source: "path" }, protocolVersion: 1, settings: [], models: models.map((id) => ({ id, name: id })), defaultModel, ...(loadSession === undefined ? {} : { capabilities: { loadSession } }) };
 }
 
+const providerNames: Record<string, string> = { codex: "Codex", antigravity: "Antigravity", claude: "Claude Code" };
+function providerStatus(provider: string, fields: Partial<ProviderStatus> = {}): ProviderStatus {
+  return { provider, label: providerNames[provider] ?? provider, available: true, authenticated: true, version: "1.0.0", detail: "ok", executable: { path: `C:\\${provider}.exe`, source: "user" },
+    transport: "acp", roles: { implementer: true, reviewer: true }, login: { command: `${provider} login`, hint: "Entre na sua conta." },
+    preferences: { enabled: true, automatic: true, executablePath: null, defaultModel: null }, verification: null, fetchedAt: "2026-01-01T00:00:00.000Z",
+    usage: { source: "eleazar_executions", usedPercent: null, resetAt: null, windowDurationMins: null, totalTokens: 0, lifetimeTokens: null, todayTokens: null }, ...fields };
+}
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }) };
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }) };
 }

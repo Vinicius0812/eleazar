@@ -20,6 +20,8 @@ export interface AcpSessionInfo {
   sessionId: string;
   modes: acp.SessionModeState | null;
   configOptions: acp.SessionConfigOption[];
+  /** Extension data of the session answer; its content is provider specific. */
+  meta?: Record<string, unknown> | null;
 }
 
 /** How long to wait for the agent to confirm the required mode after session/set_mode. */
@@ -49,7 +51,7 @@ export class AcpClient {
       try {
         modeOptions = undefined;
         const ready = await ensureRequiredMode(agent, session, this.provider, this.deps.requiredMode, () => modeOptions);
-        return { ...state, sessionId: ready.sessionId, modes: ready.modes ?? null, configOptions: ready.configOptions ?? [] };
+        return { ...state, sessionId: ready.sessionId, modes: ready.modes ?? null, configOptions: ready.configOptions ?? [], meta: session._meta ?? null };
       } finally {
         if (!sessionId && state.capabilities.sessionCapabilities?.close) {
           await agent.request(acp.methods.agent.session.close, { sessionId: session.sessionId }).catch(() => {});
@@ -125,7 +127,7 @@ export class AcpClient {
 
   private async withConnection<T>(
     request: AgentRunRequest,
-    operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes">, setActiveSession: (id: string) => void) => Promise<T>,
+    operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes" | "meta">, setActiveSession: (id: string) => void) => Promise<T>,
     onUpdate?: (notification: acp.SessionNotification) => void,
     turn: TurnState = { active: false }
   ): Promise<T> {

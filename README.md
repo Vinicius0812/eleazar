@@ -60,7 +60,32 @@ npm run dev -- run "Revise este trecho aprovado: ..." --provider claude
 
 `plan` mostra a decisão de roteamento. `run` envia o texto informado ao Claude, por isso inclua somente o contexto que você aprova compartilhar com o provedor. A execução comum usa a ponte Claude ACP `0.107.0`, com sessões retomáveis quando anunciadas pelo agente, eventos parciais e pedidos de permissão. As ferramentas expostas são `Read`, `Glob`, `Grep`, `Edit` e `Write`; `Bash`, terminal, ferramentas web e MCP não são expostos. As regras de arquivos do SDK bloqueiam leituras e escritas fora dos diretórios de trabalho, enquanto `Edit` e `Write` exigem confirmação e o cliente verifica os caminhos reais antes de aceitar uma permissão. Esse modo de arquivos não exige o sandbox de shell do Claude e não equivale ao sandbox `workspace-write` do Codex.
 
-Claude exige seleção explícita na CLI e na Control Room. No painel, qualquer tipo de tarefa pode selecioná-lo ao confirmar a execução, no escopo aprovado da tarefa. O título e a solicitação são enviados ao provedor, e os pedidos de permissão aparecem na sessão e esperam a decisão do operador. O modo **Automático** nunca escolhe o Claude por conta própria. A **revisão cruzada** continua usando o modo textual restrito do `ClaudeAdapter`, sem ferramentas nem acesso ao checkout.
+No painel, qualquer tipo de tarefa pode selecionar o Claude ao confirmar a execução, no escopo aprovado da tarefa. O título e a solicitação são enviados ao provedor, e os pedidos de permissão aparecem na sessão e esperam a decisão do operador. A **revisão cruzada** continua usando o modo textual restrito do `ClaudeAdapter`, sem ferramentas nem acesso ao checkout.
+
+### Provedores e modo Automático
+
+Cada pessoa usa a própria conta, já conectada na CLI de cada provedor. A tela **Provedores** do Control Room mostra versão, executável, login e conexão ACP, e quando falta o login exibe o comando oficial para rodar no seu terminal. O Eleazar nunca faz login nem lê credenciais. **Verificar conexão** abre e fecha uma sessão do agente, sem enviar prompt.
+
+Na mesma tela você ativa ou desativa um provedor, escolhe o modelo padrão, aponta outro executável e decide quem participa do **Automático**. O Automático compara os participantes pela afinidade com o tipo da tarefa e só usa quem tem o login confirmado. Quando você escolhe um provedor, a tarefa nunca é desviada para outro.
+
+Um agente que já fala ACP entra sem mudar o código, em `.eleazar/providers.json` na pasta onde o Eleazar roda (o host lê o arquivo ao iniciar):
+
+```json
+{
+  "providers": [{
+    "id": "meu-agente",
+    "label": "Meu agente",
+    "executable": "meu-agente",
+    "args": ["acp"],
+    "requiredMode": "default",
+    "loginCommand": "meu-agente login",
+    "loginHint": "Entre com a sua conta no Meu agente.",
+    "affinity": { "implementation": 70 }
+  }]
+}
+```
+
+Esses agentes usam a política genérica: binário nativo sem shell, argumentos fixos, sem variáveis de credenciais, modo de permissão obrigatório e edições limitadas às pastas da tarefa. Argumentos que pulam permissões são recusados. Eles ficam fora do Automático até você ativá-los. Os campos opcionais estão em [docs/control-room.md](docs/control-room.md).
 
 ### Revisão cruzada no terminal
 

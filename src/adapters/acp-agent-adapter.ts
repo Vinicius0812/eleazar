@@ -31,8 +31,8 @@ export class AcpAgentAdapter implements AgentAdapter {
   constructor(private readonly base: Pick<AgentAdapter, "provider" | "supportedTasks" | "health" | "run">, private readonly deps: {
     client: Pick<AcpClient, "inspect">;
     catalogPolicy: AcpCatalogPolicy;
-    /** Whether this agent refuses to open a session when nobody is signed in. */
-    sessionConfirmsLogin: boolean;
+    /** Whether an opened session proves that someone is signed in; opening one is not proof for every agent. */
+    confirmsLogin: (session: AcpSessionInfo) => boolean;
     now?: () => number;
   }) {
     this.provider = base.provider;
@@ -86,12 +86,12 @@ export class AcpAgentAdapter implements AgentAdapter {
     if (!health.available) return result({ connected: false, authenticated: health.authenticated, detail: health.detail });
     try {
       const info = await inTemporaryDirectory((cwd) => this.deps.client.inspect(cwd, undefined, verificationTimeoutMs));
-      const authenticated = health.authenticated ?? (this.deps.sessionConfirmsLogin ? true : null);
+      const authenticated = health.authenticated ?? (this.deps.confirmsLogin(info) ? true : null);
       return result({
         connected: true, authenticated,
         detail: authenticated ? "Conexao ACP e login confirmados."
           : authenticated === false ? "A conexao ACP responde, mas a CLI informa que nao ha login."
-          : "A conexao ACP responde, mas este agente nao informa se ha login."
+          : "A conexao ACP responde, mas o agente nao confirmou o login."
       }, toProviderCatalog(info, this.deps.catalogPolicy));
     } catch (error) {
       if (isAuthenticationRequired(error)) {

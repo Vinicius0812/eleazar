@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AcpAgentAdapter } from "../src/adapters/acp-agent-adapter.js";
 import { isAuthenticationRequired, type AcpSessionInfo } from "../src/adapters/acp-client.js";
-import { builtInProviderIds } from "../src/adapters/built-in-providers.js";
+import { builtInProviderIds, reportsAccountTier } from "../src/adapters/built-in-providers.js";
 import { customProvider, parseCustomProvider, readCustomProviders } from "../src/adapters/custom-providers.js";
 import { findOnPath } from "../src/adapters/executable-path.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
@@ -145,7 +145,7 @@ describe("verificacao de conexao", () => {
     const run = vi.fn<AgentAdapter["run"]>(async () => ({ provider: "agy", status: "success", response: "", durationMs: 1 }));
     const spy = vi.fn(inspect);
     const adapter = new AcpAgentAdapter({ provider: "agy", supportedTasks: new Set(taskKinds), health, run },
-      { client: { inspect: spy }, sessionConfirmsLogin, catalogPolicy: { selectableModes: [] }, now: () => time });
+      { client: { inspect: spy }, confirmsLogin: () => sessionConfirmsLogin, catalogPolicy: { selectableModes: [] }, now: () => time });
     return { adapter, health, run, inspect: spy, advance: (ms: number) => { time += ms; } };
   }
 
@@ -192,6 +192,13 @@ describe("verificacao de conexao", () => {
     expect((await adapter.verify()).authenticated).toBe(false);
     advance(31_000);
     expect((await adapter.verify()).authenticated).toBe(true);
+  });
+
+  it("so aceita o plano da conta como prova de login do Antigravity", () => {
+    expect(reportsAccountTier({ meta: { antigravity: { tier: { id: "g1-pro", name: "Pro" } } } })).toBe(true);
+    for (const meta of [null, {}, { antigravity: null }, { antigravity: { tier: true } }, { antigravity: { tier: { id: "" } } }]) {
+      expect(reportsAccountTier({ meta })).toBe(false);
+    }
   });
 
   it("reconhece somente a resposta de autenticacao do protocolo", () => {
