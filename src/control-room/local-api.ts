@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
-import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
-import { isAutomaticProvider, isProviderName, taskKinds, type ProviderName } from "../core/contracts.js";
+import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type ProviderPreferencesPatch, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
+import { isProviderName, taskKinds } from "../core/contracts.js";
 import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
 import type { OutboundActionService } from "../core/outbound-actions.js";
@@ -42,12 +42,20 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (!providers) return json(response, 200, []);
     return json(response, 200, await providers.list(url.searchParams.get("refresh") === "true"));
   }
-  const providerConfigMatch = /^\/api\/control-room\/providers\/(codex|claude|antigravity)\/config$/.exec(url.pathname);
+  const providerConfigMatch = /^\/api\/control-room\/providers\/([a-z][a-z0-9-]{0,31})\/config$/.exec(url.pathname);
   if (method === "GET" && providerConfigMatch?.[1]) {
     if (!executor) throw new Error("Executor ACP nao configurado.");
     const directoryId = url.searchParams.get("directoryId");
     if (!directoryId) throw new Error("Informe directoryId para o catalogo ACP.");
-    return json(response, 200, await executor.providerConfig(providerConfigMatch[1] as ProviderName, directoryId));
+    return json(response, 200, await executor.providerConfig(providerConfigMatch[1], directoryId));
+  }
+  const providerActionMatch = /^\/api\/control-room\/providers\/([a-z][a-z0-9-]{0,31})\/(settings|verify)$/.exec(url.pathname);
+  if (method === "POST" && providerActionMatch?.[1]) {
+    if (!providers) throw new Error("Provedores nao configurados neste host local.");
+    const body = await readBody(request);
+    return json(response, 200, providerActionMatch[2] === "verify"
+      ? await providers.verify(providerActionMatch[1])
+      : await providers.updatePreferences(providerActionMatch[1], preferencesPatch(body)));
   }
   const eventsMatch = /^\/api\/control-room\/executions\/([^/]+)\/events$/.exec(url.pathname);
   if (method === "GET" && eventsMatch?.[1]) {
@@ -106,11 +114,12 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
   }
   const dispatchMatch = /^\/api\/control-room\/tasks\/([^/]+)\/dispatch$/.exec(url.pathname);
   if (method === "POST" && dispatchMatch?.[1]) {
-    const body = await readBody(request); const selectedProvider = optionalString(body, "selectedProvider");
-    if (selectedProvider !== undefined && !isAutomaticProvider(selectedProvider)) throw new Error("Provedor invalido.");
+    const body = await readBody(request);
+    // Naming a provider here would skip the login confirmation that execute does.
+    if (optionalString(body, "selectedProvider")) throw new Error("Escolha o provedor em execute, que confirma a autenticacao.");
     const actions = arrayOfStrings(body.requestedActions, "requestedActions") as TaskAction[];
     if (!actions.every((action) => taskActions.includes(action))) throw new Error("Acao de despacho invalida.");
-    return json(response, 202, await service.dispatch(dispatchMatch[1], { selectedProvider: selectedProvider ?? null, reason: stringField(body, "reason"), candidates: [], requestedActions: actions }));
+    return json(response, 202, await service.dispatch(dispatchMatch[1], { selectedProvider: null, reason: stringField(body, "reason"), candidates: [], requestedActions: actions }));
   }
   const executeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/execute$/.exec(url.pathname);
   if (method === "POST" && executeMatch?.[1]) {
@@ -219,6 +228,22 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
 }
 function stringField(body: Record<string, unknown>, name: string): string { const value = optionalString(body, name); if (!value) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function optionalString(body: Record<string, unknown>, name: string): string | undefined { const value = body[name]; return typeof value === "string" ? value.trim() : undefined; }
+function preferencesPatch(body: Record<string, unknown>): ProviderPreferencesPatch {
+  const patch: ProviderPreferencesPatch = {};
+  for (const name of ["enabled", "automatic"] as const) {
+    const value = body[name];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") throw new Error(`Campo invalido: ${name}`);
+    patch[name] = value;
+  }
+  for (const name of ["executablePath", "defaultModel"] as const) {
+    const value = body[name];
+    if (value === undefined) continue;
+    if (value !== null && (typeof value !== "string" || value.length > 500)) throw new Error(`Campo invalido: ${name}`);
+    patch[name] = value?.trim() || null;
+  }
+  return patch;
+}
 function optionalDirectories(value: unknown): Array<{ name?: string; path: string }> | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || !value.length) throw new Error("Campo directories deve conter ao menos um diretorio.");

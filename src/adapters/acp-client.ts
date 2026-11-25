@@ -41,9 +41,9 @@ export class AcpClient {
     strictFileScope?: boolean;
   }) {}
 
-  async inspect(cwd: string, sessionId?: string): Promise<AcpSessionInfo> {
+  async inspect(cwd: string, sessionId?: string, timeoutMs?: number): Promise<AcpSessionInfo> {
     let modeOptions: acp.SessionConfigOption[] | undefined;
-    return this.withConnection({ cwd, prompt: "", ...(sessionId ? { sessionId } : {}) }, async (agent, state, setActiveSession) => {
+    return this.withConnection({ cwd, prompt: "", ...(sessionId ? { sessionId } : {}), ...(timeoutMs ? { timeoutMs } : {}) }, async (agent, state, setActiveSession) => {
       const session = await openSession(agent, state.capabilities, cwd, sessionId, [], this.deps.sessionMeta?.({ cwd, prompt: "" }));
       setActiveSession(session.sessionId);
       try {
@@ -200,7 +200,7 @@ export class AcpClient {
       const reason = error instanceof Error && "data" in error && error.data && typeof error.data === "object" &&
         "startupFailureReason" in error.data && typeof error.data.startupFailureReason === "string"
         ? error.data.startupFailureReason : null;
-      if (reason) throw new Error(`${error instanceof Error ? error.message : String(error)} [startupFailureReason=${reason}]`);
+      if (reason) throw new Error(`${error instanceof Error ? error.message : String(error)} [startupFailureReason=${reason}]`, { cause: error });
       throw error;
     } finally {
       turn.active = false;
@@ -214,6 +214,13 @@ export class AcpClient {
       child.stderr.destroy();
     }
   }
+}
+
+/** True only for the protocol's own "Authentication required" answer; any other failure says nothing about the login. */
+export function isAuthenticationRequired(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if ("code" in error && error.code === -32000 && /\bauth/i.test(error.message)) return true;
+  return error.cause !== undefined && isAuthenticationRequired(error.cause);
 }
 
 /**

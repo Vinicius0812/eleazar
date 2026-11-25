@@ -57,11 +57,15 @@ export class CodexAdapter implements AgentAdapter {
   readonly provider = "codex" as const;
   readonly supportedTasks = supportedTasks;
 
-  constructor(private readonly mode: "default" | "cross-review" = "default") {}
+  constructor(
+    private readonly mode: "default" | "cross-review" = "default",
+    private readonly resolveRuntime: () => ReturnType<typeof resolveCodexRuntime> = () => resolveCodexRuntime(),
+    private readonly client?: Pick<CodexAcpClient, "run">
+  ) {}
 
   async health(): Promise<AgentHealth> {
     try {
-      const runtime = this.mode === "cross-review" ? null : await resolveCodexRuntime();
+      const runtime = this.mode === "cross-review" ? null : await this.resolveRuntime();
       const executable = runtime?.path ?? codexCliPath;
       const isJs = executable.endsWith(".js");
       const version = await runProcess(isJs ? process.execPath : executable, isJs ? [executable, "--version"] : ["--version"], { timeoutMs: 5_000 });
@@ -83,6 +87,7 @@ export class CodexAdapter implements AgentAdapter {
         available: true,
         authenticated,
         version: version.stdout.trim(),
+        ...(runtime ? { executablePath: runtime.path, executableSource: runtime.source } : {}),
         detail: `${runtime ? `ACP ${runtime.source}: ${runtime.path}. ` : "SDK cross-review. "}${authenticated ? authDetail || "Autenticado." : authDetail || "Nao autenticado."}`
       };
     } catch (error) {
@@ -99,7 +104,7 @@ export class CodexAdapter implements AgentAdapter {
     const startedAt = Date.now();
     const crossReview = this.mode === "cross-review";
 
-    if (!crossReview) return new CodexAcpClient().run(request);
+    if (!crossReview) return (this.client ?? new CodexAcpClient()).run(request);
 
     try {
       if (crossReview && request.sessionId !== undefined) {

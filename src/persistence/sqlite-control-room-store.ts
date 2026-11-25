@@ -20,6 +20,17 @@ import type {
   TaskWorktree,
   TaskTransition
 } from "../core/control-room.js";
+import type { ProviderPreferences } from "../core/contracts.js";
+
+/** Operator choices of an existing database, read without migrating or writing to it. */
+export function readProviderPreferences(databasePath: string): Map<string, ProviderPreferences> {
+  const db = new Database(databasePath, { readonly: true });
+  try {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'provider_settings'").get();
+    const rows = exists ? db.prepare("SELECT * FROM provider_settings").all() as Row[] : [];
+    return new Map(rows.map((row) => [stringValue(row, "provider_id"), mapPreferences(row)]));
+  } finally { db.close(); }
+}
 
 /** SQLite persistence for the local Control Room. Database paths normally live under .eleazar/. */
 export class SqliteControlRoomStore implements ControlRoomStore {
@@ -343,6 +354,17 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       mergeable: stringValue(item, "mergeable") as TaskPullRequest["mergeable"], checks: JSON.parse(stringValue(item, "checks_json")) as TaskPullRequest["checks"],
       fetchedAt: stringValue(item, "fetched_at") }));
   }
+  getProviderPreferences(providerId: string): ProviderPreferences | null {
+    const row = this.#db.prepare("SELECT * FROM provider_settings WHERE provider_id = ?").get(providerId) as Row | undefined;
+    return row ? mapPreferences(row) : null;
+  }
+  saveProviderPreferences(providerId: string, preferences: ProviderPreferences, updatedAt: string): void {
+    this.#db.prepare(`INSERT INTO provider_settings (provider_id, enabled, automatic, executable_path, default_model, updated_at)
+      VALUES (@providerId, @enabled, @automatic, @executablePath, @defaultModel, @updatedAt)
+      ON CONFLICT(provider_id) DO UPDATE SET enabled = excluded.enabled, automatic = excluded.automatic,
+        executable_path = excluded.executable_path, default_model = excluded.default_model, updated_at = excluded.updated_at`)
+      .run({ ...preferences, enabled: preferences.enabled ? 1 : 0, automatic: preferences.automatic ? 1 : 0, providerId, updatedAt });
+  }
   createOutboundAction(action: TaskOutboundAction): void {
     this.#db.prepare(`INSERT INTO task_outbound_actions (id, task_id, kind, status, title, body, targets_json, result, requested_by, created_at, decided_at, finished_at)
       VALUES (@id, @taskId, @kind, @status, @title, @body, @targetsJson, @result, @requestedBy, @createdAt, @decidedAt, @finishedAt)`)
@@ -410,6 +432,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS task_outbound_actions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), kind TEXT NOT NULL,
         status TEXT NOT NULL, title TEXT, body TEXT, targets_json TEXT NOT NULL, result TEXT, requested_by TEXT NOT NULL,
         created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT);
+      CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, automatic INTEGER NOT NULL,
+        executable_path TEXT, default_model TEXT, updated_at TEXT NOT NULL);
     `);
     this.#addColumnIfMissing("executions", "prompt", "TEXT");
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
@@ -560,6 +584,10 @@ function mapDelegation(row: unknown): DelegationDecision | null {
 function mapTransition(row: unknown): TaskTransition | null {
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), taskId: stringValue(item, "task_id"), fromStatus: stringValue(item, "from_status") as TaskTransition["fromStatus"], fromDispatchLease: nullableString(item, "from_lease"), toStatus: stringValue(item, "to_status") as TaskTransition["toStatus"], actor: stringValue(item, "actor"), reason: nullableString(item, "reason"), createdAt: stringValue(item, "created_at") };
+}
+function mapPreferences(item: Row): ProviderPreferences {
+  return { enabled: Boolean(item.enabled), automatic: Boolean(item.automatic),
+    executablePath: nullableString(item, "executable_path"), defaultModel: nullableString(item, "default_model") };
 }
 function mapOutboundAction(row: unknown): TaskOutboundAction | null {
   if (!row) return null; const item = row as Row;

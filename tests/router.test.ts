@@ -9,6 +9,7 @@ import type {
   TaskKind
 } from "../src/core/contracts.js";
 import { classifyTask, Router } from "../src/core/router.js";
+import { preferences, registryOf } from "./helpers.js";
 
 class FakeAdapter implements AgentAdapter {
   readonly supportedTasks = new Set<TaskKind>([
@@ -64,14 +65,14 @@ describe("classifyTask", () => {
 
 describe("Router", () => {
   it("prefere Codex para implementacao", async () => {
-    const router = new Router([healthyCodex, healthyAntigravity]);
+    const router = new Router(registryOf([healthyCodex, healthyAntigravity]));
     const decision = await router.route({ prompt: "Implemente o endpoint de usuarios" });
 
     expect(decision.selected).toBe("codex");
   });
 
   it("prefere Antigravity para pesquisa", async () => {
-    const router = new Router([healthyCodex, healthyAntigravity]);
+    const router = new Router(registryOf([healthyCodex, healthyAntigravity]));
     const decision = await router.route({ prompt: "Pesquise alternativas para a arquitetura" });
 
     expect(decision.selected).toBe("antigravity");
@@ -84,26 +85,70 @@ describe("Router", () => {
       authenticated: null,
       detail: "ausente"
     });
-    const router = new Router([unavailableCodex, healthyAntigravity]);
+    const router = new Router(registryOf([unavailableCodex, healthyAntigravity]));
     const decision = await router.route({ prompt: "Implemente uma funcionalidade" });
 
     expect(decision.selected).toBe("antigravity");
   });
 
-  it("só seleciona Claude para uma tarefa compatível com seleção explícita e autenticação confirmada", async () => {
-    const claude: AgentAdapter = {
-      provider: "claude",
-      supportedTasks: new Set(["review", "planning"]),
-      health: vi.fn<() => Promise<AgentHealth>>().mockResolvedValue({ provider: "claude", available: true, authenticated: true, detail: "ok" }),
-      run: vi.fn<AgentAdapter["run"]>(),
-    };
-    const router = new Router([healthyCodex, healthyAntigravity, claude]);
-    expect((await router.route({ prompt: "Revise a mudança" })).selected).toBe("codex");
-    expect(claude.health).not.toHaveBeenCalled();
-    expect((await router.route({ prompt: "Revise a mudança", preferredProvider: "claude" })).selected).toBe("claude");
-    expect((await router.route({ prompt: "Implemente a mudança", preferredProvider: "claude" })).selected).toBeNull();
-    vi.mocked(claude.health).mockResolvedValueOnce({ provider: "claude", available: true, authenticated: null, detail: "indefinido" });
-    expect((await router.route({ prompt: "Planeje a mudança", preferredProvider: "claude" })).selected).toBeNull();
-    expect((await new Router([healthyCodex]).route({ prompt: "Revise a mudança", preferredProvider: "claude" })).selected).toBeNull();
+  it("escolhe qualquer um dos tres no Automatico, pela afinidade de cada descritor", async () => {
+    const router = new Router(registryOf([healthyCodex, healthyAntigravity, healthy("claude")]));
+    expect((await router.route({ prompt: "Implemente o endpoint" })).selected).toBe("codex");
+    expect((await router.route({ prompt: "Revise a mudança" })).selected).toBe("claude");
+    expect((await router.route({ prompt: "Pesquise alternativas" })).selected).toBe("antigravity");
+  });
+
+  it("so escolhe no Automatico quem tem autenticacao confirmada", async () => {
+    const unknown = new FakeAdapter("claude", { provider: "claude", available: true, authenticated: null, detail: "indefinido" });
+    const denied = new FakeAdapter("codex", { provider: "codex", available: true, authenticated: false, detail: "sem login" });
+    const decision = await new Router(registryOf([denied, unknown, healthyAntigravity])).route({ prompt: "Revise a mudança" });
+    expect(decision.selected).toBe("antigravity");
+    expect(decision.candidates.find((item) => item.provider === "claude")?.reasons).toContain("autenticacao nao confirmada");
+    expect((await new Router(registryOf([denied, unknown])).route({ prompt: "Revise a mudança" })).selected).toBeNull();
+  });
+
+  it("abre uma sessao para confirmar o login de quem nao o informa, e aceita o que ela disser", async () => {
+    const verified = (authenticated: boolean | null) => Object.assign(
+      new FakeAdapter("antigravity", { provider: "antigravity", available: true, authenticated: null, detail: "?" }),
+      { verify: vi.fn(async () => ({ provider: "antigravity", connected: true, authenticated, detail: "verificado", models: [], defaultModel: null, checkedAt: "2026-01-01T00:00:00.000Z" })) });
+    const signedIn = verified(true);
+    expect((await new Router(registryOf([signedIn])).route({ prompt: "Pesquise" })).selected).toBe("antigravity");
+    expect(signedIn.verify).toHaveBeenCalledTimes(1);
+    expect((await new Router(registryOf([verified(false)])).route({ prompt: "Pesquise" })).selected).toBeNull();
+    expect((await new Router(registryOf([verified(null)])).route({ prompt: "Pesquise" })).selected).toBeNull();
+    // An explicit choice may still try an agent whose login is undecided, never one that denied it.
+    expect((await new Router(registryOf([verified(null)])).route({ prompt: "Pesquise", preferredProvider: "antigravity" })).selected).toBe("antigravity");
+    expect((await new Router(registryOf([verified(false)])).route({ prompt: "Pesquise", preferredProvider: "antigravity" })).selected).toBeNull();
+  });
+
+  it("nunca troca o provedor escolhido por outro", async () => {
+    const missing = new FakeAdapter("codex", { provider: "codex", available: false, authenticated: null, detail: "ausente" });
+    const other = healthy("antigravity");
+    const health = vi.spyOn(other, "health");
+    const decision = await new Router(registryOf([missing, other])).route({ prompt: "Implemente", preferredProvider: "codex" });
+    expect(decision.selected).toBeNull();
+    expect(decision.candidates.map((item) => item.provider)).toEqual(["codex"]);
+    expect(health).not.toHaveBeenCalled();
+    expect((await new Router(registryOf([other])).route({ prompt: "Revise", preferredProvider: "claude" })).selected).toBeNull();
+  });
+
+  it("respeita as capacidades declaradas e as preferencias do operador", async () => {
+    const reviewer: AgentAdapter = { ...healthy("claude"), provider: "claude", supportedTasks: new Set(["review", "planning"]),
+      health: async () => ({ provider: "claude", available: true, authenticated: true, detail: "ok" }), run: vi.fn<AgentAdapter["run"]>() };
+    expect((await new Router(registryOf([reviewer])).route({ prompt: "Implemente a mudança", preferredProvider: "claude" })).selected).toBeNull();
+    expect((await new Router(registryOf([reviewer])).route({ prompt: "Revise a mudança", preferredProvider: "claude" })).selected).toBe("claude");
+
+    const adapters = [healthyCodex, healthyAntigravity];
+    const manual = new Router(registryOf(adapters, (id) => id === "codex" ? preferences({ automatic: false }) : null));
+    expect((await manual.route({ prompt: "Implemente" })).selected).toBe("antigravity");
+    expect((await manual.route({ prompt: "Implemente", preferredProvider: "codex" })).selected).toBe("codex");
+    const disabled = new Router(registryOf(adapters, (id) => id === "codex" ? preferences({ enabled: false }) : null));
+    expect((await disabled.route({ prompt: "Implemente" })).selected).toBe("antigravity");
+    const refused = await disabled.route({ prompt: "Implemente", preferredProvider: "codex" });
+    expect(refused).toMatchObject({ selected: null, candidates: [{ health: { detail: "Desativado na tela Provedores." } }] });
   });
 });
+
+function healthy(provider: ProviderName): FakeAdapter {
+  return new FakeAdapter(provider, { provider, available: true, authenticated: true, detail: "ok" });
+}

@@ -9,6 +9,7 @@ import type {
   TaskKind
 } from "../src/core/contracts.js";
 import { Orchestrator } from "../src/core/orchestrator.js";
+import { registryOf } from "./helpers.js";
 
 class RecordingAdapter implements AgentAdapter {
   readonly supportedTasks = new Set<TaskKind>([
@@ -38,7 +39,7 @@ describe("Orchestrator", () => {
   it("delega para o provedor selecionado", async () => {
     const codex = new RecordingAdapter("codex");
     const antigravity = new RecordingAdapter("antigravity");
-    const orchestrator = new Orchestrator([codex, antigravity]);
+    const orchestrator = new Orchestrator(registryOf([codex, antigravity]));
 
     const execution = await orchestrator.run({
       prompt: "Implemente a tela inicial",

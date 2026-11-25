@@ -1,12 +1,12 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type { AgentAdapter, AgentHealth, AgentRunRequest, AgentRunResult, TaskKind, TokenUsage } from "../core/contracts.js";
 import { claudeTextTaskKinds } from "../core/contracts.js";
 import { ClaudeAcpClient } from "./claude-acp.js";
 import { claudeAcpEntry, resolveClaudeRuntime } from "./claude-runtime.js";
 import { runProcess, type ProcessOptions } from "./process-runner.js";
+import { inTemporaryDirectory } from "./temporary-directory.js";
 
 const executable = process.platform === "win32" ? "claude.exe" : "claude";
 const runTimeoutMs = 5 * 60_000;
@@ -26,7 +26,12 @@ export class ClaudeAdapter implements AgentAdapter {
   readonly provider = "claude" as const;
   readonly supportedTasks: ReadonlySet<TaskKind>;
 
-  constructor(private readonly runner: typeof runProcess = runProcess, private readonly mode: "default" | "cross-review" = "default") {
+  constructor(
+    private readonly runner: typeof runProcess = runProcess,
+    private readonly mode: "default" | "cross-review" = "default",
+    private readonly resolveRuntime: () => ReturnType<typeof resolveClaudeRuntime> = () => resolveClaudeRuntime(),
+    private readonly client?: Pick<ClaudeAcpClient, "run">
+  ) {
     this.supportedTasks = mode === "cross-review" ? claudeTextTaskKinds : new Set<TaskKind>([
       "implementation", "review", "planning", "research", "testing", "documentation", "unknown"
     ]);
@@ -37,7 +42,7 @@ export class ClaudeAdapter implements AgentAdapter {
     try {
       return await inTemporaryDirectory(async (cwd) => {
         if (this.mode === "default") claudeAcpEntry();
-        const runtime = this.mode === "default" ? await resolveClaudeRuntime() : null;
+        const runtime = this.mode === "default" ? await this.resolveRuntime() : null;
         const launch = await (runtime
           ? this.runner(runtime.path, ["--version"], { cwd, timeoutMs: 5_000 }).then((result) => ({ binary: runtime.path, result }))
           : this.start(["--version"], { cwd, timeoutMs: 5_000 })).catch((error: unknown) => {
@@ -64,6 +69,7 @@ export class ClaudeAdapter implements AgentAdapter {
         const authenticated = auth.exitCode === 0 && !auth.timedOut && status?.loggedIn === true;
         return {
           provider: this.provider, available: true, authenticated, version,
+          ...(runtime ? { executablePath: runtime.path, executableSource: runtime.source } : {}),
           detail: authenticated
             ? (this.mode === "default" ? `Claude ACP ${runtime?.source ?? "indisponivel"}: ${runtime?.path ?? "runtime ausente"}.` : "Autenticado para revisao e planejamento por texto.")
             : "Nao foi possivel confirmar a autenticacao do Claude Code."
@@ -75,7 +81,7 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
-    if (this.mode === "default") return new ClaudeAcpClient().run(request);
+    if (this.mode === "default") return (this.client ?? new ClaudeAcpClient()).run(request);
     const startedAt = Date.now();
     if (request.sessionId !== undefined) return this.failure("Claude Code opera sem retomada de sessao.", 0);
     if (!request.taskKind || !this.supportedTasks.has(request.taskKind)) {
@@ -131,16 +137,6 @@ export class ClaudeAdapter implements AgentAdapter {
 
 function isMissingExecutable(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-async function inTemporaryDirectory<Result>(operation: (cwd: string) => Promise<Result>): Promise<Result> {
-  const root = await realpath(tmpdir());
-  const directory = await mkdtemp(join(root, "eleazar-claude-"));
-  try {
-    return await operation(directory);
-  } finally {
-    if (dirname(resolve(directory)) === root) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

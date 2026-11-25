@@ -11,6 +11,7 @@ import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
 import { createLocalControlRoomService } from "../src/control-room/local-service.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
+import { acpRegistry } from "./helpers.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -21,7 +22,7 @@ describe("Control Room task executor", () => {
     const project = service.registerProject({ name: "Core", path: process.cwd() });
     const task = service.createTask({ projectId: project.id, title: "Analisar", prompt: "Planeje a proxima etapa" });
     const runner = fakeRunner({ provider: "codex", status: "success", response: "Plano concluido.", durationMs: 125 });
-    const executor = new ControlRoomTaskExecutor(service, runner);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
 
     const started = await executor.start(task.id, "codex");
     expect(started).toMatchObject({ status: "running", dispatchLease: expect.any(String) });
@@ -37,7 +38,7 @@ describe("Control Room task executor", () => {
     const { service, store } = await fixture();
     const project = service.registerProject({ name: "Core", path: process.cwd() });
     const task = service.createTask({ projectId: project.id, title: "Analisar", prompt: "Planeje a proxima etapa" });
-    const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "error", response: "", error: "CLI indisponivel", durationMs: 42 }));
+    const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "error", response: "", error: "CLI indisponivel", durationMs: 42 }), acpRegistry());
 
     await executor.start(task.id);
     await settle();
@@ -54,7 +55,7 @@ describe("Control Room task executor", () => {
     const project = service.registerProject({ name: "Core", directories: [{ path: process.cwd() }, { path: extra }] });
     const task = service.createTask({ projectId: project.id, targetDirectoryId: project.directories[0]!.id, directoryIds: project.directories.map((directory) => directory.id), title: "Analisar", prompt: "Planeje a proxima etapa" });
 
-    const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "success", response: "ok", durationMs: 1 }));
+    const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "success", response: "ok", durationMs: 1 }), acpRegistry());
     await expect(executor.start(task.id)).rejects.toThrow("precisa ser aprovada");
     await expect(executor.start(task.id, "claude")).rejects.toThrow("precisa ser aprovada");
     expect(store.getTask(task.id)?.status).toBe("waiting_approval");
@@ -69,7 +70,7 @@ describe("Control Room task executor", () => {
     const run = vi.spyOn(runner, "run");
     const changes = new GitChangeCollector();
     const capture = vi.spyOn(changes, "capture");
-    const executor = new ControlRoomTaskExecutor(service, runner, changes);
+    const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry(), changes);
     const server = createControlRoomServer(service, executor);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
@@ -98,12 +99,13 @@ describe("Control Room task executor", () => {
       const project = service.registerProject({ name: "Core", path: process.cwd() });
       const incompatible = service.createTask({ projectId: project.id, kind: "implementation", title: "Implementação", prompt: "Implemente a mudança." });
       const compatible = service.createTask({ projectId: project.id, kind: "review", title: "Revisão", prompt: "Revise o texto." });
-      const route = vi.fn<ControlRoomTaskRunner["router"]["route"]>().mockResolvedValue({ selected: null, taskKind: "review", candidates: [] });
+      const route = vi.fn<ControlRoomTaskRunner["router"]["route"]>().mockResolvedValue({ selected: null, taskKind: "review", candidates: [
+        { provider: "claude", score: -900, reasons: [], health: { provider: "claude", available: true, authenticated: false, detail: "Faca login." } }] });
       const runner = { router: { route }, run: vi.fn<ControlRoomTaskRunner["run"]>() };
-      const executor = new ControlRoomTaskExecutor(service, runner);
+      const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
 
-      await expect(executor.start(incompatible.id, "claude")).rejects.toThrow("instalado e autenticado");
-      await expect(executor.start(compatible.id, "claude")).rejects.toThrow("instalado e autenticado");
+      await expect(executor.start(incompatible.id, "claude")).rejects.toThrow("Claude Code nao pode executar esta tarefa: sem autenticacao. Faca login.");
+      await expect(executor.start(compatible.id)).rejects.toThrow("Nenhum provedor ativo no modo Automatico");
       expect(runner.run).not.toHaveBeenCalled();
       for (const task of [incompatible, compatible]) {
         expect(store.getTask(task.id)).toMatchObject({ status: "queued", dispatchLease: null });

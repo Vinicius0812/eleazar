@@ -1,9 +1,6 @@
 import type { AgentRunRequest, AgentRunResult, ProviderConfig, ProviderName, RouteDecision } from "../core/contracts.js";
-import { CodexAcpClient } from "../adapters/codex-acp.js";
-import { ClaudeAcpClient } from "../adapters/claude-acp.js";
-import { AntigravityAcpClient } from "../adapters/antigravity-acp.js";
-import type { AcpClient, AcpSessionInfo } from "../adapters/acp-client.js";
 import type { Orchestrator, OrchestratorRun } from "../core/orchestrator.js";
+import type { ProviderRegistry } from "../core/provider-registry.js";
 import { ControlRoomService } from "../core/control-room-service.js";
 import type { ControlRoomTask, DelegationCandidate, LocalProjectDirectory } from "../core/control-room.js";
 import { GitChangeCollector } from "./git-change-collector.js";
@@ -19,48 +16,25 @@ export class ControlRoomTaskExecutor {
   private readonly active = new Map<string, AbortController>();
   private readonly pendingPermissions = new Map<string, { executionId: string; resolve: (optionId: string | null) => void }>();
   private readonly configCache = new Map<string, { expires: number; value: ProviderConfig }>();
-  private readonly acpClients: ReadonlyMap<ProviderName, AcpClient>;
   isActive(executionId: string): boolean { return this.active.has(executionId); }
   constructor(
     private readonly service: ControlRoomService,
     private readonly runner: ControlRoomTaskRunner,
-    private readonly changes = new GitChangeCollector(),
-    private readonly codexClient = new CodexAcpClient(),
-    private readonly claudeClient = new ClaudeAcpClient(),
-    private readonly antigravityClient = new AntigravityAcpClient()
-  ) {
-    this.acpClients = new Map<ProviderName, AcpClient>([
-      ["codex", codexClient], ["claude", claudeClient], ["antigravity", antigravityClient]
-    ]);
-  }
-
-  async codexConfig(directoryId: string): Promise<ProviderConfig> { return this.providerConfig("codex", directoryId); }
+    private readonly registry: ProviderRegistry,
+    private readonly changes = new GitChangeCollector()
+  ) {}
 
   async providerConfig(provider: ProviderName, directoryId: string): Promise<ProviderConfig> {
     const directory = this.service.store.listProjects().flatMap((project) => project.directories).find((item) => item.id === directoryId);
     if (!directory) throw new Error(`Diretorio nao encontrado para catalogo ${provider}.`);
-    const key = `${provider}\0${directory.path}`;
+    const adapter = this.registry.get(provider)?.adapter;
+    if (!adapter?.catalog) throw Object.assign(new Error(`Provedor sem catalogo ACP: ${provider}`), { statusCode: 404 });
+    const key = [provider, this.registry.preferences(provider).executablePath ?? "", directory.path].join("\0");
     const cached = this.configCache.get(key);
     if (cached && cached.expires > Date.now()) return cached.value;
-    const client = this.acpClients.get(provider)!;
-    let info: Awaited<ReturnType<typeof client.inspect>>;
-    try { info = await client.inspect(directory.path); }
+    let value: ProviderConfig;
+    try { value = { provider, directoryId, ...await adapter.catalog(directory.path) }; }
     catch (error) { throw Object.assign(new Error(`Catalogo ${provider} ACP indisponivel: ${error instanceof Error ? error.message : String(error)}`), { statusCode: 503 }); }
-    const modelOption = info.configOptions.find((item) => item.type === "select" && (item.category === "model" || item.id === "model"));
-    const model = modelOption?.type === "select" ? modelOption : null;
-    const value: ProviderConfig = { provider, directoryId, runtime: info.runtime, protocolVersion: info.protocolVersion,
-      capabilities: { loadSession: info.capabilities.loadSession === true },
-      settings: info.configOptions.filter((item) => provider === "claude" || ["mode", "model", "thought_level", "model_config", "collaboration_mode"].includes(item.category ?? item.id))
-        .map((item) => item.type === "select"
-          ? { id: item.id, name: item.name, category: item.category ?? null, type: "select" as const,
-            currentValue: item.currentValue,
-            options: catalogChoices(item).filter((choice) =>
-              item.category !== "mode" && item.id !== "mode" ||
-              (provider === "codex" ? ["read-only", "workspace-write"].includes(choice.id) : choice.id === "default")) }
-          : { id: item.id, name: item.name, category: item.category ?? null, type: "boolean" as const,
-            currentValue: item.currentValue, options: [] }),
-      models: model ? catalogChoices(model) : [],
-      defaultModel: model?.currentValue ?? null };
     this.configCache.set(key, { expires: Date.now() + 30_000, value });
     return value;
   }
@@ -98,7 +72,7 @@ export class ControlRoomTaskExecutor {
     const resumable = previous.find((execution) => execution.provider === provider && execution.transport === "acp" &&
       execution.sessionId && (execution.status === "completed" || execution.status === "failed"));
     let sessionId: string | undefined;
-    if (task?.targetDirectoryId && resumable?.sessionId && provider && this.acpClients.has(provider)) {
+    if (task?.targetDirectoryId && resumable?.sessionId && provider && this.usesAcp(provider)) {
       const canLoad = await this.providerConfig(provider, task.targetDirectoryId).then((config) => config.capabilities?.loadSession === true, () => false);
       if (canLoad) sessionId = resumable.sessionId;
     }
@@ -114,18 +88,19 @@ export class ControlRoomTaskExecutor {
       taskKind: task.kind,
       ...(preferredProvider ? { preferredProvider } : {})
     });
-    if (!route.selected) {
-      if (preferredProvider === "claude") {
-        throw new Error("Claude Code precisa estar instalado e autenticado. Consulte o status dos provedores ou execute `npm run doctor`.");
-      }
-      throw new Error("Nenhum provedor autenticado esta disponivel. Execute `npm run doctor` e atualize o login antes de tentar novamente.");
-    }
-    const isAcp = this.acpClients.has(route.selected);
+    if (!route.selected) throw new Error(this.unavailableReason(route, preferredProvider));
+    const isAcp = this.usesAcp(route.selected);
     if ((model || sessionId) && !isAcp) throw new Error("Modelo e sessao requerem um provedor ACP.");
     if (sessionId && !this.authorizedSession(task, route.selected, sessionId)) throw new Error("Sessao ACP nao pertence ao provedor e escopo desta tarefa.");
     if (model) {
       const config = await this.providerConfig(route.selected, directory.id);
       if (!config.models.some((item) => item.id === model)) throw new Error(`Modelo ${route.selected} nao anunciado: ${model}`);
+    }
+    // The saved default only applies to new sessions, and only while the provider still announces it.
+    const preferredModel = isAcp && !model && !sessionId ? this.registry.preferences(route.selected).defaultModel : null;
+    if (preferredModel) {
+      const config = await this.providerConfig(route.selected, directory.id).catch(() => null);
+      if (config?.models.some((item) => item.id === preferredModel)) model = preferredModel;
     }
     if (sessionId && !(await this.providerConfig(route.selected, directory.id)).capabilities?.loadSession) throw new Error("Agente ACP nao anuncia retomada de sessao.");
 
@@ -196,6 +171,19 @@ export class ControlRoomTaskExecutor {
     }
   }
 
+  private usesAcp(provider: ProviderName): boolean {
+    return this.registry.get(provider)?.descriptor.transport === "acp";
+  }
+
+  private unavailableReason(route: RouteDecision, preferredProvider?: ProviderName): string {
+    if (preferredProvider) {
+      const health = route.candidates.find((candidate) => candidate.provider === preferredProvider)?.health;
+      const detail = health ? (health.available && health.authenticated === false ? `sem autenticacao. ${health.detail}` : health.detail) : "provedor nao registrado neste host.";
+      return `${this.registry.label(preferredProvider)} nao pode executar esta tarefa: ${detail} Consulte a tela Provedores.`;
+    }
+    return "Nenhum provedor ativo no modo Automatico esta instalado e com autenticacao confirmada. Consulte a tela Provedores.";
+  }
+
   private releasePermissions(executionId: string): void {
     for (const [id, pending] of this.pendingPermissions) {
       if (pending.executionId === executionId) { this.pendingPermissions.delete(id); pending.resolve(null); }
@@ -237,13 +225,6 @@ export class ControlRoomTaskExecutor {
   }
 }
 
-export type CodexConfig = ProviderConfig;
-type SessionOption = AcpSessionInfo["configOptions"][number];
-function catalogChoices(option: Extract<SessionOption, { type: "select" }>): Array<{ id: string; name: string }> {
-  return option.options.flatMap((item) => "value" in item
-    ? [{ id: item.value, name: item.name }]
-    : item.options.map((choice) => ({ id: choice.value, name: choice.name })));
-}
 function conflict(message: string): Error { return Object.assign(new Error(message), { statusCode: 409 }); }
 
 function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory, branch: string | null, followUp?: string, resumed = false): AgentRunRequest {
