@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { terminalEventKinds, type ControlRoomClient, type ExecutionDetail, type ExecutionEvent, type ExecutionPermission } from "../services/contracts.js";
 
 export type ConnectionState = "loading" | "connecting" | "live" | "reconnecting" | "closed" | "error";
 export interface ToolActivity { toolCallId: string; title: string; status: string | null; locations: string[]; }
+export interface PlanEntry { content: string; status: string; }
+/** One step of the conversation, in the order the agent produced it. Consecutive tool calls share a step. */
+export type ConversationItem =
+  | { kind: "message"; id: string; messageId: string | null; text: string }
+  | { kind: "tools"; id: string; tools: ToolActivity[] };
 export interface ExecutionSessionState {
   detail: ExecutionDetail | null;
   events: ExecutionEvent[];
   permissions: ExecutionPermission[];
-  text: string;
-  tools: ToolActivity[];
+  items: ConversationItem[];
+  plan: PlanEntry[];
   connection: ConnectionState;
   error: string;
   actionError: string;
@@ -33,22 +38,46 @@ export function mergeEvents(current: ExecutionEvent[], incoming: ExecutionEvent[
   return [...current, ...fresh].sort((a, b) => a.sequence - b.sequence);
 }
 
-/** Only `payload.text` is ever shown; no other payload field is rendered as agent output. */
-export function deriveSession(events: ExecutionEvent[]): { text: string; tools: ToolActivity[] } {
-  let text = "";
+/**
+ * Rebuilds the conversation from the ordered events. Only `payload.text` is ever shown as agent
+ * output. A tool update changes its call where it first appeared, and the latest plan replaces the previous one.
+ */
+export function deriveSession(events: ExecutionEvent[]): { items: ConversationItem[]; plan: PlanEntry[] } {
+  const items: ConversationItem[] = [];
+  let plan: PlanEntry[] = [];
   const tools = new Map<string, ToolActivity>();
   for (const event of events) {
-    if (event.kind === "agent_message_chunk" && typeof event.payload.text === "string") text += event.payload.text;
+    if (event.kind === "agent_message_chunk" && typeof event.payload.text === "string") {
+      const text = event.payload.text;
+      const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : null;
+      const last = items.at(-1);
+      if (last?.kind === "message" && last.messageId === messageId) last.text += text;
+      // Blank chunks between tool calls are separators, not messages.
+      else if (text.trim()) items.push({ kind: "message", id: event.id, messageId, text });
+    }
+    if (event.kind === "plan" && Array.isArray(event.payload.entries)) {
+      plan = event.payload.entries.flatMap((item) => {
+        const entry = item as { content?: unknown; status?: unknown } | null;
+        return entry && typeof entry.content === "string" ? [{ content: entry.content, status: typeof entry.status === "string" ? entry.status : "pending" }] : [];
+      });
+    }
     if (event.kind === "tool_call" || event.kind === "tool_call_update") {
       const payload = event.payload;
       const id = typeof payload.toolCallId === "string" && payload.toolCallId ? payload.toolCallId : event.id;
       const previous = tools.get(id);
       const title = typeof payload.title === "string" && payload.title ? payload.title : typeof payload.name === "string" && payload.name ? payload.name : previous?.title ?? "Ferramenta";
-      const locations = Array.isArray(payload.locations) ? payload.locations.filter((item): item is string => typeof item === "string") : previous?.locations ?? [];
-      tools.set(id, { toolCallId: id, title, status: typeof payload.status === "string" ? payload.status : previous?.status ?? null, locations });
+      const locations = Array.isArray(payload.locations) ? payload.locations.filter((item): item is string => typeof item === "string") : [];
+      const status = typeof payload.status === "string" ? payload.status : previous?.status ?? null;
+      // An update that carries no locations keeps the ones already known.
+      if (previous) { Object.assign(previous, { title, status, locations: locations.length ? locations : previous.locations }); continue; }
+      const tool: ToolActivity = { toolCallId: id, title, status, locations };
+      tools.set(id, tool);
+      const last = items.at(-1);
+      if (last?.kind === "tools") last.tools.push(tool);
+      else items.push({ kind: "tools", id: event.id, tools: [tool] });
     }
   }
-  return { text, tools: [...tools.values()] };
+  return { items, plan };
 }
 
 export function useExecutionSession(client: ControlRoomClient, executionId: string, onChanged?: () => void, retryDelayMs: (attempt: number) => number = defaultRetryDelay): ExecutionSessionState {
@@ -158,9 +187,9 @@ export function useExecutionSession(client: ControlRoomClient, executionId: stri
     } finally { if (!stale()) setPendingAction(false); }
   }, []);
 
-  const { text, tools } = deriveSession(events);
+  const { items, plan } = useMemo(() => deriveSession(events), [events]);
   return {
-    detail, events, permissions, text, tools, connection, error, actionError, pendingAction,
+    detail, events, permissions, items, plan, connection, error, actionError, pendingAction,
     respond: (permissionId, optionId) => act(() => client.respondPermission(executionId, permissionId, optionId)),
     cancel: () => act(() => client.cancelExecution(executionId)),
     retry: () => setAttemptKey((value) => value + 1)

@@ -44,6 +44,14 @@ function handle(message) {
     const text = params.prompt[0].text;
     if (text === "HANG") return;
     if (text === "EXIT") process.exit(4);
+    if (text === "TWO_MESSAGES") {
+      const say = (value) => update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: value } });
+      say("Vou "); say("ler.");
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "read-1", title: "File notas.txt", status: "in_progress" });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" });
+      say("São "); say("3.");
+      return send({ id, result: { stopReason: "end_turn" } });
+    }
     pending = { id, sessionId: params.sessionId };
     const uriPath = `${/^[A-Za-z]:/.test(process.cwd()) ? "/" : ""}${process.cwd().replaceAll("\\", "/")}/sample.txt`;
     const locations = text === "URI_PATH" ? [{ path: uriPath }] : text === "NO_LOCATION" ? [] : [{ path: text === "OUTSIDE" ? process.execPath : `${process.cwd()}/sample.txt` }];

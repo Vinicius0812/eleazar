@@ -1,7 +1,9 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export function AgentMarkdown({ children }: { children: string }) {
+/** Memoized: while one message streams, the finished ones are not parsed again. */
+export const AgentMarkdown = memo(function AgentMarkdown({ children }: { children: string }) {
   return (
     <div className="markdown-output">
       <ReactMarkdown
@@ -18,4 +20,4 @@ export function AgentMarkdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -1,5 +1,6 @@
-import { Ban, MessageSquare, ShieldQuestion, Terminal, Wrench } from "lucide-react";
+import { Ban, MessageSquare, ShieldQuestion, Terminal } from "lucide-react";
 
+import { AgentConversation } from "./AgentConversation.js";
 import { AgentMarkdown } from "./AgentMarkdown.js";
 import { useExecutionSession, type ConnectionState } from "./useExecutionSession.js";
 import { terminalEventKinds, type ControlRoomClient, type ExecutionDetail, type ExecutionEvent, type ExecutionPermission } from "../services/contracts.js";
@@ -13,12 +14,11 @@ const connectionCopy: Record<ConnectionState, string> = {
   closed: "Sessão encerrada",
   error: "Conexão perdida"
 };
-const toolStatusCopy: Record<string, string> = { pending: "Pendente", in_progress: "Em andamento", completed: "Concluída", failed: "Falhou" };
 const permissionStatusCopy: Record<ExecutionPermission["status"], string> = { pending: "Aguardando decisão", selected: "Decidida", cancelled: "Cancelada" };
 
 /**
  * Per-execution ACP session shared by the task workspace and the execution result page:
- * original request, progressive agent text, tool activity, permission decisions and cancel.
+ * the request, the agent's conversation as it happens, permission decisions and cancel.
  * Legacy executions (no events) fall back to the persisted output/summary.
  */
 export function ExecutionSession({ client, executionId, showRequest = true, showOutcome = true, onChanged, retryDelayMs }: {
@@ -31,7 +31,7 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
   retryDelayMs?: (attempt: number) => number;
 }) {
   const session = useExecutionSession(client, executionId, onChanged, retryDelayMs);
-  const { detail, permissions, text, tools, connection, error, actionError, pendingAction } = session;
+  const { detail, permissions, items, plan, connection, error, actionError, pendingAction } = session;
   if (!detail) {
     return <div className={connection === "error" ? "error" : "empty"} role={connection === "error" ? "alert" : "status"}>
       {connection === "error" ? error || "Não foi possível carregar a sessão." : "Carregando sessão…"}
@@ -51,7 +51,9 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
   const persistedBody = outcome
     ? (persisted && !repeatsReason(persisted, outcome.message) ? persisted : "")
     : persisted || execution.summary?.trim() || "";
-  const body = text || (!active ? persistedBody : "");
+  const body = !active && !items.some((item) => item.kind === "message") ? persistedBody : "";
+  const waiting = !active ? null : pending.length ? "O agente aguarda a sua decisão para continuar."
+    : hasEvents ? "O agente está trabalhando…" : "Aguardando a primeira resposta do agente…";
 
   return (
     <section className="execution-session" aria-label="Sessão do agente">
@@ -79,21 +81,10 @@ export function ExecutionSession({ client, executionId, showRequest = true, show
       )}
       {error && connection !== "closed" && <div className="error" role="alert">Falha na conexão com o fluxo de eventos: {error} {connection === "error" && <button className="text-button" onClick={session.retry}>Tentar novamente</button>}</div>}
       {actionError && <div className="error" role="alert">{actionError}</div>}
+      <AgentConversation provider={execution.provider} items={items} plan={plan} active={active} waiting={waiting}>
+        {body && <AgentMarkdown>{body}</AgentMarkdown>}
+      </AgentConversation>
       {pending.map((permission) => <PermissionCard key={permission.id} permission={permission} busy={pendingAction} onChoose={(optionId) => void session.respond(permission.id, optionId)} />)}
-      {body ? <AgentMarkdown>{body}</AgentMarkdown>
-        : active && <p className="session-waiting">{hasEvents ? "O agente está trabalhando…" : "Aguardando a primeira resposta do agente…"}</p>}
-      {tools.length > 0 && (
-        <div className="session-tools">
-          <div className="task-turn-heading"><Wrench size={16} aria-hidden="true" /><h3>Atividade de ferramentas</h3></div>
-          <ul>
-            {tools.map((tool) => <li key={tool.toolCallId}>
-              <strong>{tool.title}</strong>
-              {tool.status && <span className={`tool-status ${tool.status}`}>{toolStatusCopy[tool.status] ?? tool.status}</span>}
-              {tool.locations.length > 0 && <small>{tool.locations.join(", ")}</small>}
-            </li>)}
-          </ul>
-        </div>
-      )}
       {decided.length > 0 && (
         <div className="session-tools">
           <div className="task-turn-heading"><Terminal size={16} aria-hidden="true" /><h3>Decisões de permissão</h3></div>
