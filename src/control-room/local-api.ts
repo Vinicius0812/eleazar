@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { ControlRoomService, isTaskPriority } from "../core/control-room-service.js";
-import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type ProviderPreferencesPatch, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
+import { outboundActionKinds, taskActions, taskStatuses, type OutboundActionKind, type ProjectIsolation, type ProviderPreferencesPatch, type TaskAction, type TaskPriority, type TaskStatus } from "../core/control-room.js";
 import { isProviderName, taskKinds } from "../core/contracts.js";
 import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
@@ -93,10 +93,17 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
   if (method === "POST" && url.pathname === "/api/control-room/projects") {
     const body = await readBody(request);
     const directories = optionalDirectories(body.directories);
+    const isolation = optionalString(body, "isolation");
     return json(response, 201, service.registerProject({
       name: stringField(body, "name"),
+      ...(isolation ? { isolation: isolation as ProjectIsolation } : {}),
       ...(directories ? { directories } : { path: stringField(body, "path") })
     }));
+  }
+  const projectSettingsMatch = /^\/api\/control-room\/projects\/([^/]+)\/settings$/.exec(url.pathname);
+  if (method === "POST" && projectSettingsMatch?.[1]) {
+    const isolation = stringField(await readBody(request), "isolation");
+    return json(response, 200, service.setProjectIsolation(decodeURIComponent(projectSettingsMatch[1]), isolation as ProjectIsolation));
   }
   if (method === "POST" && url.pathname === "/api/control-room/tasks") {
     const body = await readBody(request); const priority = optionalString(body, "priority"); const kind = optionalString(body, "kind");

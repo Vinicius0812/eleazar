@@ -7,7 +7,7 @@ import { isLiveExecution, type ControlRoomClient, type LogEntry, type Run, type 
 
 const statusCopy: Record<Task["status"], string> = {
   queued: "A tarefa está pronta para ser executada. Confirme quando quiser começar.",
-  planning: "O Eleazar está preparando a execução.",
+  planning: "O Eleazar está preparando a execução. O agente ainda não começou.",
   running: "A execução está em andamento. Esta página se atualiza enquanto o agente trabalha.",
   waiting_approval: "Revise o escopo da tarefa para que ela possa voltar à fila.",
   completed: "A execução foi concluída.",

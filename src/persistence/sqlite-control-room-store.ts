@@ -53,7 +53,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
 
   createProject(project: LocalProject): void {
     this.#db.transaction(() => {
-      this.#db.prepare("INSERT INTO projects (id, name, path, created_at) VALUES (@id, @name, @path, @createdAt)").run(project);
+      this.#db.prepare("INSERT INTO projects (id, name, path, isolation, created_at) VALUES (@id, @name, @path, @isolation, @createdAt)")
+        .run({ id: project.id, name: project.name, path: project.path, isolation: project.isolation, createdAt: project.createdAt });
       const insertDirectory = this.#db.prepare(`INSERT INTO project_directories (id, project_id, name, path, position, is_git_repository, created_at)
         VALUES (@id, @projectId, @name, @path, @position, @isGitRepository, @createdAt)`);
       project.directories.forEach((directory, position) => insertDirectory.run({ ...directory, projectId: project.id, position, isGitRepository: directory.isGitRepository ? 1 : 0 }));
@@ -68,6 +69,10 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       const item = row as Row;
       return mapProject(row, this.#directoriesFor(stringValue(item, "id")));
     }).filter(isPresent);
+  }
+  setProjectIsolation(id: string, isolation: LocalProject["isolation"]): LocalProject | null {
+    this.#db.prepare("UPDATE projects SET isolation = ? WHERE id = ?").run(isolation, id);
+    return this.getProject(id);
   }
   hasActiveDispatchForDirectories(directoryIds: readonly string[], excludingTaskId?: string): boolean {
     if (!directoryIds.length) return false;
@@ -159,6 +164,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'planned'`).run({ taskId, leaseId, startedAt });
       if (execution.changes !== 1) throw new Error("Execucao reservada nao encontrada.");
       this.recordTransition(transition);
+      this.#insertEvent(this.#executionIdFor(taskId, leaseId), "started", {});
       return completed;
     })();
   }
@@ -175,6 +181,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       if (execution.changes !== 1) throw new Error("Execucao reservada nao encontrada.");
       this.recordTransition(transition);
       this.appendLog(log);
+      this.#insertEvent(this.#executionIdFor(taskId, leaseId), "failed", { summary: executionSummary });
       return failed;
     })();
   }
@@ -386,6 +393,10 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return result.changes === 1 ? this.getOutboundAction(id) : null;
   }
 
+  #executionIdFor(taskId: string, leaseId: string): string {
+    return stringValue(this.#db.prepare("SELECT id FROM executions WHERE task_id = ? AND lease_id = ?").get(taskId, leaseId) as Row, "id");
+  }
+
   #insertEvent(executionId: string, kind: string, payload: Record<string, unknown>): ExecutionEvent {
     const sequence = (this.#db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM execution_events WHERE execution_id = ?")
       .get(executionId) as { next: number }).next;
@@ -435,6 +446,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, automatic INTEGER NOT NULL,
         executable_path TEXT, default_model TEXT, updated_at TEXT NOT NULL);
     `);
+    this.#addColumnIfMissing("projects", "isolation", "TEXT NOT NULL DEFAULT 'worktree'");
     this.#addColumnIfMissing("executions", "prompt", "TEXT");
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
@@ -464,8 +476,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       const execution = this.#db.prepare(`UPDATE executions SET provider = @provider, status = @status, finished_at = @finishedAt, summary = @summary, output = @output, usage_json = @usageJson
         WHERE task_id = @taskId AND lease_id = @leaseId AND status = 'running'`).run({ taskId, leaseId, provider, status, finishedAt: transition.createdAt, summary, output, usageJson: usage ? JSON.stringify(usage) : null });
       if (execution.changes !== 1) throw new Error("Execucao em andamento nao encontrada.");
-      const result = this.#db.prepare("SELECT id FROM executions WHERE task_id = ? AND lease_id = ?").get(taskId, leaseId) as Row;
-      const executionId = stringValue(result, "id");
+      const executionId = this.#executionIdFor(taskId, leaseId);
       const insertFile = this.#db.prepare(`INSERT OR REPLACE INTO execution_file_changes
         (id, execution_id, directory_id, path, kind, additions, deletions)
         VALUES (@id, @executionId, @directoryId, @path, @kind, @additions, @deletions)`);
@@ -517,7 +528,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         AND NOT EXISTS (SELECT 1 FROM task_directory_scopes scope WHERE scope.task_id = tasks.id)`);
   }
 
-  #addColumnIfMissing(table: "tasks" | "executions" | "task_transitions", column: string, definition: string): void {
+  #addColumnIfMissing(table: "projects" | "tasks" | "executions" | "task_transitions", column: string, definition: string): void {
     const columns = this.#db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((item) => item.name === column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
@@ -530,7 +541,7 @@ const nullableString = (row: Row, key: string): string | null => row[key] === nu
 
 function mapProject(row: unknown, directories: LocalProjectDirectory[]): LocalProject | null {
   if (!row) return null; const item = row as Row;
-  return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), directories, createdAt: stringValue(item, "created_at") };
+  return { id: stringValue(item, "id"), name: stringValue(item, "name"), path: stringValue(item, "path"), directories, isolation: item.isolation === "direct" ? "direct" : "worktree", createdAt: stringValue(item, "created_at") };
 }
 function mapDirectory(row: unknown): LocalProjectDirectory | null {
   if (!row) return null; const item = row as Row;

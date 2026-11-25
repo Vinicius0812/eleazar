@@ -11,6 +11,12 @@ describe("Control Room typography", () => {
     expect(sizes.every((size) => size >= 12)).toBe(true);
   });
 
+  it("never shows a loading cursor on disabled controls", async () => {
+    const stylesheet = await readFile(resolve(process.cwd(), "src", "styles.css"), "utf8");
+    expect(stylesheet).not.toMatch(/cursor:\s*wait/);
+    expect(stylesheet).toMatch(/button:disabled,[^}]*cursor: not-allowed/);
+  });
+
   it("defines semantic themes for the complete interface", async () => {
     const stylesheet = await readFile(resolve(process.cwd(), "src", "styles.css"), "utf8");
     expect(stylesheet).toContain("--surface:");

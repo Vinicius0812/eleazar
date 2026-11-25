@@ -135,7 +135,7 @@ describe("ACP Control Room backend", () => {
     const permission = service.requestAgentPermission(execution.id, dispatched.dispatchLease!, { sessionId: "session-1", toolCallId: "tool-1", title: "Read", toolKind: "read",
       options: [{ id: "allow", name: "Allow", kind: "allow_once" }] })!;
     expect(store.getTask(task.id)).toMatchObject({ status: "waiting_approval", dispatchLease: dispatched.dispatchLease });
-    expect(service.listExecutionEvents(execution.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+    expect(service.listExecutionEvents(execution.id).map((event) => [event.sequence, event.kind])).toEqual([[1, "started"], [2, "session_ready"], [3, "agent_message_chunk"], [4, "permission_requested"]]);
     expect(JSON.stringify(service.executionDetail(execution.id))).not.toContain("private thought");
     expect(store.getExecution(execution.id)).toMatchObject({ transport: "acp", model: "gpt-test", sessionId: "session-1" });
     expect(store.getExecutionPermission(permission.id)?.status).toBe("pending");
@@ -175,7 +175,8 @@ describe("ACP Control Room backend", () => {
     ] });
     record("plan", { entries: Array.from({ length: 60 }, (_, index) => ({ content: `step ${index}`, status: "pending" })) });
     record("plan", { entries: "invalid" });
-    const events = service.listExecutionEvents(execution.id);
+    const [started, ...events] = service.listExecutionEvents(execution.id);
+    expect(started?.kind).toBe("started");
     expect(events.map((event) => event.kind)).toEqual(["agent_message_chunk", "agent_message_chunk", "plan", "plan"]);
     expect(events[0]!.payload).toEqual({ text: "one", messageId: "m1" });
     expect(events[1]!.payload).toEqual({ text: "two" });
@@ -327,7 +328,7 @@ describe("ACP Control Room backend", () => {
       await reader.cancel();
       await vi.waitFor(() => expect(removed).toBe(true));
       service.recordAgentUpdate(execution.id, dispatched.dispatchLease!, { sessionId: "s1", kind: "agent_message_chunk", payload: { content: { type: "text", text: "after disconnect" } } });
-      expect(service.listExecutionEvents(execution.id)).toHaveLength(1);
+      expect(service.listExecutionEvents(execution.id).map((event) => event.kind)).toEqual(["started", "agent_message_chunk"]);
     } finally { await api.close(); store.close(); }
   });
 

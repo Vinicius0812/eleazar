@@ -1,4 +1,5 @@
 import type { RepositoryPublisher, TaskWorktree } from "../core/control-room.js";
+import { gitEnvironment } from "../core/git-environment.js";
 import { runProcess, type ProcessResult } from "./process-runner.js";
 
 export type CommandRunner = (command: string, args: readonly string[], cwd: string, timeoutMs: number) => Promise<ProcessResult>;
@@ -53,7 +54,7 @@ export class GitRepositoryPublisher implements RepositoryPublisher {
 
 /** Never lets Git or gh wait on a terminal prompt the Control Room cannot answer. */
 const runCommand: CommandRunner = (command, args, cwd, timeoutMs) =>
-  runProcess(command, args, { cwd, timeoutMs, maxOutputBytes: 1_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" } });
+  runProcess(command, args, { cwd, timeoutMs, maxOutputBytes: 1_000_000, env: { ...gitEnvironment(), GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" } });
 
 function failureDetail(result: ProcessResult): string {
   if (result.timedOut) return "tempo esgotado.";

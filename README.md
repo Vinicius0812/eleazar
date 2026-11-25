@@ -132,6 +132,8 @@ O Eleazar não exige um repositório. O modo de execução é decidido por taref
 - **Pasta comum** (ou escopo em que algum diretório não é Git): o agente trabalha direto na pasta. A persistência impede dois despachos simultâneos cujos escopos tenham qualquer diretório em comum; escopos disjuntos continuam independentes.
 - **Repositório Git** (todo o escopo): na primeira execução o Eleazar cria a branch `eleazar/<titulo>-<id>` e uma worktree por diretório em `.eleazar/worktrees/<tarefa>/`, fora dos repositórios. O agente trabalha só nessa worktree, o seu checkout não é tocado e várias tarefas rodam em paralelo no mesmo repositório. A worktree parte do último commit: alterações ainda sem commit no seu checkout não entram nela. Um repositório sem nenhum commit precisa de um commit inicial.
 
+Cada projeto Git escolhe, na tela **Projetos**, entre **Worktree por tarefa** e **Direto na pasta**. No modo direto o agente altera os arquivos do seu checkout, sem branch própria: uma tarefa por vez em cada pasta, e commit e push ficam com você, em qualquer servidor Git. Enquanto a worktree é criada, a execução aparece como **Preparando** e pode ser cancelada; se o Git falhar, o motivo aparece na tela.
+
 Defina `ELEAZAR_CONTROL_ROOM_WORKTREES=off` antes de `npm run control-room` para rodar sempre direto na pasta.
 
 ### Continuar a mesma tarefa

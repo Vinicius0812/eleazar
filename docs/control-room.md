@@ -25,7 +25,8 @@ O cliente HTTP usa um snapshot consistente para leitura e mutacoes confirmadas p
 - `GET /api/control-room/snapshot` retorna projetos, tarefas, execucoes e logs persistidos.
 - `GET /api/control-room/providers/status` consulta, sob demanda, saúde e capacidade dos provedores. A leitura do Codex usa somente métodos de conta de leitura do App Server; tokens de Antigravity são apenas os reportados por execuções locais.
 - `GET /api/control-room/executions/:id` retorna a execução completa sob demanda: saída do agente, logs, arquivos atribuídos e histórico da tarefa. A tela usa a rota local `#/executions/:id` para esse detalhe.
-- `POST /projects` e `POST /tasks` registram estado no nucleo.
+- `POST /projects` e `POST /tasks` registram estado no nucleo. `POST /projects` aceita `isolation` (`worktree`, o padrão, ou `direct`).
+- `POST /projects/:id/settings` recebe `{ "isolation": "worktree" | "direct" }` e vale para as próximas execuções. Uma tarefa que já tem worktree continua nela.
 - `POST /tasks/:id/transition` aplica uma transicao valida.
 - `POST /tasks/:id/execute` é uma ação explícita do operador. Aceita `{ "provider": "auto" | "<id registrado>" }`. `auto` compara os provedores ativos que participam do Automático e só escolhe quem tem autenticação confirmada; um id explícito nunca é trocado por outro provedor. Campos opcionais `model` e `sessionId` valem para provedores ACP. A resposta `202` confirma que a execução foi registrada; a conclusão chega pelo próximo snapshot.
 - Tarefas em `waiting_approval` viram aprovacoes no painel. Aprovar as leva para `queued`; rejeitar as leva para `cancelled`.

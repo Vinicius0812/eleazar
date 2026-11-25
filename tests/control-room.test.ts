@@ -408,7 +408,7 @@ describe("dispatch claim transaction", () => {
 
 describe("Git worktree isolation", () => {
   const directory = { id: "directory-1", name: "API Núcleo", path: "/repo", isGitRepository: true, createdAt: "now" };
-  const project = { id: "project-1", name: "Project", path: "/repo", directories: [directory], createdAt: "now" };
+  const project = { id: "project-1", name: "Project", path: "/repo", directories: [directory], isolation: "worktree" as const, createdAt: "now" };
   const task: ControlRoomTask = { id: "0a1b2c3d-task", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: true, title: "Corrigir autenticação JWT!", prompt: "P", priority: "normal", status: "planning", kind: "testing", worktreePath: null, dispatchLease: "lease-1", createdAt: "now", updatedAt: "now" };
 
   it("cria uma branch por tarefa fora do repositorio, com hooksPath temporario e vazio", async () => {

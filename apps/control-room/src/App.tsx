@@ -32,6 +32,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { LoadingOverlay } from "./components/LoadingOverlay.js";
 import { Modal } from "./components/Modal.js";
 import { ExecutionResultPage } from "./components/ExecutionResultPage.js";
 import { ExecutionLaunchFields } from "./components/ExecutionLaunchFields.js";
@@ -52,6 +53,7 @@ import type {
   ControlRoomSnapshot,
   CreateTaskInput,
   ExecutionDetail,
+  ProjectIsolation,
   ProviderStatus,
   LogEntry,
   Run,
@@ -69,7 +71,8 @@ const statuses = {
   failed: "Falhou",
   cancelled: "Cancelada",
 };
-const runStatuses = { ...statuses, planned: "Planejada" };
+const isolationLabels: Record<ProjectIsolation, string> = { worktree: "Worktree por tarefa", direct: "Direto na pasta" };
+const runStatuses = { ...statuses, planned: "Preparando" };
 const navigation = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "projects", label: "Projetos", icon: FolderGit2 },
@@ -356,6 +359,26 @@ export function App({ client }: { client: ControlRoomClient }) {
       setBusy(false);
     }
   }
+  /**
+   * Creating a worktree can take minutes. Once the host has claimed the task, its own screen shows the
+   * progress and the Cancel button, so the dialog must not stay in front of it.
+   */
+  async function untilPreparing(taskId: string, request: Promise<unknown>): Promise<void> {
+    let settled = false;
+    const finished = request.finally(() => { settled = true; });
+    const preparing = (async () => {
+      while (!settled) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        if (settled) break;
+        const snapshot = await client.getSnapshot().catch(() => null);
+        if (snapshot?.tasks.find((task) => task.id === taskId)?.status === "planning") return;
+      }
+      await finished;
+    })();
+    // A later failure reaches the task screen through the execution itself.
+    preparing.catch(() => undefined);
+    await Promise.race([finished, preparing]);
+  }
   function submitProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
@@ -364,6 +387,7 @@ export function App({ client }: { client: ControlRoomClient }) {
         client.registerProject({
           name: String(fields.get("name")),
           directories: projectDirectories,
+          isolation: fields.get("isolation") === "direct" ? "direct" : "worktree",
         }),
       "Projeto cadastrado. Ele já está disponível para novas tarefas.",
     );
@@ -506,7 +530,8 @@ export function App({ client }: { client: ControlRoomClient }) {
             <strong>{active === "not-found" ? "Página não encontrada" : navigation.find((item) => item.id === active)?.label ?? "Resultado da execução"}</strong>
           </div>
         </header>
-        {executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" tabIndex={-1}>
+        {executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
+           {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
            {taskRoute ? (
              <section className="task-workspace" aria-labelledby="task-workspace-title">
                <header className="task-workspace-heading">
@@ -516,7 +541,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                <div className="feedback" role="status">{notice}</div>
                {error && <div className="error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => void refresh()}>Atualizar</button></div>}
                {!data ? (
-                 !error && <div className="empty" role="status">Carregando tarefas…</div>
+                 !error && <div className="loading-area page"><LoadingOverlay label="Carregando tarefas…" /></div>
                ) : taskRoute === "new" ? (
                  <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })} />
                ) : selectedTask ? (
@@ -582,11 +607,9 @@ export function App({ client }: { client: ControlRoomClient }) {
             </div>
           )}
           {!data ? (
-            <div className="empty">
-              {error
-                ? "O painel está indisponível. Tente atualizar novamente."
-                : "Carregando sala de controle…"}
-            </div>
+            error
+              ? <div className="empty">O painel está indisponível. Tente atualizar novamente.</div>
+              : <div className="loading-area page"><LoadingOverlay label="Carregando sala de controle…" /></div>
           ) : (
             <>
               {active === "overview" && <section className="metrics" aria-label="Resumo de operações">
@@ -694,8 +717,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                   >
                     <div className="project-grid">
                       {projects.map((project) => (
+                        <div className="project-item" key={project.id}>
                         <button
-                          key={project.id}
                           className={`project-card ${projectFilter === project.id ? "selected" : ""}`}
                           aria-pressed={projectFilter === project.id}
                           onClick={() => {
@@ -735,6 +758,15 @@ export function App({ client }: { client: ControlRoomClient }) {
                             </span>
                           </span>
                         </button>
+                        {project.directories.every((directory) => directory.isGitRepository) && <label className="project-isolation">
+                          Onde o agente trabalha
+                          <select value={project.isolation} disabled={busy} aria-label={`Onde o agente trabalha em ${project.name}`}
+                            onChange={(event) => { const isolation = event.target.value as ProjectIsolation; void mutate(() => client.updateProjectIsolation(project.id, isolation), `${project.name}: as próximas execuções usarão "${isolationLabels[isolation]}".`); }}>
+                            <option value="worktree">{isolationLabels.worktree}</option>
+                            <option value="direct">{isolationLabels.direct}</option>
+                          </select>
+                        </label>}
+                        </div>
                       ))}
                     </div>
                     {!projects.length && (
@@ -1062,6 +1094,7 @@ export function App({ client }: { client: ControlRoomClient }) {
           onClose={() => setDialog(null)}
           busy={busy}
         >
+          {busy && <LoadingOverlay label="Aguarde…" />}
           {formError && (
             <div className="error" role="alert">
               {formError}
@@ -1116,6 +1149,15 @@ export function App({ client }: { client: ControlRoomClient }) {
                 <button type="button" className="text-button" disabled={busy} onClick={() => setProjectDirectories((current) => [...current, { name: "", path: "" }])}><Plus size={15} /> Adicionar diretório</button>
                 <small>Os caminhos devem existir, ser absolutos e não podem se repetir.</small>
               </fieldset>
+              <label>
+                Onde o agente trabalha
+                {/* A machine tends to work one way, so the last project's choice is the starting point. */}
+                <select name="isolation" defaultValue={projects[0]?.isolation ?? "worktree"}>
+                  <option value="worktree">{isolationLabels.worktree}</option>
+                  <option value="direct">{isolationLabels.direct}</option>
+                </select>
+                <small>Direto na pasta altera os seus arquivos, sem branch própria, e roda uma tarefa por vez em cada pasta. A worktree só vale para repositórios Git.</small>
+              </label>
               <div className="form-actions">
                 <button
                   type="button"
@@ -1161,7 +1203,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                 <button type="button" className="secondary" disabled={busy} onClick={() => setDialog(null)}>Cancelar</button>
                 <button className="primary" disabled={busy} onClick={() => void mutate(() => {
                   const options = launch.options();
-                  return Object.keys(options).length ? client.executeTask(dialog.task.id, launch.provider, options) : client.executeTask(dialog.task.id, launch.provider);
+                  return untilPreparing(dialog.task.id, Object.keys(options).length ? client.executeTask(dialog.task.id, launch.provider, options) : client.executeTask(dialog.task.id, launch.provider));
                 }, "Execução iniciada. O painel atualizará enquanto o provedor trabalha.")}>
                   <Play size={16} /> {busy ? "Iniciando…" : "Executar agora"}
                 </button>

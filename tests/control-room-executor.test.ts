@@ -26,7 +26,7 @@ describe("Control Room task executor", () => {
 
     const started = await executor.start(task.id, "codex");
     expect(started).toMatchObject({ status: "running", dispatchLease: expect.any(String) });
-    await settle();
+    await settle(store, task.id);
 
     expect(store.getTask(task.id)).toMatchObject({ status: "completed", dispatchLease: null });
     expect(store.listExecutions(task.id)).toMatchObject([{ provider: "codex", status: "completed", summary: "Plano concluido." }]);
@@ -41,7 +41,7 @@ describe("Control Room task executor", () => {
     const executor = new ControlRoomTaskExecutor(service, fakeRunner({ provider: "codex", status: "error", response: "", error: "CLI indisponivel", durationMs: 42 }), acpRegistry());
 
     await executor.start(task.id);
-    await settle();
+    await settle(store, task.id);
 
     expect(store.getTask(task.id)).toMatchObject({ status: "failed", dispatchLease: null });
     expect(store.listExecutions(task.id)).toMatchObject([{ status: "failed", summary: "CLI indisponivel" }]);
@@ -136,8 +136,7 @@ function fakeRunner(result: OrchestratorRun["result"]): ControlRoomTaskRunner {
   };
 }
 
-async function settle(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+/** The run reads the Git state of this repository, which takes longer when the whole suite runs in parallel. */
+async function settle(store: SqliteControlRoomStore, taskId: string): Promise<void> {
+  await vi.waitFor(() => expect(["completed", "failed"]).toContain(store.getTask(taskId)?.status), { timeout: 10_000 });
 }

@@ -11,7 +11,7 @@ afterEach(cleanup);
 
 const at = "2026-01-01T00:00:00.000Z";
 const task = { id: "task-1", projectId: "p", targetDirectoryId: "d", directoryIds: ["d"], usesWorktree: false, title: "T", prompt: "Mensagem original do operador", priority: "normal" as const, status: "running" as const, kind: "implementation", worktreePath: null, dispatchLease: "lease", createdAt: at, updatedAt: at };
-const project = { id: "p", name: "P", path: "C:\\P", directories: [], createdAt: at };
+const project = { id: "p", name: "P", path: "C:\\P", directories: [], isolation: "worktree" as const, createdAt: at };
 const event = (sequence: number, kind: string, payload: Record<string, unknown>): ExecutionEvent => ({ executionId: "run-1", sequence, id: `run-1:${sequence}`, kind, payload, createdAt: at });
 const permission = (over: Partial<ExecutionPermission> = {}): ExecutionPermission => ({ id: "perm-1", executionId: "run-1", leaseId: "x", toolCallId: "t1", title: "Editar arquivo", toolKind: "edit", toolName: "apply_patch", locations: ["C:\\P\\src\\a.ts"], requiresElevation: false, options: [{ id: "allow", name: "Permitir uma vez", kind: "allow_once" }, { id: "always", name: "Sempre permitir", kind: "allow_always" }, { id: "reject", name: "Rejeitar", kind: "reject_once" }], status: "pending", selectedOptionId: null, createdAt: at, resolvedAt: null, ...over } as ExecutionPermission);
 
@@ -19,6 +19,39 @@ function detail(over: Partial<ExecutionDetail> & { status?: "running" | "complet
   const { status = "running", ...rest } = over;
   return { execution: { id: "run-1", taskId: "task-1", provider: "codex", status, startedAt: at, finishedAt: status === "running" ? null : at, summary: null, transport: "acp", model: "gpt-test" }, task, project, logs: [], files: [], history: [], events: [], permissions: [], ...rest };
 }
+
+describe("preparation", () => {
+  it("says the worktree is being prepared, then shows the failure that ended it", async () => {
+    let emit: (e: ExecutionEvent) => void = () => undefined; let finish: (terminal: boolean) => void = () => undefined;
+    const planned = detail({ task: { ...task, status: "planning", usesWorktree: true } });
+    planned.execution = { ...planned.execution, status: "planned", startedAt: null };
+    let current = planned;
+    const changed = vi.fn();
+    render(<ExecutionSession executionId="run-1" onChanged={changed} client={fakeClient({ getExecutionDetail: async () => current,
+      streamExecutionEvents: (_id, options) => new Promise<boolean>((resolve) => { emit = options.onEvent; finish = resolve; }) })} />);
+    expect(await screen.findByText("Preparando…")).toBeInTheDocument();
+    expect(screen.getByText(/Criando a worktree da tarefa/)).toBeInTheDocument();
+    current = { ...planned, execution: { ...planned.execution, status: "failed", finishedAt: at, summary: "git worktree falhou (codigo 128): Filename too long" } };
+    emit(event(1, "failed", { summary: "git worktree falhou" })); finish(true);
+    expect(await screen.findByText(/Filename too long/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Cancelar/ })).not.toBeInTheDocument();
+    expect(changed).toHaveBeenCalled();
+  });
+
+  it("leaves the preparation as soon as the host announces the start", async () => {
+    let emit: (e: ExecutionEvent) => void = () => undefined;
+    const planned = detail(); planned.execution = { ...planned.execution, status: "planned", startedAt: null };
+    let current = planned; const changed = vi.fn();
+    render(<ExecutionSession executionId="run-1" onChanged={changed} client={fakeClient({ getExecutionDetail: async () => current,
+      streamExecutionEvents: (_id, options) => new Promise<boolean>(() => { emit = options.onEvent; }) })} />);
+    expect(await screen.findByText("Preparando a execução…")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Preparando…")).toBeInTheDocument());
+    current = detail();
+    emit(event(1, "started", {}));
+    expect(await screen.findByText("Aguardando a primeira resposta do agente…")).toBeInTheDocument();
+    await waitFor(() => expect(changed).toHaveBeenCalled());
+  });
+});
 
 function fakeClient(overrides: Partial<ControlRoomClient>): ControlRoomClient {
   const unused = async () => { throw new Error("unused"); };

@@ -21,6 +21,8 @@ import {
   type LocalProjectDirectory,
   type NewProject,
   type NewTask,
+  type ProjectIsolation,
+  projectIsolations,
   type TaskAction,
   type TaskWorktree,
   type TaskPriority,
@@ -30,8 +32,11 @@ import {
 import { taskKinds, type AgentPermissionRequest, type AgentRunResult, type AgentUpdate, type ProviderName } from "./contracts.js";
 
 export interface WorktreeProvisioner {
-  /** One worktree per scope directory, on a branch dedicated to the task. Must be idempotent per task. */
-  prepare(project: LocalProject, task: ControlRoomTask, directories: readonly LocalProjectDirectory[]): Promise<TaskWorktree[]>;
+  /**
+   * One worktree per scope directory, on a branch dedicated to the task. Must be idempotent per task,
+   * and stop when `signal` aborts, because the operator cancelled the preparation.
+   */
+  prepare(project: LocalProject, task: ControlRoomTask, directories: readonly LocalProjectDirectory[], signal?: AbortSignal): Promise<TaskWorktree[]>;
   remove?(worktree: TaskWorktree, sourcePath: string): Promise<void>;
 }
 
@@ -51,6 +56,7 @@ export interface ControlRoomDispatchOptions { useWorktrees?: boolean; }
 
 export class ControlRoomService {
   private readonly useWorktrees: boolean;
+  private readonly preparing = new Map<string, AbortController>();
   private readonly eventListeners = new Map<string, Set<(event: ExecutionEvent) => void>>();
 
   constructor(
@@ -63,6 +69,8 @@ export class ControlRoomService {
     if (!input.name.trim()) throw new Error("O nome do projeto e obrigatorio.");
     const suppliedDirectories = input.directories ?? (input.path ? [{ path: input.path }] : []);
     if (!suppliedDirectories.length) throw new Error("Informe ao menos um diretorio local.");
+    const isolation = input.isolation ?? "worktree";
+    assertProjectIsolation(isolation);
     const paths = new Set<string>();
     const directories: LocalProjectDirectory[] = suppliedDirectories.map((directory) => {
       if (!isAbsolute(directory.path)) throw new Error("O caminho do diretorio deve ser absoluto.");
@@ -85,9 +93,18 @@ export class ControlRoomService {
       name: input.name.trim(),
       path: directories[0]!.path,
       directories,
+      isolation,
       createdAt: now()
     };
     this.store.createProject(project);
+    return project;
+  }
+
+  /** Applies to the next runs. A task that already owns a worktree keeps working in it. */
+  setProjectIsolation(projectId: string, isolation: ProjectIsolation): LocalProject {
+    assertProjectIsolation(isolation);
+    const project = this.store.setProjectIsolation(projectId, isolation);
+    if (!project) throw Object.assign(new Error("Projeto nao encontrado."), { statusCode: 404 });
     return project;
   }
 
@@ -174,6 +191,8 @@ export class ControlRoomService {
     if (!request.selectedProvider) {
       return this.transitionTask(taskId, "waiting_approval", "dispatcher", "nenhum provedor selecionado");
     }
+    const preparation = new AbortController();
+    this.preparing.set(execution.id, preparation);
     try {
       let worktrees: TaskWorktree[] | null = null;
       if (this.useWorktrees && request.requestedActions.includes("create_worktree")) {
@@ -182,13 +201,14 @@ export class ControlRoomService {
         if (!worktrees.length) {
           if (!this.worktrees) throw new Error("Provisionador de worktree nao configurado.");
           const project = this.requireProject(task.projectId);
-          worktrees = await this.worktrees.prepare(project, task, this.scopeDirectories(project, task));
+          worktrees = await this.worktrees.prepare(project, task, this.scopeDirectories(project, task), preparation.signal);
         }
       }
       const completed = this.store.completeDispatchPreparation(taskId, leaseId, worktrees, {
         id: randomUUID(), taskId, fromStatus: "planning", fromDispatchLease: leaseId, toStatus: "running", actor: "dispatcher",
         reason: "despacho preparado; execucao do provedor e externa", createdAt: now()
       }, now());
+      if (completed) this.publishLatest(execution.id, "started");
       return completed ?? this.requireTask(taskId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -196,21 +216,26 @@ export class ControlRoomService {
         id: randomUUID(), taskId, fromStatus: "planning", fromDispatchLease: leaseId, toStatus: "failed", actor: "dispatcher",
         reason: "falha ao preparar despacho", createdAt: now()
       }, message, { id: randomUUID(), executionId: execution.id, level: "error", message, createdAt: now() });
+      if (failed) this.publishLatest(execution.id, "failed");
       return failed ?? this.requireTask(taskId);
+    } finally {
+      this.preparing.delete(execution.id);
     }
   }
 
   /**
    * True when the task should run in its own branch and worktree: the host supports it,
    * every scope directory is a Git repository and the task did not already run directly.
-   * Plain folders always run in place.
+   * Plain folders and projects set to work directly always run in place.
    */
   isolatesTask(taskId: string): boolean {
     if (!this.useWorktrees || !this.worktrees) return false;
     const task = this.requireTask(taskId);
-    const directories = this.scopeDirectories(this.requireProject(task.projectId), task);
+    const project = this.requireProject(task.projectId);
+    const directories = this.scopeDirectories(project, task);
     if (!directories.length || !directories.every((directory) => directory.isGitRepository)) return false;
     if (this.store.listTaskWorktrees(taskId).length) return true;
+    if (project.isolation === "direct") return false;
     return !this.store.listExecutions(taskId).some((execution) => execution.startedAt !== null);
   }
 
@@ -298,11 +323,18 @@ export class ControlRoomService {
     const result = this.store.cancelActiveExecution(executionId, "Cancelada pelo operador.");
     if (!result) throw conflict("Execucao nao esta ativa para cancelamento.");
     this.publish(result.event);
+    this.preparing.get(executionId)?.abort();
     return result.execution;
   }
 
   private publish(event: ExecutionEvent): void {
     for (const listener of this.eventListeners.get(event.executionId) ?? []) listener(event);
+  }
+
+  /** Announces an event the store wrote together with a state change. */
+  private publishLatest(executionId: string, kind: string): void {
+    const event = this.store.listExecutionEvents(executionId).at(-1);
+    if (event?.kind === kind) this.publish(event);
   }
 
   finishProviderRun(taskId: string, leaseId: string, result: AgentRunResult, files: readonly ExecutionFileChange[] = [], warnings: readonly string[] = []): ControlRoomTask {
@@ -327,10 +359,7 @@ export class ControlRoomService {
       message: [formatProviderLog(result), ...warnings.map((warning) => `[aviso Git] ${warning}`)].join("\n"),
       createdAt: finishedAt
     }, result.usage);
-    if (completed) {
-      const event = this.store.listExecutionEvents(this.requireExecutionId(taskId, leaseId)).at(-1);
-      if (event && (event.kind === "completed" || event.kind === "failed")) this.publish(event);
-    }
+    if (completed) this.publishLatest(this.requireExecutionId(taskId, leaseId), status);
     return completed ?? this.requireTask(taskId);
   }
 
@@ -434,6 +463,9 @@ function isGitRepository(path: string): boolean {
   } catch { return false; }
 }
 
+function assertProjectIsolation(value: string): asserts value is ProjectIsolation {
+  if (!(projectIsolations as readonly string[]).includes(value)) throw new Error("Modo de trabalho do projeto invalido.");
+}
 export function isTaskPriority(value: string): value is TaskPriority {
   return value === "low" || value === "normal" || value === "high" || value === "critical";
 }

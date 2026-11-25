@@ -112,7 +112,9 @@ export class ControlRoomTaskExecutor {
       ...(followUp !== undefined ? { fromStatus: task.status as "completed" | "failed", prompt: followUp } : {})
     });
     if (dispatched.status !== "running" || !dispatched.dispatchLease) {
-      throw new Error("A tarefa nao foi iniciada; releia o estado antes de tentar novamente.");
+      if (dispatched.status === "cancelled") throw conflict("A execucao foi cancelada durante a preparacao.");
+      const reason = dispatched.status === "failed" ? this.service.store.listExecutions(task.id)[0]?.summary : null;
+      throw new Error(reason ? `A execucao nao foi preparada: ${reason}` : "A tarefa nao foi iniciada; releia o estado antes de tentar novamente.");
     }
 
     // In worktree mode the agent works in the task's isolated checkouts, never in the user's folders.
