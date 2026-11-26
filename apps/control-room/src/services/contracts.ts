@@ -97,6 +97,8 @@ export interface ControlRoomClient {
   startComparison(input: CreateTaskInput, providers: string[]): Promise<ComparisonStart>;
   /** Keeps one attempt and sets the other finished ones aside. */
   chooseComparisonAttempt(comparisonId: string, taskId: string): Promise<Task[]>;
+  /** Continues a failed or interrupted turn with the same agent, reloading its session when possible. */
+  resumeTask(taskId: string): Promise<Task>;
   /** Starts another turn on a finished task, in the same folder or worktree. */
   sendTaskMessage(taskId: string, prompt: string): Promise<Task>;
   requestTaskAction(taskId: string, input: OutboundActionInput): Promise<TaskOutboundAction>;

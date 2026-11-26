@@ -15,7 +15,7 @@ const port = Number(process.env.ELEAZAR_CONTROL_ROOM_PORT ?? "4317");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("ELEAZAR_CONTROL_ROOM_PORT deve ser uma porta valida.");
 
 const store = new SqliteControlRoomStore(join(process.cwd(), ".eleazar", "control-room.sqlite"));
-store.recoverInterruptedExecutions("Host local reiniciado; execucao interrompida. Reenfileire manualmente para tentar novamente.");
+store.recoverInterruptedExecutions("Host local reiniciado; execucao interrompida. Use Retomar para continuar de onde parou.");
 // ELEAZAR_CONTROL_ROOM_WORKTREES=off keeps every task running directly in its folder.
 const isolate = process.env.ELEAZAR_CONTROL_ROOM_WORKTREES?.toLowerCase() !== "off";
 const service = createLocalControlRoomService(store, isolate ? { worktreeRoot: join(process.cwd(), ".eleazar", "worktrees") } : {});

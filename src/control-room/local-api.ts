@@ -183,6 +183,12 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
       return json(response, 200, service.listComparison(comparisonId));
     }
   }
+  const resumeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
+  if (method === "POST" && resumeMatch?.[1]) {
+    if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");
+    await readBody(request);
+    return json(response, 202, await executor.resume(decodeURIComponent(resumeMatch[1])));
+  }
   const worktreeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/worktrees\/remove$/.exec(url.pathname);
   if (method === "POST" && worktreeMatch?.[1]) {
     await readBody(request);

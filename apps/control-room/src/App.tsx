@@ -32,6 +32,7 @@ import {
   PanelLeftOpen,
   PlugZap,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Terminal,
@@ -770,7 +771,9 @@ export function App({ client }: { client: ControlRoomClient }) {
                      {selectedRun && <button className="secondary" onClick={() => openExecution(selectedRun.id)}>{selectedTask.status === "queued" ? "Ver última tentativa" : "Ver detalhes da execução"}</button>}
                      {selectedTask.status === "queued" && <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: selectedTask })}><Play size={16} aria-hidden="true" /> Executar tarefa</button>}
                      {selectedApproval && selectedTask.status === "waiting_approval" && <button className="primary" disabled={busy} onClick={() => open({ kind: "approval", approval: selectedApproval })}><ShieldCheck size={16} aria-hidden="true" /> Revisar aprovação</button>}
-                     {selectedTask.status === "failed" && <button className="primary" disabled={busy} onClick={() => void mutate(() => client.retryTask(selectedTask.id), "Tarefa reenfileirada.")}><RefreshCw size={16} aria-hidden="true" /> {busy ? "Reenfileirando…" : "Reenfileirar tarefa"}</button>}
+                     {selectedTask.status === "failed" && selectedRun?.provider && <button className="primary" disabled={busy} title="Continua com o mesmo agente; retoma a sessão quando o agente permite, ou envia o que foi registrado do turno perdido"
+                       onClick={() => void mutate(() => untilPreparing(selectedTask.id, client.resumeTask(selectedTask.id)), "Execução retomada de onde parou.")}><RotateCcw size={16} aria-hidden="true" /> Retomar de onde parou</button>}
+                     {selectedTask.status === "failed" && <button className={selectedRun?.provider ? "secondary" : "primary"} disabled={busy} onClick={() => void mutate(() => client.retryTask(selectedTask.id), "Tarefa reenfileirada.")}><RefreshCw size={16} aria-hidden="true" /> {busy ? "Reenfileirando…" : "Reenfileirar tarefa"}</button>}
                      {selectedTask.status === "completed" && <button className="primary" disabled={busy} onClick={() => open({ kind: "related", task: selectedTask })}><Plus size={16} aria-hidden="true" /> Criar tarefa relacionada</button>}
                    </>}
                  />

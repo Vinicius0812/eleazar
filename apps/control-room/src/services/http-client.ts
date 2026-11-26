@@ -98,6 +98,9 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     chooseComparisonAttempt(comparisonId, taskId) {
       return request<Task[]>(`/comparisons/${encodeURIComponent(comparisonId)}/choose`, { method: "POST", body: JSON.stringify({ taskId }) });
     },
+    resumeTask(taskId: string) {
+      return request<Task>(`/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST", body: "{}" });
+    },
     sendTaskMessage(taskId: string, prompt: string) {
       return request<Task>(`/tasks/${encodeURIComponent(taskId)}/messages`, { method: "POST", body: JSON.stringify({ prompt }) });
     },

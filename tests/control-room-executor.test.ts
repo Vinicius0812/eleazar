@@ -93,6 +93,36 @@ describe("Control Room task executor", () => {
     }
   });
 
+  it("retoma uma execucao interrompida com o mesmo provedor e o contexto registrado do turno perdido", async () => {
+    const { service, store } = await fixture();
+    try {
+      const project = service.registerProject({ name: "Core", path: process.cwd() });
+      const task = service.createTask({ projectId: project.id, title: "Migrar", prompt: "Migre o banco para a versao 2" });
+      const lost = await service.dispatch(task.id, { selectedProvider: "claude", reason: "teste", candidates: [], requestedActions: ["read_project"] });
+      const execution = store.listExecutions(task.id)[0]!;
+      service.recordAgentUpdate(execution.id, lost.dispatchLease!, { sessionId: "s", kind: "tool_call", payload: { toolCallId: "t1", title: "Editar schema.sql", status: "completed" } });
+      service.recordAgentUpdate(execution.id, lost.dispatchLease!, { sessionId: "s", kind: "agent_message_chunk", payload: { content: { type: "text", text: "Ja alterei o schema; falta o script de dados." } } });
+      expect(store.recoverInterruptedExecutions("Host local reiniciado")).toBe(1);
+      expect(store.getTask(task.id)?.status).toBe("failed");
+
+      const runner = fakeRunner({ provider: "claude", status: "success", response: "Concluido.", durationMs: 1 });
+      const run = vi.spyOn(runner, "run");
+      const executor = new ControlRoomTaskExecutor(service, runner, acpRegistry());
+      await executor.resume(task.id);
+      await settle(store, task.id);
+      const prompt = run.mock.calls[0]![0].prompt;
+      expect(run.mock.calls[0]![1]).toBe("claude");
+      expect(prompt).toContain("Migre o banco para a versao 2");
+      expect(prompt).toContain("interrompida (Host local reiniciado)");
+      expect(prompt).toContain("- Editar schema.sql (completed)");
+      expect(prompt).toContain("Ja alterei o schema; falta o script de dados.");
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      await expect(executor.resume(task.id)).rejects.toThrow("So e possivel retomar");
+    } finally {
+      store.close();
+    }
+  });
+
   it("mantém a tarefa na fila quando a autenticação impede escolher Claude", async () => {
     const { service, store } = await fixture();
     try {

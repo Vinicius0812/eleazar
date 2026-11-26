@@ -11,6 +11,7 @@ export interface ComparisonStart {
   errors: Array<{ taskId: string; provider: ProviderName; error: string }>;
 }
 import { GitChangeCollector } from "./git-change-collector.js";
+import { buildResumeMessage } from "../core/resume-context.js";
 
 /** Minimal boundary for the live provider runner; tests can use a deterministic substitute. */
 export interface ControlRoomTaskRunner {
@@ -89,17 +90,38 @@ export class ControlRoomTaskExecutor {
    */
   async continueTask(taskId: string, message: string, preferredProvider?: ProviderName, model?: string): Promise<ControlRoomTask> {
     if (!message.trim()) throw new Error("Escreva a mensagem para o agente.");
-    const previous = this.service.store.listExecutions(taskId).filter((execution) => execution.provider && execution.startedAt);
-    const provider = preferredProvider ?? previous[0]?.provider ?? undefined;
-    const task = this.service.getTask(taskId);
-    const resumable = previous.find((execution) => execution.provider === provider && execution.transport === "acp" &&
-      execution.sessionId && (execution.status === "completed" || execution.status === "failed"));
-    let sessionId: string | undefined;
-    if (task?.targetDirectoryId && resumable?.sessionId && provider && this.usesAcp(provider)) {
-      const canLoad = await this.providerConfig(provider, task.targetDirectoryId).then((config) => config.capabilities?.loadSession === true, () => false);
-      if (canLoad) sessionId = resumable.sessionId;
-    }
+    const provider = preferredProvider ?? this.lastProvider(taskId);
+    const sessionId = await this.resumableSession(taskId, provider);
     return this.start(taskId, provider, model, sessionId, message.trim());
+  }
+
+  /**
+   * Continues a turn that died: same provider and, when the agent can reload it, the same ACP
+   * session. Without the session, the message carries what was recorded of the lost turn.
+   */
+  async resume(taskId: string): Promise<ControlRoomTask> {
+    const task = this.service.getTask(taskId);
+    if (!task) throw new Error("Tarefa nao encontrada.");
+    if (task.status !== "failed") throw conflict("So e possivel retomar uma tarefa cuja execucao falhou ou foi interrompida.");
+    const lost = this.service.store.listExecutions(taskId)[0];
+    if (!lost?.provider) throw conflict("A ultima tentativa nao chegou a um provedor; execute a tarefa novamente.");
+    const sessionId = await this.resumableSession(taskId, lost.provider);
+    const events = this.service.store.listExecutionEvents(lost.id);
+    return this.start(taskId, lost.provider, undefined, sessionId, buildResumeMessage(lost, events, sessionId !== undefined));
+  }
+
+  private lastProvider(taskId: string): ProviderName | undefined {
+    return this.service.store.listExecutions(taskId).find((execution) => execution.provider && execution.startedAt)?.provider ?? undefined;
+  }
+
+  /** The newest finished ACP session of this provider in the task, if the agent announces session reload. */
+  private async resumableSession(taskId: string, provider: ProviderName | undefined): Promise<string | undefined> {
+    const task = this.service.getTask(taskId);
+    const resumable = this.service.store.listExecutions(taskId).find((execution) => execution.provider === provider && execution.startedAt && execution.transport === "acp" &&
+      execution.sessionId && (execution.status === "completed" || execution.status === "failed"));
+    if (!task?.targetDirectoryId || !resumable?.sessionId || !provider || !this.usesAcp(provider)) return undefined;
+    const canLoad = await this.providerConfig(provider, task.targetDirectoryId).then((config) => config.capabilities?.loadSession === true, () => false);
+    return canLoad ? resumable.sessionId : undefined;
   }
 
   async start(taskId: string, preferredProvider?: ProviderName, model?: string, sessionId?: string, followUp?: string): Promise<ControlRoomTask> {
