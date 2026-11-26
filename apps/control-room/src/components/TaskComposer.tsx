@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { ArrowUp, FolderGit2 } from "lucide-react";
 
 import type { CreateTaskInput, Priority, Project } from "../services/contracts.js";
@@ -29,7 +29,7 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
       projectId: project.id,
       targetDirectoryId: target.id,
       directoryIds: [target.id, ...directoryIds.filter((id) => id !== target.id && project.directories.some((directory) => directory.id === id))],
-      title: String(fields.get("title")),
+      title: String(fields.get("title") ?? "").trim() || titleFrom(String(fields.get("prompt") ?? "")),
       prompt: String(fields.get("prompt")),
       priority: String(fields.get("priority")) as Priority,
       ...(kind === "review" || kind === "planning" ? { kind } : {}),
@@ -45,13 +45,14 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
 
   return (
     <form className="task-composer" onSubmit={submit}>
-      <label>
-        Título
-        <input name="title" required maxLength={160} placeholder="O que precisa ser feito?" />
+      <label className="composer-prompt">
+        Solicitação
+        <textarea name="prompt" required maxLength={20000} rows={6} autoFocus onKeyDown={submitOnShortcut}
+          placeholder="Descreva o que o agente deve fazer: o objetivo, o contexto e como saber que ficou pronto." />
       </label>
       <label>
-        Solicitação
-        <textarea name="prompt" required maxLength={20000} rows={5} placeholder="Descreva o objetivo, o contexto e como saber quando a tarefa estiver pronta." />
+        Título
+        <input name="title" maxLength={160} placeholder="Opcional: usamos a primeira linha da solicitação" />
       </label>
       <div className="composer-target">
         <label>
@@ -115,9 +116,22 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
       </details>
       {error && <div className="error" role="alert">{error}</div>}
       <div className="composer-footer">
-        <small>Você poderá confirmar a execução depois de criar a tarefa.</small>
+        <small>Você confirma a execução depois de criar a tarefa. <kbd>Ctrl</kbd> + <kbd>Enter</kbd> cria.</small>
         <button className="primary" disabled={busy || !target}><ArrowUp size={16} /> {busy ? "Criando…" : "Criar tarefa"}</button>
       </div>
     </form>
   );
+}
+
+/** Ctrl+Enter (or Cmd+Enter) submits the form, as in a chat composer. */
+export function submitOnShortcut(event: KeyboardEvent<HTMLTextAreaElement>): void {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  event.currentTarget.form?.requestSubmit();
+}
+
+/** A title from the first meaningful line of the request, without Markdown marks, up to 80 characters. */
+export function titleFrom(prompt: string): string {
+  const line = prompt.split(/\r?\n/).map((item) => item.replace(/^[\s#>*\-\d.)]+/, "").replace(/[*_`]/g, "").trim()).find(Boolean) ?? "Nova tarefa";
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { terminalEventKinds, type ControlRoomClient, type ExecutionDetail, type ExecutionEvent, type ExecutionPermission } from "../services/contracts.js";
 
 export type ConnectionState = "loading" | "connecting" | "live" | "reconnecting" | "closed" | "error";
-export interface ToolActivity { toolCallId: string; title: string; status: string | null; locations: string[]; }
+export interface ToolActivity { toolCallId: string; title: string; status: string | null; locations: string[]; toolKind?: string | null; }
 export interface PlanEntry { content: string; status: string; }
 /** One step of the conversation, in the order the agent produced it. Consecutive tool calls share a step. */
 export type ConversationItem =
@@ -68,9 +68,10 @@ export function deriveSession(events: ExecutionEvent[]): { items: ConversationIt
       const title = typeof payload.title === "string" && payload.title ? payload.title : typeof payload.name === "string" && payload.name ? payload.name : previous?.title ?? "Ferramenta";
       const locations = Array.isArray(payload.locations) ? payload.locations.filter((item): item is string => typeof item === "string") : [];
       const status = typeof payload.status === "string" ? payload.status : previous?.status ?? null;
+      const toolKind = typeof payload.toolKind === "string" ? payload.toolKind : previous?.toolKind ?? null;
       // An update that carries no locations keeps the ones already known.
-      if (previous) { Object.assign(previous, { title, status, locations: locations.length ? locations : previous.locations }); continue; }
-      const tool: ToolActivity = { toolCallId: id, title, status, locations };
+      if (previous) { Object.assign(previous, { title, status, toolKind, locations: locations.length ? locations : previous.locations }); continue; }
+      const tool: ToolActivity = { toolCallId: id, title, status, locations, toolKind };
       tools.set(id, tool);
       const last = items.at(-1);
       if (last?.kind === "tools") last.tools.push(tool);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ListChecks, Wrench } from "lucide-react";
+import { ArrowDown, FilePen, FileSearch, FileText, Globe, ListChecks, SquareTerminal, Trash2, Wrench, type LucideIcon } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph.js";
 import { AgentMarkdown } from "./AgentMarkdown.js";
@@ -64,15 +64,29 @@ function extraLocations(tool: ToolActivity): string[] {
   return tool.locations.filter((path) => !tool.title.includes(path));
 }
 
+/** ACP tool kinds, each with its own icon, so reading, editing and running commands are told apart at a glance. */
+const toolIcons: Record<string, LucideIcon> = { read: FileText, edit: FilePen, delete: Trash2, move: FilePen, search: FileSearch, execute: SquareTerminal, fetch: Globe };
+
+/** Long absolute paths (worktrees live deep in `.eleazar`) keep their last segments; the full path stays in the tooltip. */
+export function shortPath(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  if (path.length <= 60 || parts.length <= 3) return path;
+  return `…/${parts.slice(-3).join("/")}`;
+}
+
 function ToolGroup({ tools }: { tools: ToolActivity[] }) {
   return (
     <ul className="conversation-tools" aria-label="Atividade de ferramentas">
-      {tools.map((tool) => <li key={tool.toolCallId}>
-        <Wrench size={13} aria-hidden="true" />
-        <strong>{tool.title}</strong>
-        {tool.status && <span className={`tool-status ${tool.status}`}>{toolStatusCopy[tool.status] ?? tool.status}</span>}
-        {extraLocations(tool).length > 0 && <small>{extraLocations(tool).join(", ")}</small>}
-      </li>)}
+      {tools.map((tool) => {
+        const Icon = (tool.toolKind && toolIcons[tool.toolKind]) || Wrench;
+        const locations = extraLocations(tool);
+        return <li key={tool.toolCallId} className={tool.status ? `tool-${tool.status}` : undefined}>
+          <Icon size={13} aria-hidden="true" />
+          <strong>{tool.title}</strong>
+          {tool.status && <span className={`tool-status ${tool.status}`}>{toolStatusCopy[tool.status] ?? tool.status}</span>}
+          {locations.length > 0 && <small title={locations.join("\n")}>{locations.map(shortPath).join(", ")}</small>}
+        </li>;
+      })}
     </ul>
   );
 }

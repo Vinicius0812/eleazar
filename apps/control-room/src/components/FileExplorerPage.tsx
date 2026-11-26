@@ -130,6 +130,8 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
   }, [directoryId, loadChanges, loadDirectory]);
 
   useEffect(() => { if (selected && directoryId) void loadFile(selected); }, [selected, directoryId, loadFile]);
+  // Opens the first change right away, like a review: there is something to read without an extra click.
+  useEffect(() => { if (!selected && changes?.[0]) setSelected(changes[0].path); }, [changes, selected]);
 
   useEffect(() => {
     if (!directoryId) return;
@@ -233,7 +235,16 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
                 <input className="explorer-filter" type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filtrar alterações…" aria-label="Filtrar alterações" />
                 {changes && changes.length > 0 && <p className="explorer-totals"><span className="add">+{totals.additions}</span> <span className="remove">−{totals.deletions}</span> em {changes.length} arquivo{changes.length === 1 ? "" : "s"}</p>}
                 {changes && !changes.length && !warnings.length && <p className="empty">Nenhuma alteração em relação {root?.mode === "worktree" ? "ao commit em que a tarefa começou" : "ao último commit"}.</p>}
-                <ul className="explorer-change-list">
+                <ul className="explorer-change-list" aria-label="Arquivos alterados" onKeyDown={(event) => {
+                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                  event.preventDefault();
+                  const index = visibleChanges.findIndex((change) => change.path === selected);
+                  const next = visibleChanges[Math.min(visibleChanges.length - 1, Math.max(0, index + (event.key === "ArrowDown" ? 1 : -1)))];
+                  if (!next) return;
+                  setSelected(next.path);
+                  const buttons = event.currentTarget.querySelectorAll("button");
+                  buttons[visibleChanges.indexOf(next)]?.focus();
+                }}>
                   {visibleChanges.map((change) => (
                     <li key={change.path}>
                       <button className={change.path === selected ? "selected" : ""} aria-current={change.path === selected ? "true" : undefined} onClick={() => setSelected(change.path)} title={change.previousPath ? `${change.previousPath} → ${change.path}` : change.path}>
@@ -281,7 +292,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
           <section className="explorer-viewer loading-area" aria-label="Arquivo selecionado">
             {fileLoading && <LoadingOverlay label="Abrindo arquivo…" />}
             {!selected ? (
-              <div className="explorer-placeholder"><FileDiff size={28} aria-hidden="true" /><p>Escolha um arquivo para ver o diff ou o conteúdo.</p></div>
+              <div className="explorer-placeholder"><FileDiff size={28} aria-hidden="true" /><p>Escolha um arquivo para ver o diff ou o conteúdo.</p><p className="explorer-hint">Na lista de alterações, use <kbd>↑</kbd> e <kbd>↓</kbd> para passar de um arquivo a outro.</p></div>
             ) : fileError ? <div className="error" role="alert">{fileError}</div> : file && file.path === selected ? (
               <>
                 <div className="explorer-viewer-heading">

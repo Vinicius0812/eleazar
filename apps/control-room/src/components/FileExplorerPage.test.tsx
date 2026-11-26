@@ -36,7 +36,7 @@ describe("FileExplorerPage", () => {
 
     await user.click(screen.getByRole("tab", { name: "Todos os arquivos" }));
     const tree = screen.getByRole("tree");
-    await user.click(within(tree).getByRole("button", { name: /src/ }));
+    // The first change opened by itself, so the tree reveals its folder.
     expect(await within(tree).findByRole("button", { name: /novo\.ts/ })).toBeInTheDocument();
     expect(client.listTaskFiles).toHaveBeenCalledWith("t1", "d1", "src");
 

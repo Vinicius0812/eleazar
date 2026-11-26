@@ -3,6 +3,7 @@ import { ArrowLeft, MessageSquare, Terminal } from "lucide-react";
 
 import { PreviousTurns } from "./PreviousTurns.js";
 import { ExecutionSession } from "./ExecutionSession.js";
+import { TaskChangesSummary } from "./TaskChangesSummary.js";
 import { isLiveExecution, type ControlRoomClient, type LogEntry, type Run, type Task } from "../services/contracts.js";
 
 const statusCopy: Record<Task["status"], string> = {
@@ -80,6 +81,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           </div>
         )}
         {showSession && run && <ExecutionSession key={run.id} client={client} executionId={run.id} showRequest={Boolean(run.prompt)} showOutcome={!failure} {...(onSessionChanged ? { onChanged: onSessionChanged } : {})} />}
+        {task.status !== "queued" && <TaskChangesSummary client={client} task={task} />}
         {followUp}
         <div className="task-next-actions">
           <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>

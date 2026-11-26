@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { ArrowUp } from "lucide-react";
 
+import { submitOnShortcut } from "./TaskComposer.js";
+
 /** Sends another message to a task whose last turn finished, keeping its folder or worktree. */
 export function TaskFollowUp({ busy, resumesSession, onSend }: {
   busy: boolean;
@@ -20,7 +22,7 @@ export function TaskFollowUp({ busy, resumesSession, onSend }: {
     <form className="task-follow-up" onSubmit={submit}>
       <label>
         Nova mensagem para o agente
-        <textarea value={prompt} rows={3} required placeholder="Peça um ajuste, uma correção ou o próximo passo" onChange={(event) => setPrompt(event.target.value)} />
+        <textarea value={prompt} rows={3} required placeholder="Peça um ajuste, uma correção ou o próximo passo (Ctrl+Enter envia)" onKeyDown={submitOnShortcut} onChange={(event) => setPrompt(event.target.value)} />
       </label>
       <div className="task-follow-up-footer">
         <small>{resumesSession
