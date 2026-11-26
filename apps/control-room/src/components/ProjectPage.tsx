@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from "react";
-import { FolderGit2, FolderTree, ListTodo, Plus, TerminalSquare } from "lucide-react";
+import { FolderGit2, FolderTree, ListTodo, Pin, Plus, TerminalSquare } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph.js";
 import { FileExplorerPage, projectExplorerSource, type FileExplorerLocation } from "./FileExplorerPage.js";
-import { relativeTime, type BoardCard } from "../services/board.js";
+import { pinnedFirst, relativeTime, type BoardCard } from "../services/board.js";
 import type { ControlRoomClient, Project } from "../services/contracts.js";
 
 export type ProjectSection = "tasks" | "files" | "terminal";
@@ -53,7 +53,7 @@ export function ProjectPage({ client, project, cards, section, location, statusL
   taskActions?(card: BoardCard): ReactNode;
 }) {
   const source = useMemo(() => projectExplorerSource(client, project.id), [client, project.id]);
-  const active = cards.filter((card) => card.place !== "archive");
+  const active = pinnedFirst(cards.filter((card) => card.place !== "archive"));
   const archived = cards.filter((card) => card.place === "archive");
   return (
     <section className="project-page" aria-labelledby="project-title">
@@ -86,7 +86,7 @@ export function ProjectPage({ client, project, cards, section, location, statusL
             <article key={card.task.id} className={`project-task-row ${card.place === "archive" ? "archived" : ""}`}>
               <span className={`lane-dot lane-${card.place}`} aria-hidden="true" />
               <AgentGlyph provider={card.run?.provider} />
-              <a className="project-task-title" href={`#/tasks/${encodeURIComponent(card.task.id)}`}>{card.task.title}</a>
+              <a className="project-task-title" href={`#/tasks/${encodeURIComponent(card.task.id)}`}>{card.task.pinnedAt && <Pin size={13} aria-label="Fixada" className="pin-mark" />}{card.task.title}</a>
               <span className="project-task-fact">{card.fact}</span>
               <span className={`status ${card.task.status}`}>{statusLabel(card)}</span>
               <time dateTime={card.at} title={new Date(card.at).toLocaleString("pt-BR")}>{relativeTime(card.at)}</time>

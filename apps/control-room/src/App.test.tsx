@@ -179,6 +179,26 @@ describe("Project page", () => {
   });
 });
 
+describe("Pin and delete tasks", () => {
+  it("pins a task from its screen and deletes it after confirmation, returning to the project", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const controlled = client();
+    const pin = vi.spyOn(controlled, "pinTask");
+    const remove = vi.spyOn(controlled, "deleteTask");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Fixar Resultado" }));
+    expect(pin).toHaveBeenCalledWith("task-1", true);
+    await user.click(screen.getByRole("button", { name: "Excluir Resultado" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Excluir Resultado" }));
+    expect(remove).toHaveBeenCalledWith("task-1");
+    await waitFor(() => expect(window.location.hash).toBe("#/projects/project-1"));
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -825,6 +845,7 @@ function client(): ControlRoomClient {
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),
     searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }),
+    pinTask: async (taskId, pinned) => ({ ...snapshot.tasks[0]!, id: taskId, pinnedAt: pinned ? "2026-01-02T00:00:00.000Z" : null }), deleteTask: async () => undefined,
     listTerminals: async () => [], openTerminal: async () => { throw new Error("unused"); }, sendTerminalInput: async () => { throw new Error("unused"); }, closeTerminal: async () => { throw new Error("unused"); }, streamTerminalEvents: async () => true,
     getProjectFileRoots: async () => [explorerRoot], listProjectFiles: async (_project, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "package.json", path: "package.json", type: "file", size: 6, change: null, changedBelow: 0 }], truncated: false }),
     getProjectChanges: async () => ({ root: explorerRoot, changes: [], warnings: [] }),

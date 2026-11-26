@@ -45,6 +45,8 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     getTaskChanges(taskId, directoryId) { return request<ExplorerChanges>(`/tasks/${encodeURIComponent(taskId)}/changes?${explorerQuery(directoryId)}`); },
     getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
     searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
+    pinTask(taskId, pinned) { return request<Task>(`/tasks/${encodeURIComponent(taskId)}/pin`, { method: "POST", body: JSON.stringify({ pinned }) }); },
+    async deleteTask(taskId) { await request<unknown>(`/tasks/${encodeURIComponent(taskId)}/delete`, { method: "POST", body: "{}" }); },
     listTerminals(projectId) { return request<TerminalSession[]>(`/projects/${encodeURIComponent(projectId)}/terminals`); },
     openTerminal(projectId, directoryId) { return request<TerminalSession>(`/projects/${encodeURIComponent(projectId)}/terminals`, { method: "POST", body: JSON.stringify({ directoryId }) }); },
     sendTerminalInput(sessionId, command) { return request<TerminalSession>(`/terminals/${encodeURIComponent(sessionId)}/input`, { method: "POST", body: JSON.stringify({ command }) }); },

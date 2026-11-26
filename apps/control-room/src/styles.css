@@ -3122,3 +3122,10 @@ dialog.command-palette:not([open]) { display: none; }
 .terminal-input input { flex: 1; min-width: 0; border: 0; background: transparent; font: 14px ui-monospace, "Cascadia Code", Consolas, monospace; box-shadow: none; }
 .terminal-input input:focus { outline: none; }
 .terminal-input:focus-within { border-color: var(--focus); }
+
+/* Pinned and deletable tasks. */
+.task-workspace-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: end; }
+.task-workspace-heading .eyebrow { grid-column: 1 / -1; }
+.task-heading-actions { display: inline-flex; gap: 4px; padding-bottom: 4px; }
+.pin-mark { flex: none; color: var(--accent); }
+.project-task-title .pin-mark { margin-right: 6px; vertical-align: -2px; }

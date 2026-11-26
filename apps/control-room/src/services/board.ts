@@ -80,6 +80,11 @@ function judge(pullRequest: TaskPullRequest): { place: BoardPlace; fact: string 
   return checks.total > 0 ? { place: "ready", fact: "Checks aprovados" } : { place: "in_review", fact: "Aguardando revisão" };
 }
 
+/** Pinned tasks first (the most recently pinned on top); the rest keep their order. */
+export function pinnedFirst<T extends { task: Task }>(items: readonly T[]): T[] {
+  return [...items].sort((left, right) => (right.task.pinnedAt ?? "").localeCompare(left.task.pinnedAt ?? ""));
+}
+
 /** Compact age for a card: "agora", "5 min", "3 h", "2 d". */
 export function relativeTime(at: string, now = Date.now()): string {
   const minutes = Math.floor((now - new Date(at).getTime()) / 60_000);

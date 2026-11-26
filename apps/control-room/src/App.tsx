@@ -30,6 +30,9 @@ import {
   Play,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
+  PinOff,
+  Trash2,
   PlugZap,
   RefreshCw,
   RotateCcw,
@@ -58,7 +61,7 @@ import { TaskBoard } from "./components/TaskBoard.js";
 import { AgentGlyph } from "./components/AgentGlyph.js";
 import { CommandPalette, type CommandItem } from "./components/CommandPalette.js";
 import { ProvidersPage, providerState, quotaStateLabel } from "./components/ProvidersPage.js";
-import { placeTask } from "./services/board.js";
+import { pinnedFirst, placeTask } from "./services/board.js";
 import { needsYou } from "./services/inbox.js";
 import { NeedsYouInbox } from "./components/NeedsYouInbox.js";
 import { resolveShortcut, shortcutList, type ShortcutAction } from "./services/shortcuts.js";
@@ -448,6 +451,22 @@ export function App({ client }: { client: ControlRoomClient }) {
    * Creating a worktree can take minutes. Once the host has claimed the task, its own screen shows the
    * progress and the Cancel button, so the dialog must not stay in front of it.
    */
+  function togglePin(task: Task) {
+    void mutate(() => client.pinTask(task.id, !task.pinnedAt), task.pinnedAt ? "Tarefa desafixada." : "Tarefa fixada no topo do projeto.");
+  }
+  function removeTask(task: Task) {
+    if (!window.confirm(`Excluir "${task.title}"? A conversa, as execuções e os registros desta tarefa serão apagados e não podem ser recuperados. A branch, se houver, continua no repositório.`)) return;
+    const leaving = taskRoute === task.id || publishRoute === task.id;
+    void mutate(() => client.deleteTask(task.id), "Tarefa excluída.", () => { if (leaving) window.location.hash = projectHash(task.projectId).slice(1); });
+  }
+  const manageTask = (task: Task, compact = false) => <>
+    <button type="button" className={compact ? "icon-button" : "text-button"} disabled={busy} onClick={() => togglePin(task)} aria-label={`${task.pinnedAt ? "Desafixar" : "Fixar"} ${task.title}`} title={task.pinnedAt ? "Desafixar" : "Fixar no topo do projeto"}>
+      {task.pinnedAt ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}{!compact && (task.pinnedAt ? " Desafixar" : " Fixar")}
+    </button>
+    <button type="button" className={`${compact ? "icon-button" : "text-button"} danger`} disabled={busy || task.status === "planning" || task.status === "running"} onClick={() => removeTask(task)} aria-label={`Excluir ${task.title}`} title={task.status === "running" || task.status === "planning" ? "Cancele a execução antes de excluir" : "Excluir tarefa"}>
+      <Trash2 size={15} aria-hidden="true" />{!compact && " Excluir"}
+    </button>
+  </>;
   async function untilPreparing(taskId: string, request: Promise<unknown>): Promise<void> {
     let settled = false;
     const finished = request.finally(() => { settled = true; });
@@ -647,7 +666,7 @@ export function App({ client }: { client: ControlRoomClient }) {
             <span className="sidebar-section">Projetos</span>
             {projectsWithTasks.map(({ project, cards }) => {
               const open = !collapsedProjects.includes(project.id);
-              const visible = cards.filter((card) => card.place !== "archive");
+              const visible = pinnedFirst(cards.filter((card) => card.place !== "archive"));
               const listId = `sidebar-project-${project.id}`;
               return (
                 <div key={project.id} className="sidebar-project">
@@ -664,6 +683,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id || filesRoute?.taskId === task.id || executionDetail?.task.id === task.id && executionRoute ? "page" : undefined} title={`${task.title} · ${fact}`}>
                         <span className={`lane-dot lane-${place}`} aria-hidden="true" />
                         <span>{task.title}</span>
+                        {task.pinnedAt && <Pin size={12} className="pin-mark" aria-label="Fixada" />}
                       </a>
                     ))}
                     {visible.length > sidebarTaskLimit && <a className="sidebar-more" href={projectHash(project.id)} onClick={() => setProjectFilter(project.id)}><span>Ver todas ({visible.length})</span></a>}
@@ -741,6 +761,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                      location={{ ...(projectView.directoryId ? { directoryId: projectView.directoryId } : {}), ...(projectView.path ? { path: projectView.path } : {}) }}
                      cards={tasks.filter((task) => task.projectId === viewedProject.id).map(placed)} statusLabel={(card) => statuses[card.task.status]}
                      actions={<a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>}
+                     taskActions={(card) => manageTask(card.task, true)}
                      terminal={<ProjectTerminal key={viewedProject.id} client={client} project={viewedProject} />} />
                  : <div className="empty">Projeto não encontrado. <a className="text-button" href="#/projects">Voltar aos projetos</a></div>}
              </section>
@@ -762,6 +783,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                <header className="task-workspace-heading">
                  <span className="eyebrow">{selectedTask ? projectName(selectedTask.projectId) : "Tarefas"}</span>
                  <h1 id="task-workspace-title" ref={taskViewHeading} tabIndex={-1}>{taskRoute === "new" ? "O que você quer fazer?" : selectedTask?.title ?? "Tarefa"}</h1>
+                 {selectedTask && <div className="task-heading-actions">{manageTask(selectedTask)}</div>}
                </header>
                {selectedTask && <TaskTabs taskId={selectedTask.id} active={publishRoute ? "publish" : "conversation"} pendingPublications={pendingPublications(selectedTask.id)} />}
                <div className="feedback" role="status">{notice}</div>

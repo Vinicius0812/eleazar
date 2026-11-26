@@ -394,6 +394,22 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return result.changes === 1 ? this.getOutboundAction(id) : null;
   }
 
+  setTaskPinned(taskId: string, pinnedAt: string | null): ControlRoomTask | null {
+    this.#db.prepare("UPDATE tasks SET pinned_at = ? WHERE id = ?").run(pinnedAt, taskId);
+    return this.getTask(taskId);
+  }
+  deleteTask(taskId: string): boolean {
+    return this.#db.transaction(() => {
+      const executions = "SELECT id FROM executions WHERE task_id = @taskId";
+      for (const table of ["execution_events", "execution_logs", "execution_permissions", "execution_file_changes"]) {
+        this.#db.prepare(`DELETE FROM ${table} WHERE execution_id IN (${executions})`).run({ taskId });
+      }
+      for (const table of ["executions", "delegation_decisions", "task_transitions", "task_worktrees", "task_pull_requests", "task_outbound_actions", "task_directory_scopes"]) {
+        this.#db.prepare(`DELETE FROM ${table} WHERE task_id = @taskId`).run({ taskId });
+      }
+      return this.#db.prepare("DELETE FROM tasks WHERE id = @taskId").run({ taskId }).changes === 1;
+    })();
+  }
   createTaskTemplate(template: TaskTemplate): void {
     this.#db.prepare(`INSERT INTO task_templates (id, name, title, prompt, kind, priority, project_id, created_at)
       VALUES (@id, @name, @title, @prompt, @kind, @priority, @projectId, @createdAt)`).run(template);
@@ -470,6 +486,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
     this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
     this.#addColumnIfMissing("tasks", "comparison_id", "TEXT");
+    this.#addColumnIfMissing("tasks", "pinned_at", "TEXT");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
     this.#addColumnIfMissing("executions", "output", "TEXT");
     this.#addColumnIfMissing("executions", "usage_json", "TEXT");
@@ -571,7 +588,8 @@ function mapTask(row: unknown, directoryIds: string[], branch: string | null): C
   return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), targetDirectoryId: nullableString(item, "target_directory_id"), directoryIds, usesWorktree: Boolean(item.uses_worktree), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
     kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), branch, dispatchLease: nullableString(item, "dispatch_lease"),
-    ...(item.comparison_id ? { comparisonId: stringValue(item, "comparison_id") } : {}), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+    ...(item.comparison_id ? { comparisonId: stringValue(item, "comparison_id") } : {}),
+    ...(item.pinned_at ? { pinnedAt: stringValue(item, "pinned_at") } : {}), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;

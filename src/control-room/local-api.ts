@@ -235,6 +235,17 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
       return json(response, 200, service.listComparison(comparisonId));
     }
   }
+  const taskManageMatch = /^\/api\/control-room\/tasks\/([^/]+)\/(pin|delete)$/.exec(url.pathname);
+  if (method === "POST" && taskManageMatch?.[1]) {
+    const taskId = decodeURIComponent(taskManageMatch[1]);
+    const body = await readBody(request);
+    if (taskManageMatch[2] === "pin") {
+      if (typeof body.pinned !== "boolean") throw new Error("Campo obrigatorio: pinned");
+      return json(response, 200, service.pinTask(taskId, body.pinned));
+    }
+    service.deleteTask(taskId);
+    return json(response, 200, { deleted: taskId });
+  }
   const resumeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
   if (method === "POST" && resumeMatch?.[1]) {
     if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");

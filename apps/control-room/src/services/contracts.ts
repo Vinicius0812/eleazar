@@ -12,7 +12,7 @@ export interface ProjectDirectory { id: string; name: string; path: string; crea
 /** Where agents work: an isolated worktree per task, or the project's own folders. */
 export type ProjectIsolation = "worktree" | "direct";
 export interface Project { id: string; name: string; path: string; directories: ProjectDirectory[]; isolation: ProjectIsolation; createdAt: string; }
-export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; branch?: string | null; dispatchLease?: string | null; comparisonId?: string | null; createdAt: string; updatedAt: string; }
+export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; branch?: string | null; dispatchLease?: string | null; comparisonId?: string | null; pinnedAt?: string | null; createdAt: string; updatedAt: string; }
 export interface Run { id: string; taskId: string; provider: string | null; status: ExecutionStatus; startedAt: string | null; finishedAt: string | null; summary: string | null; prompt?: string | null; output?: string | null; usage?: TokenUsage | null; transport?: "acp" | "legacy" | null; model?: string | null; sessionId?: string | null; }
 export interface LogEntry { id: string; executionId: string; level: LogLevel; message: string; createdAt: string; }
 export interface ExecutionFileChange { id: string; executionId: string; directoryId: string; path: string; kind: "added" | "modified" | "deleted" | "untracked" | "preexisting"; additions: number | null; deletions: number | null; }
@@ -125,6 +125,9 @@ export interface ControlRoomClient {
   getTaskChanges(taskId: string, directoryId: string): Promise<ExplorerChanges>;
   getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
   searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
+  pinTask(taskId: string, pinned: boolean): Promise<Task>;
+  /** Deletes the task and its history; the host refuses while it runs or still owns a worktree. */
+  deleteTask(taskId: string): Promise<void>;
   listTerminals(projectId: string): Promise<TerminalSession[]>;
   openTerminal(projectId: string, directoryId: string): Promise<TerminalSession>;
   /** Writes one command line to the shell; the output arrives through the stream. */

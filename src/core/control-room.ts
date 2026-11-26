@@ -60,6 +60,8 @@ export interface ControlRoomTask {
   dispatchLease: string | null;
   /** Shared by the tasks that run the same request with different agents, to compare their changes. */
   comparisonId?: string | null;
+  /** When the operator pinned the task to the top of its project; absent when not pinned. */
+  pinnedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -401,6 +403,9 @@ export interface ControlRoomStore {
   getOutboundAction(id: string): TaskOutboundAction | null;
   listOutboundActions(taskId?: string): TaskOutboundAction[];
   /** Compare-and-set on the status so two decisions cannot both win. */
+  setTaskPinned(taskId: string, pinnedAt: string | null): ControlRoomTask | null;
+  /** Removes the task and everything recorded about it. True when it existed. */
+  deleteTask(taskId: string): boolean;
   createTaskTemplate(template: TaskTemplate): void;
   listTaskTemplates(): TaskTemplate[];
   /** True when a template was removed. */

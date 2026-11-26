@@ -149,6 +149,27 @@ export class ControlRoomService {
     return task;
   }
 
+  pinTask(taskId: string, pinned: boolean): ControlRoomTask {
+    const task = this.store.setTaskPinned(taskId, pinned ? now() : null);
+    if (!task) throw Object.assign(new Error("Tarefa nao encontrada."), { statusCode: 404 });
+    return task;
+  }
+
+  /**
+   * Deletes a task with its history. Refused while an agent works on it, while a publication is
+   * pending, or while it still owns a worktree: the operator removes the worktree first, so no
+   * uncommitted work is lost silently. The task branch is never touched.
+   */
+  deleteTask(taskId: string): void {
+    const task = this.requireTask(taskId);
+    if (task.dispatchLease || task.status === "planning" || task.status === "running") throw conflict("A tarefa esta em execucao; cancele antes de excluir.");
+    if (this.store.listOutboundActions(taskId).some((action) => action.status === "pending" || action.status === "running")) {
+      throw conflict("Ha um commit, push ou pull request pendente nesta tarefa; decida antes de excluir.");
+    }
+    if (this.store.listTaskWorktrees(taskId).length) throw conflict("Remova a worktree da tarefa (na aba Publicacao) antes de excluir; a branch continua no repositorio.");
+    if (!this.store.deleteTask(taskId)) throw Object.assign(new Error("Tarefa nao encontrada."), { statusCode: 404 });
+  }
+
   createTemplate(input: NewTaskTemplate): TaskTemplate {
     const name = input.name.trim();
     const prompt = input.prompt.trim();
