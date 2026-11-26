@@ -29,7 +29,7 @@ export function ExecutionResultPage({ client, onSessionChanged, detail, loading,
   return (
     <main className="execution-page" id="main" tabIndex={-1}>
       <header className="execution-page-header">
-        <div className="execution-header-actions"><button className="secondary" onClick={onBack}><ArrowLeft size={16} /> Voltar ao painel</button><a className="secondary" href={fileExplorerHash(task.id)}><FolderTree size={16} aria-hidden="true" /> Explorar arquivos</a><button className="primary" onClick={() => onCreateRelated(task)}>Criar tarefa relacionada</button></div>
+        <div className="execution-header-actions"><button className="secondary" onClick={onBack}><ArrowLeft size={16} /> Voltar à tarefa</button><a className="secondary" href={fileExplorerHash(task.id)}><FolderTree size={16} aria-hidden="true" /> Explorar arquivos</a><button className="primary" onClick={() => onCreateRelated(task)}>Criar tarefa relacionada</button></div>
         <div className="execution-heading">
           <span className="eyebrow">RESULTADO DA EXECUÇÃO</span>
           <h1>{task.title}</h1>

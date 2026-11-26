@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Bell,
   Check,
+  ChevronDown,
   ChevronRight,
   Clock3,
   FolderGit2,
@@ -46,6 +47,7 @@ import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
 import { AgentGlyph } from "./components/AgentGlyph.js";
+import { CommandPalette, type CommandItem } from "./components/CommandPalette.js";
 import { ProvidersPage, providerState } from "./components/ProvidersPage.js";
 import { placeTask } from "./services/board.js";
 import markUrl from "./assets/icons/eleazar-mark.svg";
@@ -75,15 +77,27 @@ const statuses = {
 };
 const isolationLabels: Record<ProjectIsolation, string> = { worktree: "Worktree por tarefa", direct: "Direto na pasta" };
 const runStatuses = { ...statuses, planned: "Preparando" };
+// Grouped by what the operator came to do: act on work, look back at it, or set things up.
 const navigation = [
-  { id: "overview", label: "Visão geral", icon: LayoutDashboard },
-  { id: "projects", label: "Projetos", icon: FolderGit2 },
-  { id: "tasks", label: "Fila de tarefas", icon: ListTodo },
-  { id: "executions", label: "Execuções", icon: Activity },
-  { id: "approvals", label: "Aprovações", icon: ShieldCheck },
-  { id: "providers", label: "Provedores", icon: PlugZap },
-  { id: "logs", label: "Logs", icon: Terminal },
+  { id: "overview", label: "Visão geral", icon: LayoutDashboard, group: "Trabalho" },
+  { id: "tasks", label: "Fila de tarefas", icon: ListTodo, group: "Trabalho" },
+  { id: "approvals", label: "Aprovações", icon: ShieldCheck, group: "Trabalho" },
+  { id: "executions", label: "Execuções", icon: Activity, group: "Histórico" },
+  { id: "logs", label: "Logs", icon: Terminal, group: "Histórico" },
+  { id: "projects", label: "Projetos", icon: FolderGit2, group: "Configuração" },
+  { id: "providers", label: "Provedores", icon: PlugZap, group: "Configuração" },
 ];
+const navigationGroups = [...new Set(navigation.map((item) => item.group))];
+const sidebarTaskLimit = 6;
+type Crumb = { label: string; href?: string; onClick?: () => void };
+function readCollapsedProjects(): string[] {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem("eleazar.collapsedProjects") ?? "[]");
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 type DialogState =
   | { kind: "project" }
   | { kind: "execute"; task: Task }
@@ -215,6 +229,19 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [desktopCollapsed, setDesktopCollapsed] = useState(() => window.localStorage.getItem("eleazar.sidebarCollapsed") === "true");
   const collapsed = narrow ? narrowCollapsed : desktopCollapsed;
   const [theme, setTheme] = useState<Theme>(preferredTheme);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<string[]>(readCollapsedProjects);
+  useEffect(() => { window.localStorage.setItem("eleazar.collapsedProjects", JSON.stringify(collapsedProjects)); }, [collapsedProjects]);
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!dialog && !busy && focusTrigger.current) {
@@ -317,6 +344,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   function openExecution(executionId: string) { window.location.hash = `/executions/${encodeURIComponent(executionId)}`; }
   function openTask(taskId: string) { window.location.hash = `/tasks/${encodeURIComponent(taskId)}`; }
   function backToDashboard() { navigate("overview"); }
+  function showProjectTasks(projectId: string) { setProjectFilter(projectId); setQuery(""); navigate("tasks"); }
+  function toggleProject(projectId: string) { setCollapsedProjects((current) => current.includes(projectId) ? current.filter((id) => id !== projectId) : [...current, projectId]); }
   function refreshProviders(): void { setProvidersLoading(true); setProvidersError(""); client.getProviderStatuses(true).then(setProviders).catch((reason) => setProvidersError(message(reason))).finally(() => setProvidersLoading(false)); }
   async function changeProvider(provider: string, operation: () => Promise<ProviderStatus[]>) {
     setProviderPending(provider); setProvidersError("");
@@ -455,6 +484,28 @@ export function App({ client }: { client: ControlRoomClient }) {
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
     overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
+  const commandItems: CommandItem[] = [
+    { id: "action-new-task", group: "Ações", label: "Nova tarefa", hint: "Descrever o que fazer", icon: Plus, run: () => { window.location.hash = "/tasks/new"; } },
+    { id: "action-new-project", group: "Ações", label: "Cadastrar projeto", hint: "Adicionar pastas do workspace", icon: FolderGit2, run: () => open({ kind: "project" }) },
+    { id: "action-theme", group: "Ações", label: theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro", keywords: "tema cores", icon: theme === "dark" ? Sun : Moon, run: () => setTheme((value) => value === "dark" ? "light" : "dark") },
+    ...navigation.map((item) => ({ id: `page-${item.id}`, group: "Ir para", label: item.label, keywords: item.group, icon: item.icon, run: () => navigate(item.id as PageRoute) })),
+    ...projects.map((project) => ({ id: `project-${project.id}`, group: "Projetos", label: project.name, hint: `${tasks.filter((task) => task.projectId === project.id).length} tarefa(s)`, keywords: project.directories.map((directory) => `${directory.name} ${directory.path}`).join(" "), icon: FolderGit2, run: () => showProjectTasks(project.id) })),
+    ...[...tasks].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((task) => ({ id: `task-${task.id}`, group: "Tarefas", label: task.title, hint: `${projectName(task.projectId)} · ${statuses[task.status]}`, keywords: task.id, icon: ListTodo, run: () => openTask(task.id) })),
+  ];
+  // Where the operator is, from the workspace down to the current screen; every level but the last is a link.
+  const tasksCrumb: Crumb = { label: "Tarefas", href: "#/tasks" };
+  const projectCrumb = (projectId: string): Crumb => ({ label: projectName(projectId), href: "#/tasks", onClick: () => setProjectFilter(projectId) });
+  const taskCrumbs = (task: Task | undefined, title: string | undefined, current: boolean): Crumb[] => task
+    ? [tasksCrumb, projectCrumb(task.projectId), current ? { label: task.title } : { label: task.title, href: `#/tasks/${encodeURIComponent(task.id)}` }]
+    : [tasksCrumb, { label: title ?? "Tarefa" }];
+  const filesTask = filesRoute ? tasks.find((task) => task.id === filesRoute.taskId) : undefined;
+  const crumbs: Crumb[] = filesRoute ? [...taskCrumbs(filesTask, undefined, false), { label: "Arquivos" }]
+    : executionRoute ? [...(executionDetail ? taskCrumbs(tasks.find((task) => task.id === executionDetail.task.id) ?? executionDetail.task, undefined, false) : [{ label: "Execuções", href: "#/executions" }]), { label: "Execução" }]
+    : taskRoute === "new" ? [tasksCrumb, { label: "Nova tarefa" }]
+    : taskRoute ? taskCrumbs(selectedTask, undefined, true)
+    : active === "not-found" ? [{ label: "Página não encontrada" }]
+    : active === "overview" ? [{ label: "Visão geral" }]
+    : [{ label: navigation.find((item) => item.id === active)?.label ?? "" }];
   return (
     <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>
@@ -473,7 +524,9 @@ export function App({ client }: { client: ControlRoomClient }) {
           <span>Nova tarefa</span>
         </a>
         <nav aria-label="Navegação principal">
-          {navigation.map((item) => (
+          {navigationGroups.map((group) => <div key={group} className="sidebar-group" role="group" aria-label={group}>
+          <span className="sidebar-section" aria-hidden="true">{group}</span>
+          {navigation.filter((item) => item.group === group).map((item) => (
             <a
               key={item.id}
               href={`#/${item.id}`}
@@ -489,21 +542,38 @@ export function App({ client }: { client: ControlRoomClient }) {
               )}
             </a>
           ))}
+          </div>)}
         </nav>
         {projectsWithTasks.length > 0 && (
           <nav className="sidebar-projects" aria-label="Projetos e tarefas">
             <span className="sidebar-section">Projetos</span>
-            {projectsWithTasks.map(({ project, cards }) => (
-              <div key={project.id} className="sidebar-project">
-                <span className="sidebar-project-name" title={project.name}><FolderGit2 size={15} aria-hidden="true" /> <span>{project.name}</span></span>
-                {cards.filter((card) => card.place !== "archive").slice(0, 6).map(({ task, place, fact }) => (
-                  <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id ? "page" : undefined} title={`${task.title} · ${fact}`}>
-                    <span className={`lane-dot lane-${place}`} aria-hidden="true" />
-                    <span>{task.title}</span>
-                  </a>
-                ))}
-              </div>
-            ))}
+            {projectsWithTasks.map(({ project, cards }) => {
+              const open = !collapsedProjects.includes(project.id);
+              const visible = cards.filter((card) => card.place !== "archive");
+              const listId = `sidebar-project-${project.id}`;
+              return (
+                <div key={project.id} className="sidebar-project">
+                  <div className="sidebar-project-row">
+                    <button type="button" className="sidebar-project-toggle" aria-expanded={open} aria-controls={listId} aria-label={`${open ? "Recolher" : "Expandir"} ${project.name}`} onClick={() => toggleProject(project.id)}>
+                      {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                    </button>
+                    <a className="sidebar-project-name" href="#/tasks" title={`Ver tarefas de ${project.name}`} aria-current={active === "tasks" && !taskRoute && projectFilter === project.id ? "page" : undefined} onClick={() => setProjectFilter(project.id)}>
+                      <FolderGit2 size={15} aria-hidden="true" /> <span>{project.name}</span>
+                    </a>
+                  </div>
+                  {open && <div id={listId} className="sidebar-project-tasks">
+                    {visible.slice(0, sidebarTaskLimit).map(({ task, place, fact }) => (
+                      <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id || filesRoute?.taskId === task.id || executionDetail?.task.id === task.id && executionRoute ? "page" : undefined} title={`${task.title} · ${fact}`}>
+                        <span className={`lane-dot lane-${place}`} aria-hidden="true" />
+                        <span>{task.title}</span>
+                      </a>
+                    ))}
+                    {visible.length > sidebarTaskLimit && <a className="sidebar-more" href="#/tasks" onClick={() => setProjectFilter(project.id)}><span>Ver todas ({visible.length})</span></a>}
+                    {visible.length === 0 && <span className="sidebar-empty">Nenhuma tarefa ativa</span>}
+                  </div>}
+                </div>
+              );
+            })}
           </nav>
         )}
         <div className="sidebar-actions">
@@ -528,15 +598,30 @@ export function App({ client }: { client: ControlRoomClient }) {
       </aside>
       <div className="content">
         <header className="topbar">
-          <div>
-            Workspace <ChevronRight size={14} />
-            <strong>{active === "not-found" ? "Página não encontrada" : navigation.find((item) => item.id === active)?.label ?? "Resultado da execução"}</strong>
-          </div>
+          <nav aria-label="Você está em" className="breadcrumbs">
+            <ol>
+              <li><a href="#/overview">Workspace</a></li>
+              {crumbs.map((crumb, index) => (
+                <li key={`${index}-${crumb.label}`}>
+                  <ChevronRight size={14} aria-hidden="true" />
+                  {crumb.href && index < crumbs.length - 1
+                    ? <a href={crumb.href} onClick={crumb.onClick}>{crumb.label}</a>
+                    : <strong aria-current="location">{crumb.label}</strong>}
+                </li>
+              ))}
+            </ol>
+          </nav>
+          <button type="button" className="command-trigger" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Control+K" title="Buscar tarefas, projetos e telas (Ctrl+K)">
+            <Search size={15} aria-hidden="true" />
+            <span>Buscar ou ir para…</span>
+            <kbd>Ctrl K</kbd>
+          </button>
         </header>
+        {paletteOpen && <CommandPalette items={commandItems} onClose={() => setPaletteOpen(false)} />}
         {filesRoute ? <FileExplorerPage key={filesRoute.taskId} client={client} initial={filesRoute}
           task={tasks.find((task) => task.id === filesRoute.taskId)}
           project={projects.find((project) => project.id === tasks.find((task) => task.id === filesRoute.taskId)?.projectId)}
-          onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
+          onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={() => executionDetail ? openTask(executionDetail.task.id) : backToDashboard()} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
            {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
            {taskRoute ? (
              <section className="task-workspace" aria-labelledby="task-workspace-title">

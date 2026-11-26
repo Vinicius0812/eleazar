@@ -145,6 +145,10 @@ $env:ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES = "120"   # teto do turno; 0 desliga
 $env:ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES = "15"    # inatividade; 0 desliga
 ```
 
+### Navegação
+
+O menu lateral separa **Trabalho** (Visão geral, Fila de tarefas, Aprovações), **Histórico** (Execuções, Logs) e **Configuração** (Projetos, Provedores). Abaixo dele, cada projeto lista as tarefas ativas: clicar no nome do projeto abre o quadro já filtrado e a seta recolhe o projeto (a escolha fica salva no navegador). O topo mostra onde você está, como Tarefas › Projeto › Tarefa › Arquivos, e cada nível é um link. **Ctrl+K** (ou **Buscar ou ir para…**) abre a paleta para ir a qualquer tarefa, projeto ou tela, cadastrar um projeto ou trocar o tema.
+
 ### Explorar arquivos e diff
 
 O botão **Explorar arquivos** (na tarefa e no resultado da execução) abre a pasta em que o agente trabalha, seja a worktree da tarefa ou a pasta do projeto no modo direto, com a lista de alterações, a árvore completa e o diff de cada arquivo. Funciona com qualquer servidor Git (GitHub, Gogs ou nenhum) porque só lê o repositório local.

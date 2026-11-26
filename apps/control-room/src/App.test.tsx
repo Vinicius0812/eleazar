@@ -623,6 +623,55 @@ function providerStatus(provider: string, fields: Partial<ProviderStatus> = {}):
     preferences: { enabled: true, automatic: true, executablePath: null, defaultModel: null }, verification: null, fetchedAt: "2026-01-01T00:00:00.000Z",
     usage: { source: "eleazar_executions", usedPercent: null, resetAt: null, windowDurationMins: null, totalTokens: 0, lifetimeTokens: null, todayTokens: null }, ...fields };
 }
+describe("Navigation", () => {
+  it("opens the command palette with Ctrl+K and jumps to a task by name", async () => {
+    window.location.hash = "#/overview";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    await screen.findByRole("heading", { name: "Sala de controle" });
+    await user.keyboard("{Control>}k{/Control}");
+    const search = await screen.findByRole("combobox", { name: "Buscar tarefas, projetos e telas" });
+    await user.type(search, "resul");
+    expect(screen.getByRole("option", { name: /Resultado/ })).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks/task-1"));
+    expect(screen.queryByRole("combobox", { name: "Buscar tarefas, projetos e telas" })).not.toBeInTheDocument();
+  });
+
+  it("shows where the operator is and links each level of the breadcrumb", async () => {
+    window.location.hash = "#/tasks/task-1/files";
+    render(<App client={client()} />);
+    const trail = within(await screen.findByRole("navigation", { name: "Você está em" }));
+    await waitFor(() => expect(trail.getByRole("link", { name: "Resultado" })).toHaveAttribute("href", "#/tasks/task-1"));
+    expect(trail.getByRole("link", { name: "Tarefas" })).toHaveAttribute("href", "#/tasks");
+    expect(trail.getByText("Arquivos")).toHaveAttribute("aria-current", "location");
+    await userEvent.click(trail.getByRole("link", { name: "Projeto" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks"));
+    expect(await screen.findByRole("combobox", { name: "Filtrar por projeto" })).toHaveValue("project-1");
+  });
+
+  it("opens the project board from the sidebar and remembers a collapsed project", async () => {
+    window.location.hash = "#/overview";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    const sidebar = within(await screen.findByRole("navigation", { name: "Projetos e tarefas" }));
+    await user.click(sidebar.getByRole("link", { name: "Projeto" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks"));
+    expect(sidebar.getByRole("link", { name: "Projeto" })).toHaveAttribute("aria-current", "page");
+    await user.click(sidebar.getByRole("button", { name: "Recolher Projeto" }));
+    expect(sidebar.getByRole("button", { name: "Expandir Projeto" })).toHaveAttribute("aria-expanded", "false");
+    expect(JSON.parse(window.localStorage.getItem("eleazar.collapsedProjects") ?? "[]")).toEqual(["project-1"]);
+  });
+
+  it("returns from an execution to its task", async () => {
+    window.location.hash = "#/executions/run-1";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    await user.click(await screen.findByRole("button", { name: /Voltar à tarefa/ }));
+    expect(window.location.hash).toBe("#/tasks/task-1");
+  });
+});
+
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], isolation: "worktree", createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
