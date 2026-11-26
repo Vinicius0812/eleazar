@@ -76,7 +76,7 @@ No diálogo **Executar**, a lista vem dos provedores registrados e ativos, e tod
 
 O Claude usa a ponte ACP `@agentclientprotocol/claude-agent-acp` `0.107.0` e o CLI nativo autenticado, preferindo `~/.local/bin/claude` (`claude.exe` no Windows) antes do `PATH`. A ponte exige Node.js 22 ou superior. O cliente força o modo manual `default`, desativa a herança de configurações de ferramentas do usuário e do projeto e recusa bypass. Expõe somente `Read`, `Glob`, `Grep`, `Edit` e `Write`; não expõe `Bash`, terminal, ferramentas web ou MCP. As regras de arquivos do SDK bloqueiam leituras e escritas fora dos diretórios de trabalho em todos os modos, independentemente do sandbox de shell. Edição e escrita pedem confirmação, e caminhos fora do escopo autorizado são recusados antes de chegar à interface. O sandbox de shell não é exigido neste modo de arquivos; esses limites não equivalem ao sandbox `workspace-write` do Codex.
 
-`GET /api/control-room/providers/:provider/config?directoryId=...` (qualquer provedor ACP registrado) consulta o catálogo de modelos e configurações sem enviar prompt, com cache breve por diretório. A resposta contém `runtime.path/version/source`, `protocolVersion`, `settings`, `models`, `defaultModel` e `capabilities.loadSession` booleano. O cliente usa `getProviderConfig(provider, directoryId)`; `getCodexConfig` e a rota `/providers/codex/config` continuam compatíveis. `POST /tasks/:id/execute` aceita `model` e `sessionId` opcionais para provedores ACP; o modelo deve estar anunciado e a sessão anterior deve pertencer ao mesmo provedor, projeto e escopo. `GET /executions/:id/events` transmite SSE ordenado com replay por `Last-Event-ID`. `POST /executions/:id/permissions/:permissionId` recebe `{ "optionId": "..." }`; `POST /executions/:id/cancel` recebe `{}`. Permissões ACP pausam a execução no mesmo lease e são distintas da aprovação inicial de escopo. Reiniciar o host marca execuções em andamento como falhas, invalida permissões pendentes e exige retry manual.
+`GET /api/control-room/providers/:provider/config?directoryId=...` (qualquer provedor ACP registrado) consulta o catálogo de modelos e configurações sem enviar prompt, com cache breve por diretório. A resposta contém `runtime.path/version/source`, `protocolVersion`, `settings`, `models`, `defaultModel` e `capabilities.loadSession` booleano. O cliente usa `getProviderConfig(provider, directoryId)`; `getCodexConfig` e a rota `/providers/codex/config` continuam compatíveis. `POST /tasks/:id/execute` aceita `model` e `sessionId` opcionais para provedores ACP; o modelo deve estar anunciado e a sessão anterior deve pertencer ao mesmo provedor, projeto e escopo. `GET /executions/:id/events` transmite SSE ordenado com replay por `Last-Event-ID`. `POST /executions/:id/permissions/:permissionId` recebe `{ "optionId": "..." }`; `POST /executions/:id/cancel` recebe `{}`. Permissões ACP pausam a execução no mesmo lease e são distintas da aprovação inicial de escopo. Reiniciar o host marca execuções em andamento como falhas e invalida permissões pendentes; a tarefa pode ser retomada com `POST /tasks/:id/resume`.
 
 O adaptador força `workspace-write`, `on-request` e rede de ferramentas desabilitada, sem expor modo full access. `allow_always` e pedidos com indicação explícita de ampliação de raiz, rede ou sandbox são recusados; `allow_once` exige resposta do operador. O sandbox do Codex é o limite efetivo para ações de ferramenta: metadados ACP podem não descrever todos os efeitos de um comando, então o bloqueio de push, merge, deploy e publicação no texto da tarefa e na decisão de despacho não substitui inspeção de cada comando executado.
 
@@ -124,6 +124,30 @@ Com pull request aberto, CI com falha, conflito de merge e alterações solicita
 Tarefas canceladas ficam no **Arquivo**, recolhido abaixo do quadro. Cada cartão mostra o agente, o título, a branch da tarefa (ou a pasta, no modo direto), o fato que definiu a raia e há quanto tempo. A barra lateral lista os projetos com as tarefas ativas de cada um, marcadas com a cor da raia.
 
 Os ícones em `apps/control-room/src/assets/icons` (marca do Eleazar e glifos dos agentes) são SVGs próprios; os glifos são genéricos e não reproduzem logotipos dos provedores.
+
+### Navegação da tarefa e "Precisa de você"
+
+- Cada tarefa tem três abas, cada uma com rota própria: **Conversa** (`#/tasks/:id`), **Arquivos** (`#/tasks/:id/files`) e **Publicação** (`#/tasks/:id/publish`, commit, push e pull request).
+- `#/inbox` reúne tudo o que espera o operador em todos os projetos (permissão do agente, publicação, escopo, falha, pull request), a partir dos mesmos fatos da raia **Precisa de você**; o menu mostra a contagem e a visão geral, os primeiros itens.
+- Atalhos (`?` lista todos): `N` nova tarefa, `/` ou `Ctrl K` busca, `G` + `I/O/T/E/P/V` para as telas, `1`/`2`/`3` para as abas da tarefa. Teclas simples não agem dentro de campos de texto.
+- Notificações do navegador são opcionais (botão na barra lateral ou na paleta). Com a aba em segundo plano, avisam quando algo novo passa a precisar do operador ou quando um turno termina.
+
+### Comparação entre agentes
+
+- `POST /comparisons` recebe os campos de `POST /tasks` mais `providers` (dois ou três ids) e responde `202` com `{ comparisonId, tasks, errors }`. Cria uma tarefa por agente com o mesmo `comparisonId`, cada uma na própria branch e worktree, e inicia uma depois da outra. Exige repositório Git com worktree por tarefa e um único diretório; uma tentativa que não começa fica na fila e aparece em `errors`.
+- `GET /comparisons/:id` lista as tentativas; `POST /comparisons/:id/choose` recebe `{ "taskId": "..." }` e cancela as outras tentativas já encerradas, mantendo as branches. Por isso uma tarefa `completed` pode passar a `cancelled`.
+- A tela `#/comparisons/:id` mostra o resumo de cada agente, a tabela de arquivos alterados por tentativa e, para o arquivo escolhido, os diffs lado a lado.
+
+### Cota e Automático
+
+- `POST /providers/:id/settings` também aceita `dailyTokenBudget` (inteiro positivo ou `null`), salvo em `provider_settings.daily_token_budget`.
+- `usage.quota` em `GET /providers/status` traz `{ usedPercent, source, dailyTokenBudget, todayTokens, state }`: o limite da conta quando o provedor o informa (Codex), ou os tokens das execuções encerradas hoje contra o orçamento, valendo o mais apertado.
+- O roteador lê a cota sem abrir processos: a partir de 80% o provedor perde 40 pontos e, com 100%, o Automático deixa de escolhê-lo. A escolha explícita de um provedor continua valendo.
+
+### Retomada e modelos
+
+- `POST /tasks/:id/resume` recebe `{}` e continua uma tarefa `failed` (inclusive a interrompida por reinício do host) com o mesmo provedor. Com `capabilities.loadSession`, a sessão ACP anterior é recarregada e a mensagem é curta; sem ela, a mensagem leva o pedido original e o que foi gravado do turno perdido: a mensagem que o iniciou, o plano, as últimas ferramentas e as últimas falas do agente.
+- `GET /templates`, `POST /templates` (`{ name, prompt, title?, kind?, priority?, projectId? }`) e `POST /templates/:id/delete` mantêm os modelos de tarefa em `task_templates`. No editor, "Começar de um modelo" preenche os campos e "Salvar como modelo" guarda o pedido atual.
 
 ## Limite de rede
 
