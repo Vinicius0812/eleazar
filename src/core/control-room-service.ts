@@ -139,11 +139,44 @@ export class ControlRoomService {
       status: directoryIds.length > 1 ? "waiting_approval" : "queued",
       worktreePath: null,
       dispatchLease: null,
+      ...(input.comparisonId ? { comparisonId: input.comparisonId } : {}),
       createdAt,
       updatedAt: createdAt
     };
     this.store.createTask(task);
     return task;
+  }
+
+  /**
+   * One task per attempt, each on its own branch and worktree, so two agents can work on the
+   * same request at the same time without touching each other's files.
+   */
+  createComparison(input: Omit<NewTask, "comparisonId">, labels: readonly string[]): ControlRoomTask[] {
+    if (labels.length < 2) throw new Error("Escolha ao menos dois agentes para comparar.");
+    if (new Set(labels).size !== labels.length) throw new Error("Escolha agentes diferentes para comparar.");
+    const project = this.requireProject(input.projectId);
+    const directoryIds = input.directoryIds ?? (input.targetDirectoryId ? [input.targetDirectoryId] : project.directories.slice(0, 1).map((item) => item.id));
+    if (directoryIds.length > 1) throw new Error("A comparacao trabalha em um diretorio por vez.");
+    const directory = project.directories.find((item) => item.id === directoryIds[0]);
+    if (!this.useWorktrees || !this.worktrees || project.isolation === "direct" || !directory?.isGitRepository) {
+      throw new Error("A comparacao exige um repositorio Git com worktree por tarefa, para que cada agente trabalhe na propria branch.");
+    }
+    const comparisonId = randomUUID();
+    return labels.map((label) => this.createTask({ ...input, directoryIds, title: `${input.title.trim()} · ${label}`, comparisonId }));
+  }
+
+  /** Keeps one attempt of a comparison and sets the finished others aside. Their branches stay. */
+  chooseComparisonAttempt(taskId: string): ControlRoomTask[] {
+    const chosen = this.requireTask(taskId);
+    if (!chosen.comparisonId) throw new Error("Esta tarefa nao faz parte de uma comparacao.");
+    const others = this.store.listTasks(chosen.projectId).filter((task) => task.comparisonId === chosen.comparisonId && task.id !== chosen.id);
+    if (others.some((task) => task.dispatchLease)) throw conflict("Aguarde o outro agente terminar ou cancele-o antes de escolher.");
+    return others.filter((task) => task.status !== "cancelled")
+      .map((task) => this.transitionTask(task.id, "cancelled", "local-operator", `outra versao escolhida na comparacao: ${chosen.title}`));
+  }
+
+  listComparison(comparisonId: string): ControlRoomTask[] {
+    return this.store.listTasks().filter((task) => task.comparisonId === comparisonId).reverse();
   }
 
   transitionTask(taskId: string, toStatus: TaskStatus, actor = "control-room", reason?: string): ControlRoomTask {

@@ -19,6 +19,7 @@ import {
   FolderGit2,
   FolderTree,
   GitBranch,
+  GitCompare,
   Inbox,
   Kanban,
   List,
@@ -47,6 +48,7 @@ import { PendingPermissions } from "./components/PendingPermissions.js";
 import { TaskComposer } from "./components/TaskComposer.js";
 import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import { TaskTabs, taskPublishRoute } from "./components/TaskTabs.js";
+import { ComparisonPage, comparisonRoute } from "./components/ComparisonPage.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -226,6 +228,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const publishRoute = taskPublishRoute(hash);
   const taskRoute = routeId(hash, "tasks") ?? publishRoute;
   const filesRoute = fileExplorerRoute(hash);
+  const comparisonId = comparisonRoute(hash);
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
@@ -327,12 +330,12 @@ export function App({ client }: { client: ControlRoomClient }) {
     window.localStorage.setItem("eleazar.theme", theme);
   }, [theme]);
   useEffect(() => {
-    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute") return;
+    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute" && taskRoute !== "new") return;
     let alive = true;
     setProvidersLoading(true); setProvidersError("");
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
-  }, [active, client, dialog?.kind]);
+  }, [active, client, dialog?.kind, taskRoute === "new"]);
   const launch = useExecutionLaunch(client, data?.runs ?? [], data?.tasks ?? [], dialog?.kind === "execute" ? dialog.task : null, providers);
   const refreshSession = useCallback(() => {
     void client.getSnapshot().then(setData).catch(() => undefined);
@@ -468,6 +471,13 @@ export function App({ client }: { client: ControlRoomClient }) {
       openTask(task.id);
     });
   }
+  function submitComparison(input: CreateTaskInput, rivals: string[]) {
+    void mutate(() => client.startComparison(input, rivals), "Os agentes estão trabalhando, cada um na própria branch. Acompanhe a comparação aqui.", (started) => {
+      setProjectFilter(input.projectId);
+      window.location.hash = `/comparisons/${encodeURIComponent(started.comparisonId)}`;
+      if (started.errors[0]) setError(`Uma das tentativas não começou e ficou na fila: ${started.errors[0].error}`);
+    });
+  }
   function submitRelatedTask(event: FormEvent<HTMLFormElement>, task: Task) {
     event.preventDefault();
     const targetDirectoryId = task.targetDirectoryId ?? task.directoryIds[0];
@@ -540,7 +550,8 @@ export function App({ client }: { client: ControlRoomClient }) {
     ? [tasksCrumb, projectCrumb(task.projectId), current ? { label: task.title } : { label: task.title, href: `#/tasks/${encodeURIComponent(task.id)}` }]
     : [tasksCrumb, { label: title ?? "Tarefa" }];
   const filesTask = filesRoute ? tasks.find((task) => task.id === filesRoute.taskId) : undefined;
-  const crumbs: Crumb[] = filesRoute ? [...taskCrumbs(filesTask, undefined, false), { label: "Arquivos" }]
+  const crumbs: Crumb[] = comparisonId ? [tasksCrumb, { label: "Comparação de agentes" }]
+    : filesRoute ? [...taskCrumbs(filesTask, undefined, false), { label: "Arquivos" }]
     : publishRoute ? [...taskCrumbs(selectedTask, undefined, false), { label: "Publicação" }]
     : executionRoute ? [...(executionDetail ? taskCrumbs(tasks.find((task) => task.id === executionDetail.task.id) ?? executionDetail.task, undefined, false) : [{ label: "Execuções", href: "#/executions" }]), { label: "Execução" }]
     : taskRoute === "new" ? [tasksCrumb, { label: "Nova tarefa" }]
@@ -704,7 +715,20 @@ export function App({ client }: { client: ControlRoomClient }) {
           tabs={<TaskTabs taskId={filesRoute.taskId} active="files" pendingPublications={pendingPublications(filesRoute.taskId)} />}
           onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={() => executionDetail ? openTask(executionDetail.task.id) : backToDashboard()} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
            {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
-           {taskRoute ? (
+           {comparisonId ? (
+             <section className="task-workspace comparison-workspace" aria-labelledby="comparison-title">
+               <header className="task-workspace-heading">
+                 <span className="eyebrow">Comparação de agentes</span>
+                 <h1 id="comparison-title" tabIndex={-1}>{tasks.find((task) => task.comparisonId === comparisonId)?.title.replace(/ · [^·]+$/, "") ?? "Comparação"}</h1>
+               </header>
+               <div className="feedback" role="status">{notice}</div>
+               {error && <div className="error" role="alert">{error}</div>}
+               {formError && <div className="error" role="alert">{formError}</div>}
+               {!data ? <div className="loading-area page"><LoadingOverlay label="Carregando comparação…" /></div>
+                 : <ComparisonPage client={client} comparisonId={comparisonId} tasks={tasks} runs={data.runs} busy={busy} statusLabel={(task) => statuses[task.status]}
+                     onChoose={(taskId) => void mutate(() => client.chooseComparisonAttempt(comparisonId, taskId), "Versão escolhida. As outras tentativas foram deixadas de lado, com as branches preservadas.", () => openTask(taskId))} />}
+             </section>
+           ) : taskRoute ? (
              <section className="task-workspace" aria-labelledby="task-workspace-title">
                <header className="task-workspace-heading">
                  <span className="eyebrow">{selectedTask ? projectName(selectedTask.projectId) : "Tarefas"}</span>
@@ -716,7 +740,9 @@ export function App({ client }: { client: ControlRoomClient }) {
                {!data ? (
                  !error && <div className="loading-area page"><LoadingOverlay label="Carregando tarefas…" /></div>
                ) : taskRoute === "new" ? (
-                 <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })} />
+                 <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })}
+                   agents={providers.filter((provider) => provider.preferences.enabled && provider.available && provider.authenticated !== false && provider.roles.implementer).map((provider) => ({ id: provider.provider, label: provider.label }))}
+                   onCompare={submitComparison} />
                ) : selectedTask ? (
                  <TaskWorkspace
                    view={publishRoute ? "publish" : "conversation"}
@@ -740,6 +766,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                      onRemoveWorktree={() => void mutate(() => client.removeTaskWorktrees(selectedTask.id), "Worktree removida; a branch foi mantida.")} /> : undefined}
                    actions={<>
                      <a className="secondary" href={fileExplorerHash(selectedTask.id)}><FolderTree size={16} aria-hidden="true" /> Explorar arquivos</a>
+                     {selectedTask.comparisonId && <a className="secondary" href={`#/comparisons/${encodeURIComponent(selectedTask.comparisonId)}`}><GitCompare size={16} aria-hidden="true" /> Comparar agentes</a>}
                      {selectedRun && <button className="secondary" onClick={() => openExecution(selectedRun.id)}>{selectedTask.status === "queued" ? "Ver última tentativa" : "Ver detalhes da execução"}</button>}
                      {selectedTask.status === "queued" && <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: selectedTask })}><Play size={16} aria-hidden="true" /> Executar tarefa</button>}
                      {selectedApproval && selectedTask.status === "waiting_approval" && <button className="primary" disabled={busy} onClick={() => open({ kind: "approval", approval: selectedApproval })}><ShieldCheck size={16} aria-hidden="true" /> Revisar aprovação</button>}

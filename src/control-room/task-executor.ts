@@ -2,7 +2,14 @@ import type { AgentRunRequest, AgentRunResult, ProviderConfig, ProviderName, Rou
 import type { Orchestrator, OrchestratorRun } from "../core/orchestrator.js";
 import type { ProviderRegistry } from "../core/provider-registry.js";
 import { ControlRoomService } from "../core/control-room-service.js";
-import type { ControlRoomTask, DelegationCandidate, LocalProjectDirectory } from "../core/control-room.js";
+import type { ControlRoomTask, DelegationCandidate, LocalProjectDirectory, NewTask } from "../core/control-room.js";
+
+export interface ComparisonStart {
+  comparisonId: string;
+  tasks: ControlRoomTask[];
+  /** One entry per attempt that could not start; that task stays in the queue. */
+  errors: Array<{ taskId: string; provider: ProviderName; error: string }>;
+}
 import { GitChangeCollector } from "./git-change-collector.js";
 
 /** Minimal boundary for the live provider runner; tests can use a deterministic substitute. */
@@ -58,6 +65,22 @@ export class ControlRoomTaskExecutor {
     this.service.decideAgentPermission(permissionId, optionId);
     this.pendingPermissions.delete(permissionId);
     pending.resolve(optionId);
+  }
+
+  /**
+   * Runs the same request with two (or more) agents, each in its own task, branch and worktree.
+   * The attempts start one after the other because each one first creates its worktree.
+   */
+  async startComparison(input: Omit<NewTask, "comparisonId">, providers: readonly ProviderName[]): Promise<ComparisonStart> {
+    for (const provider of providers) if (!this.registry.get(provider)) throw new Error(`Provedor nao registrado neste host: ${provider}`);
+    const created = this.service.createComparison(input, providers.map((provider) => this.registry.label(provider)));
+    const errors: ComparisonStart["errors"] = [];
+    for (const [index, task] of created.entries()) {
+      const provider = providers[index]!;
+      try { await this.start(task.id, provider); }
+      catch (error) { errors.push({ taskId: task.id, provider, error: error instanceof Error ? error.message : String(error) }); }
+    }
+    return { comparisonId: created[0]!.comparisonId!, tasks: created.map((task) => this.service.getTask(task.id) ?? task), errors };
   }
 
   /**

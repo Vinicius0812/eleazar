@@ -3025,3 +3025,32 @@ dialog.command-palette:not([open]) { display: none; }
 .shortcut-list dt { white-space: nowrap; }
 .shortcut-list dd { margin: 0; color: var(--text); font-size: 14px; }
 .shortcut-then { color: var(--text-muted); font-size: 12px; }
+
+/* Comparison of the same request done by different agents. */
+.comparison-workspace { width: min(100%, 1180px); }
+.comparison { display: grid; gap: 18px; }
+.comparison-attempts, .comparison-diffs { display: grid; gap: 14px; }
+.comparison-attempt { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.comparison-attempt.set-aside { opacity: .7; }
+.comparison-attempt header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.comparison-attempt header a { color: var(--text-strong); text-transform: capitalize; }
+.comparison-attempt header .status { margin-left: auto; }
+.comparison-attempt p { margin: 0; font-size: 14px; }
+.comparison-branch code, .comparison-note, .comparison-totals { color: var(--text-muted); font-size: 12px; }
+.comparison-summary { color: var(--text); line-height: 1.5; overflow-wrap: anywhere; }
+.comparison-files { padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.comparison-files-heading { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.comparison-files-heading h2 { display: inline-flex; gap: 8px; align-items: center; margin: 0; font-size: 16px; }
+.comparison-files-heading span { color: var(--text-muted); font-size: 12px; }
+.comparison-files-heading button { margin-left: auto; }
+.comparison-table { width: 100%; border-collapse: collapse; }
+.comparison-table th { text-align: left; text-transform: capitalize; }
+.comparison-table td, .comparison-table th { padding: 7px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.comparison-table tr.selected td { background: var(--accent-soft); }
+.comparison-table .task-title { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
+.comparison-table .muted { color: var(--text-muted); font-size: 12px; }
+.comparison-diff { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.comparison-diff h3 { margin: 0 0 8px; font-size: 14px; text-transform: capitalize; }
+.composer-compare .composer-target { margin-top: 8px; }
+.error-text { color: var(--danger); }
+@media (max-width: 760px) { .comparison-attempts, .comparison-diffs { grid-template-columns: 1fr !important; } }

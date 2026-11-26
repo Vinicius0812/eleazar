@@ -87,6 +87,43 @@ describe("Keyboard shortcuts", () => {
   });
 });
 
+describe("Agent comparison", () => {
+  it("starts two agents from the composer and shows both diffs side by side", async () => {
+    window.location.hash = "#/tasks/new";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    const attempt = (id: string, provider: string) => ({ task: { ...snapshot.tasks[0]!, id, title: `Corrigir · ${provider}`, comparisonId: "cmp", status: "completed" as const }, run: { ...snapshot.runs[0]!, id: `run-${id}`, taskId: id, provider, summary: `Feito pelo ${provider}` } });
+    const a = attempt("a", "codex"); const b = attempt("b", "claude");
+    const startComparison = vi.spyOn(controlled, "startComparison").mockImplementation(async () => {
+      vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [a.task, b.task], runs: [a.run, b.run] });
+      return { comparisonId: "cmp", tasks: [a.task, b.task], errors: [] };
+    });
+    vi.spyOn(controlled, "getTaskFile").mockImplementation(async (taskId, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 4, binary: false, content: "x", tooLarge: false, change: null,
+      diff: `@@ -1 +1 @@
+-velho
++versao-${taskId}
+`, diffTruncated: false }));
+    const choose = vi.spyOn(controlled, "chooseComparisonAttempt").mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.type(await screen.findByLabelText("Solicitação"), "Corrigir o login");
+    await user.click(screen.getByText("Tipo, prioridade e escopo"));
+    await user.click(await screen.findByLabelText(/Rodar com dois agentes/));
+    await user.selectOptions(screen.getByLabelText("Segundo agente"), "claude");
+    await user.click(screen.getByRole("button", { name: /Criar e comparar/ }));
+    expect(startComparison).toHaveBeenCalledWith(expect.objectContaining({ prompt: "Corrigir o login", directoryIds: ["directory-1"] }), ["codex", "claude"]);
+    await waitFor(() => expect(window.location.hash).toBe("#/comparisons/cmp"));
+    expect(await screen.findByText("Feito pelo claude")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "README.md" }));
+    const diffs = within(await screen.findByRole("group", { name: "Diffs de README.md" }));
+    expect(await diffs.findByText("versao-a")).toBeInTheDocument();
+    expect(diffs.getByText("versao-b")).toBeInTheDocument();
+    await user.click(within(screen.getByRole("article", { name: "Tentativa Corrigir · codex" })).getByRole("button", { name: /Ficar com esta versão/ }));
+    expect(choose).toHaveBeenCalledWith("cmp", "a");
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks/a"));
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -728,7 +765,7 @@ describe("Navigation", () => {
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], isolation: "worktree", createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }),
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, startComparison: async () => ({ comparisonId: "cmp", tasks: [], errors: [] }), chooseComparisonAttempt: async () => [], refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }),
     getTaskFileRoots: async () => [explorerRoot], listTaskFiles: async (_task, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "README.md", path: "README.md", type: "file", size: 6, change: "modified", changedBelow: 0 }], truncated: false }),
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),

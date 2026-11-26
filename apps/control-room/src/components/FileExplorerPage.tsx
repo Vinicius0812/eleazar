@@ -381,7 +381,7 @@ export function parseDiff(diff: string): DiffLine[] {
   return rows;
 }
 
-function DiffView({ diff, truncated, binary }: { diff: string; truncated: boolean; binary: boolean }) {
+export function DiffView({ diff, truncated, binary }: { diff: string; truncated: boolean; binary: boolean }) {
   const rows = useMemo(() => parseDiff(diff), [diff]);
   if (!rows.some((row) => row.kind !== "meta")) {
     return <p className="explorer-note">{binary || rows.some((row) => row.text.startsWith("Binary")) ? "Arquivo binário alterado; não há diff de texto." : rows.length ? rows.map((row) => row.text).join(" · ") : "Sem diferenças de conteúdo (por exemplo, só permissões ou fim de linha)."}</p>;

@@ -58,6 +58,8 @@ export interface ControlRoomTask {
   /** Branch dedicated to this task; null while it runs directly in a plain folder. */
   branch?: string | null;
   dispatchLease: string | null;
+  /** Shared by the tasks that run the same request with different agents, to compare their changes. */
+  comparisonId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -316,6 +318,8 @@ export interface NewTask {
   targetDirectoryId?: string;
   /** Additional directories affected by the task, in execution-scope order. */
   directoryIds?: readonly string[];
+  /** Groups this task with the other attempts of a comparison. */
+  comparisonId?: string;
 }
 
 export interface ControlRoomStore {
@@ -379,8 +383,9 @@ const transitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   planning: ["queued", "running", "waiting_approval", "failed", "cancelled"],
   running: ["waiting_approval", "completed", "failed", "cancelled"],
   waiting_approval: ["queued", "cancelled"],
-  // A finished turn can be followed by another one in the same session.
-  completed: ["planning"],
+  // A finished turn can be followed by another one in the same session, or set aside
+  // when the operator keeps another attempt of the same comparison.
+  completed: ["planning", "cancelled"],
   failed: ["queued", "planning", "cancelled"],
   cancelled: []
 };

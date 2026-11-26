@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
@@ -91,6 +91,12 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
         await reader.cancel().catch(() => undefined);
       }
       return terminal;
+    },
+    startComparison(input, providers) {
+      return request<ComparisonStart>("/comparisons", { method: "POST", body: JSON.stringify({ projectId: input.projectId, targetDirectoryId: input.targetDirectoryId, title: input.title, prompt: input.prompt, priority: input.priority, ...(input.kind ? { kind: input.kind } : {}), providers }) });
+    },
+    chooseComparisonAttempt(comparisonId, taskId) {
+      return request<Task[]>(`/comparisons/${encodeURIComponent(comparisonId)}/choose`, { method: "POST", body: JSON.stringify({ taskId }) });
     },
     sendTaskMessage(taskId: string, prompt: string) {
       return request<Task>(`/tasks/${encodeURIComponent(taskId)}/messages`, { method: "POST", body: JSON.stringify({ prompt }) });

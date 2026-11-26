@@ -3,8 +3,12 @@ import { ArrowUp, FolderGit2 } from "lucide-react";
 
 import type { CreateTaskInput, Priority, Project } from "../services/contracts.js";
 
-export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject }: {
+export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject, agents = [], onCompare }: {
   projects: Project[];
+  /** Agents that can take part in a comparison: enabled and not signed out. */
+  agents?: Array<{ id: string; label: string }>;
+  /** Runs the request with several agents at once, each in its own worktree. */
+  onCompare?(input: CreateTaskInput, providers: string[]): void;
   initialProjectId: string;
   busy: boolean;
   error: string;
@@ -19,13 +23,19 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
   const project = projects.find((item) => item.id === projectId) ?? initialProject;
   const target = project?.directories.find((directory) => directory.id === targetDirectoryId) ?? project?.directories[0];
   const additional = project?.directories.filter((directory) => directory.id !== target?.id) ?? [];
+  const [compare, setCompare] = useState(false);
+  const [picked, setRivals] = useState<[string, string]>(["", ""]);
+  // The agents arrive after the first render; until the operator picks, the first two are used.
+  const rivals: [string, string] = [picked[0] || agents[0]?.id || "", picked[1] || agents[1]?.id || ""];
+  const comparable = Boolean(onCompare) && agents.length >= 2 && project?.isolation !== "direct" && Boolean(target?.isGitRepository);
+  const comparing = compare && comparable;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!project || !target || busy) return;
     const fields = new FormData(event.currentTarget);
     const kind = fields.get("kind");
-    onSubmit({
+    const input: CreateTaskInput = {
       projectId: project.id,
       targetDirectoryId: target.id,
       directoryIds: [target.id, ...directoryIds.filter((id) => id !== target.id && project.directories.some((directory) => directory.id === id))],
@@ -33,7 +43,9 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
       prompt: String(fields.get("prompt")),
       priority: String(fields.get("priority")) as Priority,
       ...(kind === "review" || kind === "planning" ? { kind } : {}),
-    });
+    };
+    if (comparing && onCompare) onCompare({ ...input, directoryIds: [target.id] }, rivals);
+    else onSubmit(input);
   }
 
   if (!project) return (
@@ -104,6 +116,27 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
             <small>Mais de um diretório exige aprovação antes do despacho.</small>
           </fieldset>
         )}
+        {comparable && (
+          <fieldset className="task-scope composer-compare">
+            <legend>Comparar agentes</legend>
+            <label className="scope-option">
+              <input type="checkbox" checked={compare} onChange={(event) => setCompare(event.target.checked)} />
+              Rodar com dois agentes ao mesmo tempo e comparar as alterações
+            </label>
+            {compare && <div className="composer-target">
+              {([0, 1] as const).map((index) => (
+                <label key={index}>
+                  {index === 0 ? "Primeiro agente" : "Segundo agente"}
+                  <select value={rivals[index]} onChange={(event) => { const value = event.target.value; setRivals(index === 0 ? [value, rivals[1]] : [rivals[0], value]); }}>
+                    {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>}
+            <small>Cada agente trabalha na própria branch e worktree. Os dois começam assim que a tarefa é criada, e você escolhe qual versão manter.</small>
+            {compare && rivals[0] === rivals[1] && <small className="error-text">Escolha dois agentes diferentes.</small>}
+          </fieldset>
+        )}
         <label>
           Prioridade
           <select name="priority" defaultValue="normal">
@@ -116,8 +149,8 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
       </details>
       {error && <div className="error" role="alert">{error}</div>}
       <div className="composer-footer">
-        <small>Você confirma a execução depois de criar a tarefa. <kbd>Ctrl</kbd> + <kbd>Enter</kbd> cria.</small>
-        <button className="primary" disabled={busy || !target}><ArrowUp size={16} /> {busy ? "Criando…" : "Criar tarefa"}</button>
+        <small>{comparing ? "Os dois agentes começam a trabalhar assim que você criar." : "Você confirma a execução depois de criar a tarefa."} <kbd>Ctrl</kbd> + <kbd>Enter</kbd> cria.</small>
+        <button className="primary" disabled={busy || !target || (comparing && rivals[0] === rivals[1])}><ArrowUp size={16} /> {busy ? "Criando…" : comparing ? "Criar e comparar" : "Criar tarefa"}</button>
       </div>
     </form>
   );

@@ -160,6 +160,29 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (provider !== undefined && !isProviderName(provider)) throw new Error("Provedor invalido.");
     return json(response, 202, await executor.continueTask(messageMatch[1], stringField(body, "prompt"), provider, optionalString(body, "model")));
   }
+  if (method === "POST" && url.pathname === "/api/control-room/comparisons") {
+    if (!executor) throw new Error("Executor de provedores nao configurado neste host local.");
+    const body = await readBody(request); const priority = optionalString(body, "priority"); const kind = optionalString(body, "kind");
+    if (priority && !isTaskPriority(priority)) throw new Error("Prioridade invalida.");
+    if (kind && !taskKinds.includes(kind as typeof taskKinds[number])) throw new Error("Tipo de tarefa invalido.");
+    const providers = arrayOfStrings(body.providers, "providers");
+    if (providers.length < 2 || providers.length > 3 || !providers.every(isProviderName)) throw new Error("Informe de dois a tres provedores validos para comparar.");
+    const targetDirectoryId = optionalString(body, "targetDirectoryId");
+    return json(response, 202, await executor.startComparison({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"),
+      ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}),
+      ...(targetDirectoryId ? { targetDirectoryId, directoryIds: [targetDirectoryId] } : {}) }, providers));
+  }
+  const comparisonMatch = /^\/api\/control-room\/comparisons\/([^/]+)(\/choose)?$/.exec(url.pathname);
+  if (comparisonMatch?.[1]) {
+    const comparisonId = decodeURIComponent(comparisonMatch[1]);
+    if (method === "GET" && !comparisonMatch[2]) return json(response, 200, service.listComparison(comparisonId));
+    if (method === "POST" && comparisonMatch[2]) {
+      const taskId = stringField(await readBody(request), "taskId");
+      if (service.getTask(taskId)?.comparisonId !== comparisonId) throw new Error("A tarefa nao pertence a esta comparacao.");
+      service.chooseComparisonAttempt(taskId);
+      return json(response, 200, service.listComparison(comparisonId));
+    }
+  }
   const worktreeMatch = /^\/api\/control-room\/tasks\/([^/]+)\/worktrees\/remove$/.exec(url.pathname);
   if (method === "POST" && worktreeMatch?.[1]) {
     await readBody(request);

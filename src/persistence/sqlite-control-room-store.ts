@@ -86,8 +86,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   }
   createTask(task: ControlRoomTask): void {
     this.#db.transaction(() => {
-      this.#db.prepare(`INSERT INTO tasks (id, project_id, target_directory_id, uses_worktree, title, prompt, priority, status, kind, worktree_path, dispatch_lease, created_at, updated_at)
-        VALUES (@id, @projectId, @targetDirectoryId, @usesWorktree, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @createdAt, @updatedAt)`).run({ ...task, usesWorktree: task.usesWorktree ? 1 : 0 });
+      this.#db.prepare(`INSERT INTO tasks (id, project_id, target_directory_id, uses_worktree, title, prompt, priority, status, kind, worktree_path, dispatch_lease, comparison_id, created_at, updated_at)
+        VALUES (@id, @projectId, @targetDirectoryId, @usesWorktree, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @comparisonId, @createdAt, @updatedAt)`).run({ ...task, comparisonId: task.comparisonId ?? null, usesWorktree: task.usesWorktree ? 1 : 0 });
       this.#replaceTaskDirectoryScope(task.id, task.directoryIds);
     })();
   }
@@ -451,6 +451,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
     this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
+    this.#addColumnIfMissing("tasks", "comparison_id", "TEXT");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
     this.#addColumnIfMissing("executions", "output", "TEXT");
     this.#addColumnIfMissing("executions", "usage_json", "TEXT");
@@ -551,7 +552,8 @@ function mapTask(row: unknown, directoryIds: string[], branch: string | null): C
   if (!row) return null; const item = row as Row;
   return { id: stringValue(item, "id"), projectId: stringValue(item, "project_id"), targetDirectoryId: nullableString(item, "target_directory_id"), directoryIds, usesWorktree: Boolean(item.uses_worktree), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
-    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), branch, dispatchLease: nullableString(item, "dispatch_lease"), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+    kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), branch, dispatchLease: nullableString(item, "dispatch_lease"),
+    ...(item.comparison_id ? { comparisonId: stringValue(item, "comparison_id") } : {}), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
