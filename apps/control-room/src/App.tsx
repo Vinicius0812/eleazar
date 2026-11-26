@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock3,
   FolderGit2,
+  FolderTree,
   GitBranch,
   Kanban,
   List,
@@ -35,6 +36,7 @@ import {
 import { LoadingOverlay } from "./components/LoadingOverlay.js";
 import { Modal } from "./components/Modal.js";
 import { ExecutionResultPage } from "./components/ExecutionResultPage.js";
+import { FileExplorerPage, fileExplorerHash, fileExplorerRoute } from "./components/FileExplorerPage.js";
 import { ExecutionLaunchFields } from "./components/ExecutionLaunchFields.js";
 import { useExecutionLaunch } from "./components/useExecutionLaunch.js";
 import { PendingPermissions } from "./components/PendingPermissions.js";
@@ -199,6 +201,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const active = pageFromHash(hash);
   const executionRoute = routeId(hash, "executions");
   const taskRoute = routeId(hash, "tasks");
+  const filesRoute = fileExplorerRoute(hash);
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
@@ -530,7 +533,10 @@ export function App({ client }: { client: ControlRoomClient }) {
             <strong>{active === "not-found" ? "Página não encontrada" : navigation.find((item) => item.id === active)?.label ?? "Resultado da execução"}</strong>
           </div>
         </header>
-        {executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
+        {filesRoute ? <FileExplorerPage key={filesRoute.taskId} client={client} initial={filesRoute}
+          task={tasks.find((task) => task.id === filesRoute.taskId)}
+          project={projects.find((project) => project.id === tasks.find((task) => task.id === filesRoute.taskId)?.projectId)}
+          onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={backToDashboard} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
            {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
            {taskRoute ? (
              <section className="task-workspace" aria-labelledby="task-workspace-title">
@@ -565,6 +571,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                      onDecide={(actionId, decision) => void mutate(() => client.decideTaskAction(actionId, decision), decision === "approve" ? "Ação aprovada; confira o resultado abaixo." : "Ação rejeitada.")}
                      onRemoveWorktree={() => void mutate(() => client.removeTaskWorktrees(selectedTask.id), "Worktree removida; a branch foi mantida.")} /> : undefined}
                    actions={<>
+                     <a className="secondary" href={fileExplorerHash(selectedTask.id)}><FolderTree size={16} aria-hidden="true" /> Explorar arquivos</a>
                      {selectedRun && <button className="secondary" onClick={() => openExecution(selectedRun.id)}>{selectedTask.status === "queued" ? "Ver última tentativa" : "Ver detalhes da execução"}</button>}
                      {selectedTask.status === "queued" && <button className="primary" disabled={busy} onClick={() => open({ kind: "execute", task: selectedTask })}><Play size={16} aria-hidden="true" /> Executar tarefa</button>}
                      {selectedApproval && selectedTask.status === "waiting_approval" && <button className="primary" disabled={busy} onClick={() => open({ kind: "approval", approval: selectedApproval })}><ShieldCheck size={16} aria-hidden="true" /> Revisar aprovação</button>}

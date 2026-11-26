@@ -15,6 +15,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("File explorer", () => {
+  it("opens from the task and shows the diff of a changed file", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    await user.click(await screen.findByRole("link", { name: "Explorar arquivos" }));
+    expect(window.location.hash).toBe("#/tasks/task-1/files");
+    await user.click(await screen.findByRole("button", { name: /README\.md/ }));
+    const diff = await screen.findByRole("region", { name: "Diff do arquivo" });
+    expect(within(diff).getByText("velho")).toBeInTheDocument();
+    expect(within(diff).getByText("novo")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/tasks/task-1/files?directory=directory-1&path=README.md");
+    await user.click(screen.getByRole("button", { name: /Conteúdo/ }));
+    expect(await screen.findByRole("region", { name: "Conteúdo do arquivo" })).toHaveTextContent("novo");
+    await user.click(screen.getByRole("button", { name: /Voltar à tarefa/ }));
+    expect(window.location.hash).toBe("#/tasks/task-1");
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -607,5 +626,9 @@ function providerStatus(provider: string, fields: Partial<ProviderStatus> = {}):
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], isolation: "worktree", createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }) };
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }),
+    getTaskFileRoots: async () => [explorerRoot], listTaskFiles: async (_task, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "README.md", path: "README.md", type: "file", size: 6, change: "modified", changedBelow: 0 }], truncated: false }),
+    getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
+    getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }) };
 }
+const explorerRoot = { directoryId: "directory-1", name: "Principal", path: "C:\\Projeto", mode: "direct" as const, branch: null, isGitRepository: true, base: "HEAD" };

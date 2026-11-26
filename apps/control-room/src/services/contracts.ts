@@ -61,6 +61,15 @@ export interface RegisterProjectInput { name: string; directories: Array<{ name?
 export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
 /** `auto` or a registered provider id. */
 export type ExecutionProvider = string;
+export type ExplorerChangeKind = "added" | "modified" | "deleted" | "renamed" | "untracked";
+/** Folder a task works in: its worktree, or the project folder when it runs in place. */
+export interface ExplorerRoot { directoryId: string; name: string; path: string; mode: "worktree" | "direct"; branch: string | null; isGitRepository: boolean; base: string | null; }
+export interface ExplorerEntry { name: string; path: string; type: "file" | "directory" | "symlink" | "other"; size: number | null; change: ExplorerChangeKind | null; changedBelow: number; }
+export interface ExplorerListing { root: ExplorerRoot; path: string; entries: ExplorerEntry[]; truncated: boolean; }
+export interface ExplorerChange { path: string; previousPath: string | null; kind: ExplorerChangeKind; additions: number | null; deletions: number | null; }
+export interface ExplorerChanges { root: ExplorerRoot; changes: ExplorerChange[]; warnings: string[]; }
+export interface ExplorerFile { root: ExplorerRoot; path: string; exists: boolean; size: number | null; binary: boolean; content: string | null; tooLarge: boolean; change: ExplorerChange | null; diff: string | null; diffTruncated: boolean; }
+
 export interface ControlRoomClient {
   getSnapshot(): Promise<ControlRoomSnapshot>;
   getExecutionDetail(executionId: string): Promise<ExecutionDetail>;
@@ -87,5 +96,10 @@ export interface ControlRoomClient {
   /** Re-reads pull requests from GitHub: one task, or every task with a pushed branch. */
   refreshPullRequests(taskId?: string): Promise<PullRequestRefresh>;
   decideApproval(taskId: string, decision: "approve" | "reject"): Promise<void>;
+  /** Read-only file explorer of a task. */
+  getTaskFileRoots(taskId: string): Promise<ExplorerRoot[]>;
+  listTaskFiles(taskId: string, directoryId: string, path?: string): Promise<ExplorerListing>;
+  getTaskChanges(taskId: string, directoryId: string): Promise<ExplorerChanges>;
+  getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
 }
 export const priorityOrder: Record<Priority, number> = { critical: 0, high: 1, normal: 2, low: 3 };

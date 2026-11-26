@@ -90,6 +90,19 @@ A CLI (`plan`, `run`, `doctor`) lê as mesmas preferências e o mesmo `.eleazar/
 
 Campos de `.eleazar/providers.json`: `id`, `label`, `executable` (comando do PATH ou caminho absoluto), `requiredMode`, `loginCommand` e `loginHint` são obrigatórios. Opcionais: `args`, `versionArgs` (padrão `["--version"]`), `minimumVersion`, `affinity` (0 a 100 por tipo de tarefa), `roles` e `sessionConfirmsLogin`. Use `sessionConfirmsLogin: true` somente para agentes que recusam `session/new` sem login; sem ele o login fica não confirmado e o agente só roda por escolha explícita. Entradas inválidas são ignoradas com aviso no terminal do host.
 
+### Explorador de arquivos
+
+`#/tasks/:id/files` abre o explorador da tarefa (botão **Explorar arquivos** na tarefa e no resultado da execução; cada arquivo afetado no resultado abre direto o seu diff). Ele mostra a pasta em que o agente trabalha: a worktree da tarefa ou, no modo **Direto na pasta**, a própria pasta do projeto. A aba **Alterações** lista o que mudou com contagem de linhas; **Todos os arquivos** navega a árvore completa sob demanda (uma pasta por vez, até 2.000 itens por pasta, sem `.git`). O arquivo abre em **Diff** (com números de linha antigos e novos) ou **Conteúdo**. Enquanto a tarefa roda, a lista e o arquivo aberto são relidos a cada 5 s.
+
+A comparação é feita contra o commit em que a branch da tarefa começou (`task_worktrees.baseCommit`), então continua visível depois do commit pelo painel; no modo direto, contra o `HEAD`, o que inclui alterações que já existiam antes da tarefa. Arquivos novos não rastreados aparecem como **U**, e arquivos removidos continuam na árvore para que o diff possa ser aberto. Pastas sem Git são exploradas normalmente, sem diff. Tudo é local e somente leitura (Git, Gogs ou qualquer remoto: nada é consultado fora da máquina).
+
+- `GET /tasks/:id/files/roots` devolve, por diretório do escopo, o caminho efetivo, o modo (`worktree` ou `direct`), a branch e a base.
+- `GET /tasks/:id/files?directoryId=…&path=…` lista uma pasta, com a alteração de cada arquivo e quantos arquivos mudaram abaixo de cada subpasta.
+- `GET /tasks/:id/changes?directoryId=…` devolve as alterações (`added`, `modified`, `deleted`, `renamed`, `untracked`) com linhas adicionadas e removidas.
+- `GET /tasks/:id/files/content?directoryId=…&path=…` devolve o texto (até 512 KB; binários não são enviados) e o diff unificado (até 400.000 caracteres).
+
+O caminho é sempre relativo à pasta da tarefa, aceita `/` ou `\`, e é recusado se tiver `..`, for absoluto, apontar para `.git` ou, por link simbólico ou junção, sair da pasta. O Git roda sem shell, com `core.longpaths` no Windows e limite de 60 s por comando, e o estado é guardado por 2 s para que expandir várias pastas seguidas não repita o `git status` em repositórios grandes.
+
 ### Quadro de tarefas
 
 Em `#/tasks`, o alternador **Quadro | Lista** (lembrado em `localStorage`, padrão Quadro) troca a tabela por um quadro de seis raias. Ninguém move cartões: `placeTask` (`apps/control-room/src/services/board.ts`) decide a raia a partir do snapshot.

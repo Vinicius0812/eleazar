@@ -1,7 +1,8 @@
-import { ArrowLeft, FileCode2, History, Terminal } from "lucide-react";
+import { ArrowLeft, FileCode2, FolderTree, History, Terminal } from "lucide-react";
 
 import { ExecutionSession } from "./ExecutionSession.js";
 import { LoadingOverlay } from "./LoadingOverlay.js";
+import { fileExplorerHash } from "./FileExplorerPage.js";
 import type { ControlRoomClient, ExecutionDetail, ExecutionFileChange, Run, Task } from "../services/contracts.js";
 
 const executionStatus: Record<Run["status"], string> = { planned: "Preparando", running: "Em execução", completed: "Concluída", failed: "Falhou", cancelled: "Cancelada" };
@@ -28,7 +29,7 @@ export function ExecutionResultPage({ client, onSessionChanged, detail, loading,
   return (
     <main className="execution-page" id="main" tabIndex={-1}>
       <header className="execution-page-header">
-        <div className="execution-header-actions"><button className="secondary" onClick={onBack}><ArrowLeft size={16} /> Voltar ao painel</button><button className="primary" onClick={() => onCreateRelated(task)}>Criar tarefa relacionada</button></div>
+        <div className="execution-header-actions"><button className="secondary" onClick={onBack}><ArrowLeft size={16} /> Voltar ao painel</button><a className="secondary" href={fileExplorerHash(task.id)}><FolderTree size={16} aria-hidden="true" /> Explorar arquivos</a><button className="primary" onClick={() => onCreateRelated(task)}>Criar tarefa relacionada</button></div>
         <div className="execution-heading">
           <span className="eyebrow">RESULTADO DA EXECUÇÃO</span>
           <h1>{task.title}</h1>
@@ -50,7 +51,7 @@ export function ExecutionResultPage({ client, onSessionChanged, detail, loading,
             <div className="result-document-heading"><FileCode2 size={17} /><h2 id="affected-files-title">Arquivos afetados</h2></div>
             {grouped.size ? [...grouped].map(([directory, changed]) => <div className="file-group" key={directory}>
               <h3>{directory}</h3>
-              {changed.map((file) => <FileChangeCard file={file} key={file.id} />)}
+              {changed.map((file) => <FileChangeCard file={file} key={file.id} href={file.kind === "preexisting" ? undefined : fileExplorerHash(task.id, { directoryId: file.directoryId, path: file.path })} />)}
             </div>) : <p className="empty">Nenhum arquivo foi atribuído a esta execução. Alterações preexistentes ou uma coleta Git indisponível ficam registradas nos logs.</p>}
           </section>
         </article>
@@ -70,9 +71,9 @@ export function ExecutionResultPage({ client, onSessionChanged, detail, loading,
   );
 }
 
-function FileChangeCard({ file }: { file: ExecutionFileChange }) {
+function FileChangeCard({ file, href }: { file: ExecutionFileChange; href?: string | undefined }) {
   const total = file.additions === null || file.deletions === null ? null : file.additions + file.deletions;
-  return <div className={`file-change ${file.kind}`}><div><strong>{file.path}</strong><span>{label(file.kind)}</span></div><div className="file-counts">{file.additions === null ? <span>Preexistente</span> : <><span className="add">+{file.additions}</span><span className="remove">−{file.deletions}</span><span>{total} linhas</span></>}</div></div>;
+  return <div className={`file-change ${file.kind}`}><div>{href ? <a className="file-change-link" href={href} title="Ver o diff no explorador de arquivos"><strong>{file.path}</strong></a> : <strong>{file.path}</strong>}<span>{label(file.kind)}</span></div><div className="file-counts">{file.additions === null ? <span>Preexistente</span> : <><span className="add">+{file.additions}</span><span className="remove">−{file.deletions}</span><span>{total} linhas</span></>}</div></div>;
 }
 function label(kind: ExecutionFileChange["kind"]): string { return ({ added: "Adicionado", modified: "Alterado", deleted: "Removido", untracked: "Não rastreado", preexisting: "Preexistente" })[kind]; }
 function formatDate(value: string | null): string { return value ? new Date(value).toLocaleString("pt-BR") : "Não informado"; }

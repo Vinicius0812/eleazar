@@ -1,8 +1,14 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
+
+function explorerQuery(directoryId: string, path?: string): string {
+  const query = new URLSearchParams({ directoryId });
+  if (path !== undefined) query.set("path", path);
+  return query.toString();
+}
 
 export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClient {
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -34,6 +40,10 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
       return { projects: snapshot.projects, tasks: snapshot.tasks, runs: snapshot.executions, logs: snapshot.logs, approvals,
         alerts, actions: snapshot.actions ?? [], pullRequests: snapshot.pullRequests ?? [] } satisfies ControlRoomSnapshot;
     },
+    getTaskFileRoots(taskId) { return request<ExplorerRoot[]>(`/tasks/${encodeURIComponent(taskId)}/files/roots`); },
+    listTaskFiles(taskId, directoryId, path = "") { return request<ExplorerListing>(`/tasks/${encodeURIComponent(taskId)}/files?${explorerQuery(directoryId, path)}`); },
+    getTaskChanges(taskId, directoryId) { return request<ExplorerChanges>(`/tasks/${encodeURIComponent(taskId)}/changes?${explorerQuery(directoryId)}`); },
+    getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
     getExecutionDetail(executionId: string) { return request<ExecutionDetail>(`/executions/${encodeURIComponent(executionId)}`); },
     getProviderStatuses(refresh = false) { return request<ProviderStatus[]>(`/providers/status${refresh ? "?refresh=true" : ""}`); },
     verifyProvider(provider) { return request<ProviderStatus[]>(`/providers/${encodeURIComponent(provider)}/verify`, { method: "POST", body: "{}" }); },

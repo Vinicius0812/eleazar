@@ -7,6 +7,7 @@ import type { ControlRoomTaskExecutor } from "./task-executor.js";
 import type { ProviderStatusService } from "./provider-status.js";
 import type { OutboundActionService } from "../core/outbound-actions.js";
 import type { PullRequestService } from "../core/pull-requests.js";
+import { TaskFileExplorer } from "./file-explorer.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -14,10 +15,10 @@ const uiOrigins = new Set([
 ]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service)): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, executor, providers, actions, pullRequests, request, response);
+      await route(service, executor, providers, actions, pullRequests, explorer, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -26,7 +27,7 @@ export function createControlRoomServer(service: ControlRoomService, executor?: 
   });
 }
 
-async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -87,6 +88,18 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
       throw error;
     }
     return json(response, 200, detail);
+  }
+  // Read-only file explorer of a task: its worktree, or the project folder when it runs in place.
+  const filesMatch = /^\/api\/control-room\/tasks\/([^/]+)\/(files\/roots|files\/content|files|changes)$/.exec(url.pathname);
+  if (method === "GET" && filesMatch?.[1] && filesMatch[2]) {
+    const taskId = decodeURIComponent(filesMatch[1]);
+    if (filesMatch[2] === "files/roots") return json(response, 200, explorer.roots(taskId));
+    const directoryId = url.searchParams.get("directoryId");
+    if (!directoryId) throw new Error("Informe directoryId.");
+    const path = url.searchParams.get("path") ?? "";
+    if (filesMatch[2] === "files") return json(response, 200, await explorer.list(taskId, directoryId, path));
+    if (filesMatch[2] === "changes") return json(response, 200, await explorer.changes(taskId, directoryId));
+    return json(response, 200, await explorer.file(taskId, directoryId, path));
   }
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
