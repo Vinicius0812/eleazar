@@ -58,6 +58,7 @@ import { ComparisonPage, comparisonRoute } from "./components/ComparisonPage.js"
 import { ProjectPage, projectHash, projectRoute } from "./components/ProjectPage.js";
 import { ProjectTerminal } from "./components/ProjectTerminal.js";
 import { ProjectList } from "./components/ProjectList.js";
+import { TaskSidePanel } from "./components/TaskSidePanel.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -343,12 +344,12 @@ export function App({ client }: { client: ControlRoomClient }) {
     window.localStorage.setItem("eleazar.theme", theme);
   }, [theme]);
   useEffect(() => {
-    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute" && taskRoute !== "new") return;
+    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute" && !taskRoute) return;
     let alive = true;
     setProvidersLoading(true); setProvidersError("");
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
-  }, [active, client, dialog?.kind, taskRoute === "new"]);
+  }, [active, client, dialog?.kind, Boolean(taskRoute)]);
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const composing = taskRoute === "new";
   useEffect(() => {
@@ -810,12 +811,13 @@ export function App({ client }: { client: ControlRoomClient }) {
                      onChoose={(taskId) => void mutate(() => client.chooseComparisonAttempt(comparisonId, taskId), "Versão escolhida. As outras tentativas foram deixadas de lado, com as branches preservadas.", () => openTask(taskId))} />}
              </section>
            ) : taskRoute ? (
-             <section className="task-workspace" aria-labelledby="task-workspace-title">
+             <section className={`task-workspace${selectedTask ? " with-side" : ""}`} aria-labelledby="task-workspace-title">
                <header className="task-workspace-heading">
                  <span className="eyebrow">{selectedTask ? projectName(selectedTask.projectId) : "Tarefas"}</span>
                  <h1 id="task-workspace-title" ref={taskViewHeading} tabIndex={-1}>{taskRoute === "new" ? "O que você quer fazer?" : selectedTask?.title ?? "Tarefa"}</h1>
                  {selectedTask && <div className="task-heading-actions">{manageTask(selectedTask)}</div>}
                </header>
+               <div className="task-layout"><div className="task-main">
                {selectedTask && <TaskTabs taskId={selectedTask.id} active={publishRoute ? "publish" : "conversation"} pendingPublications={pendingPublications(selectedTask.id)} />}
                <div className="feedback" role="status">{notice}</div>
                {error && <div className="error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => void refresh()}>Atualizar</button></div>}
@@ -865,6 +867,12 @@ export function App({ client }: { client: ControlRoomClient }) {
                  <div className="empty">Tarefa não encontrada. <a className="text-button" href="#/tasks">Voltar à fila</a></div>
                )}
                {formError && !dialog && taskRoute !== "new" && <div className="error" role="alert">{formError}</div>}
+               </div>
+               {selectedTask && data && <TaskSidePanel task={selectedTask} project={projects.find((project) => project.id === selectedTask.projectId)}
+                 runs={data.runs.filter((run) => run.taskId === selectedTask.id)} providers={providers}
+                 siblings={selectedTask.comparisonId ? tasks.filter((task) => task.comparisonId === selectedTask.comparisonId && task.id !== selectedTask.id).map((task) => ({ task, runs: data.runs.filter((run) => run.taskId === task.id) })) : []}
+                 actions={selectedActions} pullRequests={(data.pullRequests ?? []).filter((item) => item.taskId === selectedTask.id)} />}
+               </div>
              </section>
            ) : active === "not-found" ? <section className="route-not-found"><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
           <div className="page-heading">
