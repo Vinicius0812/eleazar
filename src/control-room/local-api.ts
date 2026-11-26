@@ -90,7 +90,7 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     return json(response, 200, detail);
   }
   // Read-only file explorer of a task: its worktree, or the project folder when it runs in place.
-  const filesMatch = /^\/api\/control-room\/tasks\/([^/]+)\/(files\/roots|files\/content|files|changes)$/.exec(url.pathname);
+  const filesMatch = /^\/api\/control-room\/tasks\/([^/]+)\/(files\/roots|files\/content|files\/search|files|changes)$/.exec(url.pathname);
   if (method === "GET" && filesMatch?.[1] && filesMatch[2]) {
     const taskId = decodeURIComponent(filesMatch[1]);
     if (filesMatch[2] === "files/roots") return json(response, 200, explorer.roots(taskId));
@@ -99,6 +99,7 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     const path = url.searchParams.get("path") ?? "";
     if (filesMatch[2] === "files") return json(response, 200, await explorer.list(taskId, directoryId, path));
     if (filesMatch[2] === "changes") return json(response, 200, await explorer.changes(taskId, directoryId));
+    if (filesMatch[2] === "files/search") return json(response, 200, await explorer.search(taskId, directoryId, (url.searchParams.get("q") ?? "").slice(0, 200)));
     return json(response, 200, await explorer.file(taskId, directoryId, path));
   }
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());

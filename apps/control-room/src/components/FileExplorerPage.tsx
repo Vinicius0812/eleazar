@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, File, FileDiff, FileText, Folder, FolderOpen, GitCompare, RefreshCw } from "lucide-react";
 
 import { LoadingOverlay } from "./LoadingOverlay.js";
-import type { ControlRoomClient, ExplorerChange, ExplorerChangeKind, ExplorerEntry, ExplorerFile, ExplorerListing, ExplorerRoot, Project, Task } from "../services/contracts.js";
+import type { ControlRoomClient, ExplorerChange, ExplorerChangeKind, ExplorerEntry, ExplorerFile, ExplorerListing, ExplorerRoot, ExplorerSearch, Project, Task } from "../services/contracts.js";
 
 const changeLabel: Record<ExplorerChangeKind, string> = { added: "Adicionado", modified: "Alterado", deleted: "Removido", renamed: "Renomeado", untracked: "Novo, não rastreado" };
 const changeLetter: Record<ExplorerChangeKind, string> = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U" };
@@ -56,6 +56,9 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
   const [listLoading, setListLoading] = useState(false);
   const [view, setView] = useState<View>("diff");
   const [filter, setFilter] = useState("");
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState<ExplorerSearch | null>(null);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [fileError, setFileError] = useState("");
   const generation = useRef(0);
@@ -121,7 +124,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
   useEffect(() => {
     if (!directoryId) return;
     generation.current += 1;
-    setChanges(null); setListings({}); setExpanded(new Set([""])); setFile(null); setFileError("");
+    setChanges(null); setListings({}); setExpanded(new Set([""])); setFile(null); setFileError(""); setQuery("");
     void loadChanges();
     void loadDirectory("");
   }, [directoryId, loadChanges, loadDirectory]);
@@ -132,6 +135,21 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
     if (!directoryId) return;
     window.history.replaceState(null, "", fileExplorerHash(taskId, { directoryId, ...(selected ? { path: selected } : {}) }));
   }, [taskId, directoryId, selected]);
+
+  // Project-wide file search, debounced; an answer for an older query or folder is dropped.
+  useEffect(() => {
+    const term = query.trim();
+    if (!directoryId || term.length < 2) { setSearch(null); setSearching(false); return; }
+    let alive = true;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      client.searchTaskFiles(taskId, directoryId, term)
+        .then((result) => { if (alive) setSearch(result); })
+        .catch((reason: unknown) => { if (alive) setError(message(reason)); })
+        .finally(() => { if (alive) setSearching(false); });
+    }, 250);
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, [client, taskId, directoryId, query]);
 
   const live = task ? liveStatuses.has(task.status) : false;
   useEffect(() => {
@@ -220,7 +238,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
                     <li key={change.path}>
                       <button className={change.path === selected ? "selected" : ""} aria-current={change.path === selected ? "true" : undefined} onClick={() => setSelected(change.path)} title={change.previousPath ? `${change.previousPath} → ${change.path}` : change.path}>
                         <span className={`change-badge ${change.kind}`} aria-label={changeLabel[change.kind]}>{changeLetter[change.kind]}</span>
-                        <span className="explorer-change-name"><strong>{baseName(change.path)}</strong><small>{dirName(change.path)}</small></span>
+                        <span className="explorer-change-name"><strong>{baseName(change.path)}</strong><small>{change.preexisting ? <>já alterado antes da tarefa{dirName(change.path) ? ` · ${dirName(change.path)}` : ""}</> : dirName(change.path)}</small></span>
                         {change.additions !== null && <span className="explorer-counts"><span className="add">+{change.additions}</span> <span className="remove">−{change.deletions}</span></span>}
                       </button>
                     </li>
@@ -228,10 +246,35 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
                 </ul>
               </>
             ) : (
-              <div className="explorer-tree" role="tree" aria-label="Todos os arquivos">
-                <TreeLevel path="" depth={0} listings={listings} expanded={expanded} loadingDirs={loadingDirs} selected={selected}
-                  onToggle={toggleDirectory} onSelect={(path) => setSelected(path)} />
-              </div>
+              <>
+                <input className="explorer-filter" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar arquivo no projeto…" aria-label="Buscar arquivo no projeto" />
+                {query.trim().length >= 2 ? (
+                  <div className="explorer-search loading-area">
+                    {searching && <LoadingOverlay label="Buscando…" />}
+                    {search && !search.paths.length && !searching && <p className="empty">Nenhum arquivo encontrado.</p>}
+                    <ul className="explorer-change-list" aria-label="Resultados da busca">
+                      {(search?.paths ?? []).map((path) => {
+                        const change = changes?.find((item) => item.path === path);
+                        return (
+                          <li key={path}>
+                            <button className={path === selected ? "selected" : ""} aria-current={path === selected ? "true" : undefined} onClick={() => setSelected(path)} title={path}>
+                              <File size={14} aria-hidden="true" />
+                              <span className="explorer-change-name"><strong>{baseName(path)}</strong><small>{dirName(path)}</small></span>
+                              {change && <span className={`change-badge ${change.kind}`} aria-label={changeLabel[change.kind]}>{changeLetter[change.kind]}</span>}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {search?.truncated && <p className="explorer-tree-empty explorer-search-note">Mostrando os primeiros {search.paths.length} resultados; refine a busca.</p>}
+                  </div>
+                ) : (
+                  <div className="explorer-tree" role="tree" aria-label="Todos os arquivos">
+                    <TreeLevel path="" depth={0} listings={listings} expanded={expanded} loadingDirs={loadingDirs} selected={selected}
+                      onToggle={toggleDirectory} onSelect={(path) => setSelected(path)} />
+                  </div>
+                )}
+              </>
             )}
           </aside>
 

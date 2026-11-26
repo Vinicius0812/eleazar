@@ -66,7 +66,8 @@ export type ExplorerChangeKind = "added" | "modified" | "deleted" | "renamed" | 
 export interface ExplorerRoot { directoryId: string; name: string; path: string; mode: "worktree" | "direct"; branch: string | null; isGitRepository: boolean; base: string | null; }
 export interface ExplorerEntry { name: string; path: string; type: "file" | "directory" | "symlink" | "other"; size: number | null; change: ExplorerChangeKind | null; changedBelow: number; }
 export interface ExplorerListing { root: ExplorerRoot; path: string; entries: ExplorerEntry[]; truncated: boolean; }
-export interface ExplorerChange { path: string; previousPath: string | null; kind: ExplorerChangeKind; additions: number | null; deletions: number | null; }
+export interface ExplorerChange { path: string; previousPath: string | null; kind: ExplorerChangeKind; additions: number | null; deletions: number | null; preexisting?: boolean; }
+export interface ExplorerSearch { root: ExplorerRoot; query: string; paths: string[]; truncated: boolean; }
 export interface ExplorerChanges { root: ExplorerRoot; changes: ExplorerChange[]; warnings: string[]; }
 export interface ExplorerFile { root: ExplorerRoot; path: string; exists: boolean; size: number | null; binary: boolean; content: string | null; tooLarge: boolean; change: ExplorerChange | null; diff: string | null; diffTruncated: boolean; }
 
@@ -101,5 +102,6 @@ export interface ControlRoomClient {
   listTaskFiles(taskId: string, directoryId: string, path?: string): Promise<ExplorerListing>;
   getTaskChanges(taskId: string, directoryId: string): Promise<ExplorerChanges>;
   getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
+  searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
 }
 export const priorityOrder: Record<Priority, number> = { critical: 0, high: 1, normal: 2, low: 3 };

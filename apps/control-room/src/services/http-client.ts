@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
@@ -44,6 +44,7 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     listTaskFiles(taskId, directoryId, path = "") { return request<ExplorerListing>(`/tasks/${encodeURIComponent(taskId)}/files?${explorerQuery(directoryId, path)}`); },
     getTaskChanges(taskId, directoryId) { return request<ExplorerChanges>(`/tasks/${encodeURIComponent(taskId)}/changes?${explorerQuery(directoryId)}`); },
     getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
+    searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
     getExecutionDetail(executionId: string) { return request<ExecutionDetail>(`/executions/${encodeURIComponent(executionId)}`); },
     getProviderStatuses(refresh = false) { return request<ProviderStatus[]>(`/providers/status${refresh ? "?refresh=true" : ""}`); },
     verifyProvider(provider) { return request<ProviderStatus[]>(`/providers/${encodeURIComponent(provider)}/verify`, { method: "POST", body: "{}" }); },

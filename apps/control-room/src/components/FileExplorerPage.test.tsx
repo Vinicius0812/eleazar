@@ -21,6 +21,7 @@ function fakeClient(): ControlRoomClient {
         { name: "src", path: "src", type: "directory" as const, size: null, change: null, changedBelow: 1 },
         { name: "leia.md", path: "leia.md", type: "file" as const, size: 3, change: null, changedBelow: 0 }] }
       : { root: worktree, path, truncated: false, entries: [{ name: "novo.ts", path: "src/novo.ts", type: "file" as const, size: 10, change: "untracked" as const, changedBelow: 0 }] }),
+    searchTaskFiles: vi.fn(async (_task: string, _directory: string, query: string) => ({ root: worktree, query, paths: ["src/profundo/alvo.ts"], truncated: false })),
     getTaskFile: vi.fn(async (_task: string, _directory: string, path: string) => ({ root: worktree, path, exists: true, size: 3, binary: false, content: "oi\n", tooLarge: false, change: null, diff: null, diffTruncated: false }))
   } as unknown as ControlRoomClient;
 }
@@ -46,6 +47,18 @@ describe("FileExplorerPage", () => {
     await user.click(screen.getByRole("button", { name: "Docs" }));
     expect(await screen.findByText(/nao e um repositorio Git/)).toBeInTheDocument();
     expect(client.getTaskChanges).toHaveBeenLastCalledWith("t1", "d2");
+  });
+
+  it("busca um arquivo no projeto inteiro e abre o resultado", async () => {
+    const client = fakeClient();
+    const user = userEvent.setup();
+    render(<FileExplorerPage client={client} task={undefined} project={undefined} initial={{ taskId: "t1" }} onBack={() => undefined} />);
+    await user.click(await screen.findByRole("tab", { name: "Todos os arquivos" }));
+    await user.type(screen.getByRole("searchbox", { name: "Buscar arquivo no projeto" }), "alvo");
+    const results = await screen.findByRole("list", { name: "Resultados da busca" });
+    await user.click(await within(results).findByRole("button", { name: /alvo\.ts/ }));
+    expect(client.searchTaskFiles).toHaveBeenLastCalledWith("t1", "d1", "alvo");
+    expect(client.getTaskFile).toHaveBeenLastCalledWith("t1", "d1", "src/profundo/alvo.ts");
   });
 
   it("le e escreve a rota do explorador", () => {

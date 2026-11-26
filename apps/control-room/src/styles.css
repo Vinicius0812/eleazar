@@ -2745,3 +2745,5 @@ a.secondary, a.primary { text-decoration: none; }
   .explorer-sidebar { max-height: 45vh; }
   .explorer-viewer { min-height: 60vh; }
 }
+.explorer-search { position: relative; flex: 1; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; }
+.explorer-search-note { padding: 0 12px 8px; }

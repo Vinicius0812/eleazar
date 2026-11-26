@@ -130,6 +130,41 @@ describe("explorador de arquivos da tarefa", () => {
     }
   });
 
+  it("no modo direto marca o que ja estava alterado antes da tarefa", async () => {
+    const { service, store, repository } = await fixture();
+    const project = service.registerProject({ name: "Repo", path: repository, isolation: "direct" });
+    const task = service.createTask({ projectId: project.id, title: "Nota", prompt: "Crie nota.txt" });
+    await writeFile(join(repository, "README.md"), "inicial\ndo usuario\n");
+    const executor = new ControlRoomTaskExecutor(service, writingRunner("nota.txt"), acpRegistry());
+    await executor.start(task.id, "codex");
+    await vi.waitFor(() => expect(store.getTask(task.id)?.status).toBe("completed"));
+    const { changes } = await new TaskFileExplorer(service, 0).changes(task.id, project.directories[0]!.id);
+    expect(changes.find((change) => change.path === "README.md")).toMatchObject({ kind: "modified", preexisting: true });
+    expect(changes.find((change) => change.path === "nota.txt")).not.toHaveProperty("preexisting");
+  });
+
+  it("busca arquivos no projeto inteiro, com e sem Git", async () => {
+    const { service, repository } = await fixture();
+    await mkdir(join(repository, "src", "profundo"), { recursive: true });
+    await writeFile(join(repository, "src", "profundo", "alvo.ts"), "x\n");
+    await writeFile(join(repository, ".gitignore"), "ignorado/\n");
+    await mkdir(join(repository, "ignorado"));
+    await writeFile(join(repository, "ignorado", "alvo.ts"), "x\n");
+    const project = service.registerProject({ name: "Repo", path: repository, isolation: "direct" });
+    const task = service.createTask({ projectId: project.id, title: "Ver", prompt: "Veja" });
+    const explorer = new TaskFileExplorer(service, 0);
+    expect((await explorer.search(task.id, project.directories[0]!.id, "ALVO")).paths).toEqual(["src/profundo/alvo.ts"]);
+    expect((await explorer.search(task.id, project.directories[0]!.id, "src\\app")).paths).toEqual(["src/app.ts"]);
+
+    const folder = await temporary("eleazar-explorer-search-");
+    await mkdir(join(folder, "a", "node_modules"), { recursive: true });
+    await writeFile(join(folder, "a", "alvo.md"), "x");
+    await writeFile(join(folder, "a", "node_modules", "alvo.js"), "x");
+    const plain = service.registerProject({ name: "Pasta", path: folder });
+    const plainTask = service.createTask({ projectId: plain.id, title: "Ver", prompt: "Veja" });
+    expect((await explorer.search(plainTask.id, plain.directories[0]!.id, "alvo")).paths).toEqual(["a/alvo.md"]);
+  });
+
   it("interpreta a saida -z do Git, inclusive renomeacoes", () => {
     expect(parseNameStatus("M\0a.ts\0R100\0velho.ts\0novo.ts\0D\0b.ts\0A\0c d.ts\0")).toEqual([
       { path: "a.ts", previousPath: null, kind: "modified" },

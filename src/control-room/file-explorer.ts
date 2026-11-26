@@ -48,7 +48,15 @@ export interface ExplorerChange {
   kind: ExplorerChangeKind;
   additions: number | null;
   deletions: number | null;
+  /** Already changed before the task's first run (the folder is shared with the user in direct mode). */
+  preexisting?: boolean;
 }
+
+export interface ExplorerSearch { root: ExplorerRoot; query: string; paths: string[]; truncated: boolean; }
+export const maxSearchResults = 200;
+const maxWalkedEntries = 50_000;
+/** Folders a walk of a plain folder skips: dependencies and build output are rarely what one looks for. */
+const skippedFolders = new Set([".git", "node_modules", "dist", "build", ".next", "target", "bin", "obj", ".venv", "__pycache__"]);
 
 export interface ExplorerChanges { root: ExplorerRoot; changes: ExplorerChange[]; warnings: string[]; }
 
@@ -132,7 +140,32 @@ export class TaskFileExplorer {
     if (!root.isGitRepository) {
       return { root, changes: [], warnings: [`${root.name} nao e um repositorio Git; o explorador mostra os arquivos, mas nao ha diff para comparar.`] };
     }
-    return this.collect(root);
+    const collected = await this.collect(root);
+    if (root.mode !== "direct") return collected;
+    // In place, the diff against HEAD also shows what the user had already changed: mark it.
+    const first = this.service.store.listExecutions(taskId).filter((execution) => execution.startedAt !== null)
+      .sort((left, right) => (left.startedAt ?? "").localeCompare(right.startedAt ?? ""))[0];
+    if (!first) return collected;
+    const before = new Set(this.service.store.listExecutionFiles(first.id).filter((file) => file.directoryId === directoryId && file.kind === "preexisting").map((file) => file.path));
+    if (!before.size) return collected;
+    return { ...collected, changes: collected.changes.map((change) => before.has(change.path) ? { ...change, preexisting: true } : change) };
+  }
+
+  /** Finds files by name or path fragment across the whole folder, not only the expanded part of the tree. */
+  async search(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch> {
+    const root = this.root(taskId, directoryId);
+    const term = query.trim().toLowerCase().replaceAll("\\", "/");
+    if (!term) return { root, query, paths: [], truncated: false };
+    let all: string[] | null = null;
+    if (root.isGitRepository) {
+      const listed = await git(root.path, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
+      if (listed.ok) all = [...new Set(listed.stdout.split("\0").filter(Boolean))];
+    }
+    all ??= await walk(root.path);
+    const matches = all.filter((path) => path.toLowerCase().includes(term));
+    // Name matches first, then shorter paths.
+    matches.sort((left, right) => Number(!baseName(left).toLowerCase().includes(term)) - Number(!baseName(right).toLowerCase().includes(term)) || left.length - right.length || left.localeCompare(right));
+    return { root, query, paths: matches.slice(0, maxSearchResults), truncated: matches.length > maxSearchResults };
   }
 
   async file(taskId: string, directoryId: string, path: string): Promise<ExplorerFile> {
@@ -209,6 +242,25 @@ export class TaskFileExplorer {
     changes.sort((left, right) => left.path.localeCompare(right.path));
     return { root, changes, warnings: [] };
   }
+}
+
+function baseName(path: string): string { return path.slice(path.lastIndexOf("/") + 1); }
+
+async function walk(rootPath: string): Promise<string[]> {
+  const found: string[] = [];
+  const pending: string[] = [""];
+  let visited = 0;
+  while (pending.length && visited < maxWalkedEntries) {
+    const current = pending.shift()!;
+    const items = await readdir(current ? join(rootPath, ...current.split("/")) : rootPath, { withFileTypes: true }).catch(() => []);
+    for (const item of items) {
+      visited += 1;
+      const path = current ? `${current}/${item.name}` : item.name;
+      if (item.isDirectory()) { if (!skippedFolders.has(item.name)) pending.push(path); }
+      else if (item.isFile()) found.push(path);
+    }
+  }
+  return found;
 }
 
 /** Splits a client path (with `/` or `\`) and refuses anything that could leave the root. */
