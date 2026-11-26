@@ -17,6 +17,7 @@ import {
   FolderGit2,
   FolderTree,
   GitBranch,
+  Inbox,
   Kanban,
   List,
   LayoutDashboard,
@@ -51,6 +52,8 @@ import { AgentGlyph } from "./components/AgentGlyph.js";
 import { CommandPalette, type CommandItem } from "./components/CommandPalette.js";
 import { ProvidersPage, providerState } from "./components/ProvidersPage.js";
 import { placeTask } from "./services/board.js";
+import { needsYou } from "./services/inbox.js";
+import { NeedsYouInbox } from "./components/NeedsYouInbox.js";
 import markUrl from "./assets/icons/eleazar-mark.svg";
 import type {
   Approval,
@@ -80,6 +83,7 @@ const isolationLabels: Record<ProjectIsolation, string> = { worktree: "Worktree 
 const runStatuses = { ...statuses, planned: "Preparando" };
 // Grouped by what the operator came to do: act on work, look back at it, or set things up.
 const navigation = [
+  { id: "inbox", label: "Precisa de você", icon: Inbox, group: "Trabalho" },
   { id: "overview", label: "Visão geral", icon: LayoutDashboard, group: "Trabalho" },
   { id: "tasks", label: "Fila de tarefas", icon: ListTodo, group: "Trabalho" },
   { id: "approvals", label: "Aprovações", icon: ShieldCheck, group: "Trabalho" },
@@ -147,7 +151,7 @@ function routeId(hash: string, page: "executions" | "tasks"): string | null {
     return null;
   }
 }
-type PageRoute = "overview" | "projects" | "tasks" | "executions" | "approvals" | "providers" | "logs" | "not-found";
+type PageRoute = "overview" | "inbox" | "projects" | "tasks" | "executions" | "approvals" | "providers" | "logs" | "not-found";
 type Theme = "light" | "dark";
 
 const narrowScreen = "(max-width: 760px)";
@@ -160,7 +164,7 @@ function preferredTheme(): Theme {
 
 function pageFromHash(hash: string): PageRoute {
   const value = hash.replace(/^#\/?/, "").split("/")[0] || "overview";
-  return ["overview", "projects", "tasks", "executions", "approvals", "providers", "logs"].includes(value) ? value as PageRoute : "not-found";
+  return ["overview", "inbox", "projects", "tasks", "executions", "approvals", "providers", "logs"].includes(value) ? value as PageRoute : "not-found";
 }
 function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry | undefined }) {
   const failed = run.status === "failed";
@@ -481,11 +485,12 @@ export function App({ client }: { client: ControlRoomClient }) {
   const selectedPreviousRuns = selectedTask ? (data?.runs ?? []).filter((run) => run.taskId === selectedTask.id).slice(1).reverse() : [];
   const placed = (task: Task) => placeTask(task, data?.runs ?? [], data?.actions ?? [], data?.pullRequests ?? []);
   const projectsWithTasks = projects.map((project) => ({ project, cards: tasks.filter((task) => task.projectId === project.id).map(placed) }));
+  const inbox = data ? needsYou(data) : [];
   const pendingPublications = (taskId: string) => (data?.actions ?? []).filter((action) => action.taskId === taskId && action.status === "pending").length;
   const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
   const selectedTaskFinished = selectedTask?.status === "completed" || selectedTask?.status === "failed";
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
-    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
+    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], inbox: ["Precisa de você", "Tudo o que espera uma decisão sua, em todos os projetos."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
   const commandItems: CommandItem[] = [
     { id: "action-new-task", group: "Ações", label: "Nova tarefa", hint: "Descrever o que fazer", icon: Plus, run: () => { window.location.hash = "/tasks/new"; } },
@@ -543,6 +548,9 @@ export function App({ client }: { client: ControlRoomClient }) {
               <span>{item.label}</span>
               {item.id === "approvals" && approvals.length > 0 && (
                 <b className="nav-count">{approvals.length}</b>
+              )}
+              {item.id === "inbox" && inbox.length > 0 && (
+                <b className="nav-count" aria-label={`${inbox.length} item(ns)`}>{inbox.length}</b>
               )}
             </a>
           ))}
@@ -760,7 +768,13 @@ export function App({ client }: { client: ControlRoomClient }) {
                 onChange={(provider, patch) => void changeProvider(provider, () => client.updateProvider(provider, patch))} /> :
               <div className={`dashboard-grid page-${active}`}>
                 <div className="primary-column">
+                  {active === "inbox" && <Panel id="inbox" title="Decisões pendentes" eyebrow="PRECISA DE VOCÊ" action={<span className="count-badge amber">{inbox.length}</span>}>
+                    <NeedsYouInbox items={inbox} projectName={projectName} />
+                  </Panel>}
                   {active === "overview" && <div className="executive-column">
+                    {inbox.length > 0 && <Panel id="needs-you" title="Precisa de você" eyebrow="SUA DECISÃO" action={<a className="text-button" href="#/inbox">Ver tudo ({inbox.length}) <ArrowRight size={15} aria-hidden="true" /></a>}>
+                      <NeedsYouInbox items={inbox} projectName={projectName} limit={4} />
+                    </Panel>}
                     <Panel
                       id="next-tasks"
                       title="Próximas tarefas"

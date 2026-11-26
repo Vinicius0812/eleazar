@@ -54,6 +54,20 @@ describe("Task tabs", () => {
   });
 });
 
+describe("Needs you", () => {
+  it("lists what waits on the operator and counts it in the menu", async () => {
+    window.location.hash = "#/inbox";
+    const controlled = client();
+    const snapshot = await controlled.getSnapshot();
+    vi.spyOn(controlled, "getSnapshot").mockResolvedValue({ ...snapshot, tasks: [{ ...snapshot.tasks[0]!, status: "failed" }], runs: [{ ...snapshot.runs[0]!, status: "failed" }] });
+    render(<App client={controlled} />);
+    const list = within(await screen.findByRole("list", { name: "Itens que precisam de você" }));
+    expect(list.getByText("Resultado")).toBeInTheDocument();
+    expect(list.getByRole("link", { name: "Ver motivo: Resultado" })).toHaveAttribute("href", "#/tasks/task-1");
+    expect(screen.getByRole("link", { name: "Precisa de você" })).toHaveTextContent("1");
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";

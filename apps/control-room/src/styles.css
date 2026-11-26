@@ -296,7 +296,7 @@ main[tabindex="-1"]:focus-visible {
 .sidebar-collapsed .nav-count,
 .sidebar-collapsed .sidebar .sidebar-projects,
 .sidebar-collapsed .sidebar-bottom { display: none; }
-.dashboard-grid.page-projects, .dashboard-grid.page-tasks, .dashboard-grid.page-executions, .dashboard-grid.page-logs, .dashboard-grid.page-approvals { grid-template-columns: minmax(0, 1fr); }
+.dashboard-grid.page-projects, .dashboard-grid.page-tasks, .dashboard-grid.page-executions, .dashboard-grid.page-logs, .dashboard-grid.page-approvals, .dashboard-grid.page-inbox { grid-template-columns: minmax(0, 1fr); }
 .dashboard-grid.page-approvals .secondary-column { display: grid; grid-template-columns: minmax(0, 1fr); }
 .route-not-found { max-width: 620px; margin: 80px auto; padding: 36px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }.route-not-found h1 { margin: 7px 0; font-size: 26px; }.route-not-found p { margin-bottom: 20px; color: var(--text-muted); font-size: 14px; }
 .execution-header-actions { display: flex; gap: 9px; flex-wrap: wrap; }
@@ -3007,3 +3007,14 @@ dialog.command-palette:not([open]) { display: none; }
 .explorer-page > .task-tabs { margin-top: 4px; }
 .task-publish-empty { display: grid; gap: 6px; text-align: left; }
 .task-publish-empty p { margin: 0; }
+
+/* "Precisa de você": every decision waiting on the operator. */
+.inbox-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.inbox-item { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.inbox-reason { display: inline-flex; align-items: center; gap: 6px; color: var(--warning); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
+.inbox-item.reason-failure .inbox-reason { color: var(--danger); }
+.inbox-item.reason-permission .inbox-reason, .inbox-item.reason-publication .inbox-reason { color: var(--accent); }
+.inbox-copy { display: grid; gap: 2px; min-width: 0; }
+.inbox-copy strong { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
+.inbox-copy small, .inbox-item time { color: var(--text-muted); font-size: 12px; }
+@media (max-width: 760px) { .inbox-item { grid-template-columns: 1fr; gap: 6px; } }
