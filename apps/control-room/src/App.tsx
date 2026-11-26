@@ -10,6 +10,8 @@ import {
   Activity,
   ArrowRight,
   Bell,
+  BellOff,
+  Keyboard,
   Check,
   ChevronDown,
   ChevronRight,
@@ -54,6 +56,8 @@ import { ProvidersPage, providerState } from "./components/ProvidersPage.js";
 import { placeTask } from "./services/board.js";
 import { needsYou } from "./services/inbox.js";
 import { NeedsYouInbox } from "./components/NeedsYouInbox.js";
+import { resolveShortcut, shortcutList, type ShortcutAction } from "./services/shortcuts.js";
+import { notificationSupport, notificationsBetween, showNotifications } from "./services/notifications.js";
 import markUrl from "./assets/icons/eleazar-mark.svg";
 import type {
   Approval,
@@ -238,15 +242,33 @@ export function App({ client }: { client: ControlRoomClient }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>(readCollapsedProjects);
   useEffect(() => { window.localStorage.setItem("eleazar.collapsedProjects", JSON.stringify(collapsedProjects)); }, [collapsedProjects]);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [notificationsOn, setNotificationsOn] = useState(() => window.localStorage.getItem("eleazar.notifications") === "on" && notificationSupport() === "granted");
+  useEffect(() => { window.localStorage.setItem("eleazar.notifications", notificationsOn ? "on" : "off"); }, [notificationsOn]);
+  // Rebuilt every render so the handler sees the current route; the listener itself is added once.
+  const onShortcut = useRef<(action: ShortcutAction) => void>(() => undefined);
+  const blocksShortcuts = useRef(false);
   useEffect(() => {
+    let pending = false;
+    let pendingTimer: number | undefined;
     function onKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((value) => !value);
+        return;
       }
+      if (event.defaultPrevented || blocksShortcuts.current) { pending = false; return; }
+      const resolved = resolveShortcut(event, pending);
+      pending = resolved.pending;
+      window.clearTimeout(pendingTimer);
+      // A "G" that is not followed by another key soon is forgotten.
+      if (pending) pendingTimer = window.setTimeout(() => { pending = false; }, 1_500);
+      if (!resolved.action) return;
+      event.preventDefault();
+      onShortcut.current(resolved.action);
     }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.clearTimeout(pendingTimer); };
   }, []);
   const focusTrigger = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -339,6 +361,15 @@ export function App({ client }: { client: ControlRoomClient }) {
     timer = window.setTimeout(poll, pollMs);
     return () => { alive = false; window.clearTimeout(timer); };
   }, [client, hasLiveTask, hasOpenPullRequest, pollMs, data?.tasks]);
+  const previousFacts = useRef<ControlRoomSnapshot | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const previous = previousFacts.current;
+    previousFacts.current = data;
+    // Only while the operator is elsewhere: on screen, the page itself already shows the change.
+    if (!notificationsOn || (document.visibilityState === "visible" && document.hasFocus())) return;
+    showNotifications(notificationsBetween(previous, data));
+  }, [data, notificationsOn]);
   function open(next: DialogState) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
@@ -495,6 +526,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   const commandItems: CommandItem[] = [
     { id: "action-new-task", group: "Ações", label: "Nova tarefa", hint: "Descrever o que fazer", icon: Plus, run: () => { window.location.hash = "/tasks/new"; } },
     { id: "action-new-project", group: "Ações", label: "Cadastrar projeto", hint: "Adicionar pastas do workspace", icon: FolderGit2, run: () => open({ kind: "project" }) },
+    { id: "action-shortcuts", group: "Ações", label: "Atalhos de teclado", hint: "?", keywords: "teclado ajuda", icon: Keyboard, run: () => setShortcutsOpen(true) },
+    { id: "action-notifications", group: "Ações", label: notificationsOn ? "Desativar notificações" : "Ativar notificações do navegador", keywords: "avisos alerta", icon: notificationsOn ? BellOff : Bell, run: () => void toggleNotifications() },
     { id: "action-theme", group: "Ações", label: theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro", keywords: "tema cores", icon: theme === "dark" ? Sun : Moon, run: () => setTheme((value) => value === "dark" ? "light" : "dark") },
     ...navigation.map((item) => ({ id: `page-${item.id}`, group: "Ir para", label: item.label, keywords: item.group, icon: item.icon, run: () => navigate(item.id as PageRoute) })),
     ...projects.map((project) => ({ id: `project-${project.id}`, group: "Projetos", label: project.name, hint: `${tasks.filter((task) => task.projectId === project.id).length} tarefa(s)`, keywords: project.directories.map((directory) => `${directory.name} ${directory.path}`).join(" "), icon: FolderGit2, run: () => showProjectTasks(project.id) })),
@@ -515,6 +548,32 @@ export function App({ client }: { client: ControlRoomClient }) {
     : active === "not-found" ? [{ label: "Página não encontrada" }]
     : active === "overview" ? [{ label: "Visão geral" }]
     : [{ label: navigation.find((item) => item.id === active)?.label ?? "" }];
+  blocksShortcuts.current = Boolean(dialog) || paletteOpen || shortcutsOpen;
+  onShortcut.current = (action) => {
+    const taskId = taskRoute && taskRoute !== "new" ? taskRoute : filesRoute?.taskId;
+    switch (action) {
+      case "help": setShortcutsOpen(true); break;
+      case "palette": setPaletteOpen(true); break;
+      case "new-task": window.location.hash = "/tasks/new"; break;
+      case "go-overview": navigate("overview"); break;
+      case "go-inbox": navigate("inbox"); break;
+      case "go-tasks": navigate("tasks"); break;
+      case "go-executions": navigate("executions"); break;
+      case "go-projects": navigate("projects"); break;
+      case "go-providers": navigate("providers"); break;
+      case "tab-conversation": if (taskId) openTask(taskId); break;
+      case "tab-files": if (taskId) window.location.hash = fileExplorerHash(taskId).slice(1); break;
+      case "tab-publish": if (taskId) window.location.hash = `/tasks/${encodeURIComponent(taskId)}/publish`; break;
+    }
+  };
+  async function toggleNotifications() {
+    if (notificationsOn) { setNotificationsOn(false); setNotice("Notificações do navegador desativadas."); return; }
+    const support = notificationSupport();
+    if (support === "unsupported") { setNotice("Este navegador não oferece notificações."); return; }
+    const permission = support === "granted" ? support : await window.Notification.requestPermission();
+    if (permission === "granted") { setNotificationsOn(true); setNotice("Notificações ativadas: avisaremos quando algo precisar de você ou um turno terminar."); }
+    else setNotice("O navegador bloqueou as notificações. Libere-as nas configurações do site para ativar.");
+  }
   return (
     <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>
@@ -589,6 +648,15 @@ export function App({ client }: { client: ControlRoomClient }) {
           </nav>
         )}
         <div className="sidebar-actions">
+          <button className="theme-toggle" type="button" aria-pressed={notificationsOn} onClick={() => void toggleNotifications()}
+            aria-label={notificationsOn ? "Desativar notificações" : "Ativar notificações"} title={collapsed ? (notificationsOn ? "Desativar notificações" : "Ativar notificações") : undefined}>
+            {notificationsOn ? <Bell size={17} aria-hidden="true" /> : <BellOff size={17} aria-hidden="true" />}
+            <span>{notificationsOn ? "Notificações ativas" : "Notificações"}</span>
+          </button>
+          <button className="theme-toggle" type="button" onClick={() => setShortcutsOpen(true)} aria-keyshortcuts="Shift+?" aria-label="Atalhos de teclado" title={collapsed ? "Atalhos de teclado (?)" : undefined}>
+            <Keyboard size={17} aria-hidden="true" />
+            <span>Atalhos <kbd>?</kbd></span>
+          </button>
           <button
             className="theme-toggle"
             type="button"
@@ -1193,6 +1261,20 @@ export function App({ client }: { client: ControlRoomClient }) {
           </>}
         </main>}
       </div>
+      {shortcutsOpen && (
+        <Modal title="Atalhos de teclado" onClose={() => setShortcutsOpen(false)}>
+          <p className="form-intro">Os atalhos de uma tecla não agem enquanto você digita em um campo.</p>
+          <dl className="shortcut-list">
+            {shortcutList.map((item) => (
+              <div key={item.label}>
+                <dt>{item.keys.map((key, index) => <span key={key}>{index > 0 && <span className="shortcut-then">{item.keys[0] === "G" ? " depois " : " + "}</span>}<kbd>{key}</kbd></span>)}</dt>
+                <dd>{item.label}</dd>
+              </div>
+            ))}
+          </dl>
+          <div className="form-actions"><button type="button" className="primary" onClick={() => setShortcutsOpen(false)}>Entendi</button></div>
+        </Modal>
+      )}
       {dialog && (
         <Modal
           title={

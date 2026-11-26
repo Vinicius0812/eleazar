@@ -68,6 +68,25 @@ describe("Needs you", () => {
   });
 });
 
+describe("Keyboard shortcuts", () => {
+  it("goes to a screen with G then a key and lists the shortcuts with ?", async () => {
+    window.location.hash = "#/overview";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    await screen.findByRole("heading", { name: "Sala de controle" });
+    await user.keyboard("gi");
+    await waitFor(() => expect(window.location.hash).toBe("#/inbox"));
+    await user.keyboard("?");
+    const dialog = within(await screen.findByRole("dialog", { name: "Atalhos de teclado" }));
+    expect(dialog.getByText("Ir para Precisa de você")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Entendi" }));
+    window.location.hash = "#/tasks/task-1";
+    await screen.findByRole("heading", { name: "Sua solicitação" });
+    await user.keyboard("3");
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks/task-1/publish"));
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
