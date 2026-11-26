@@ -83,7 +83,10 @@ export interface AgentRunRequest {
   additionalDirectories?: string[];
   taskKind?: TaskKind;
   signal?: AbortSignal;
+  /** Hard limit for the whole turn. */
   timeoutMs?: number;
+  /** Ends the turn when the agent sends nothing for this long; time spent waiting for the operator does not count. */
+  idleTimeoutMs?: number;
   onUpdate?: (update: AgentUpdate) => void;
   onPermission?: (request: AgentPermissionRequest) => Promise<string | null> | string | null;
 }

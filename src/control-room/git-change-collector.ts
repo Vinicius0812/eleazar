@@ -89,7 +89,7 @@ async function lineCount(directory: string, path: string): Promise<number | null
 }
 async function git(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string }> {
   try {
-    const result = await runProcess("git", args, { cwd, timeoutMs: 5_000, env: gitEnvironment() });
+    const result = await runProcess("git", args, { cwd, timeoutMs: 60_000, env: gitEnvironment() });
     return { ok: result.exitCode === 0 && !result.timedOut, stdout: result.stdout };
   } catch { return { ok: false, stdout: "" }; }
 }

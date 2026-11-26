@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
+import { turnLimits } from "../src/adapters/acp-client.js";
 import { CodexAcpClient } from "../src/adapters/codex-acp.js";
 
 // Test seam: before the real process termination, optionally wait (bounded) for a report file that the fixture
@@ -115,5 +116,23 @@ describe("Codex ACP stdio", () => {
     expect(await cancelled).toMatchObject({ status: "error", error: expect.stringContaining("cancelada") });
     expect(await client().run({ cwd: process.cwd(), prompt: "HANG", timeoutMs: 100 })).toMatchObject({ status: "error", error: expect.stringContaining("esgotado") });
     expect(await client().run({ cwd: process.cwd(), prompt: "EXIT", timeoutMs: 2000 })).toMatchObject({ status: "error", error: expect.stringContaining("encerrou") });
+  });
+
+  it("encerra por inatividade, mas nao enquanto uma ferramenta roda ou o operador decide", async () => {
+    expect(await client().run({ cwd: process.cwd(), prompt: "HANG", timeoutMs: 10_000, idleTimeoutMs: 150 }))
+      .toMatchObject({ status: "error", error: expect.stringContaining("sem enviar atividade") });
+    // A running tool call pauses the inactivity limit; only the total limit ends it.
+    expect(await client().run({ cwd: process.cwd(), prompt: "TOOLHANG", timeoutMs: 900, idleTimeoutMs: 100 }))
+      .toMatchObject({ status: "error", error: expect.stringContaining("limite total") });
+    // The operator takes longer than the inactivity limit to answer the permission.
+    const slowOperator = async () => { await new Promise((resolve) => setTimeout(resolve, 450)); return "allow"; };
+    expect(await client().run({ cwd: process.cwd(), prompt: "Fazer", timeoutMs: 10_000, idleTimeoutMs: 150, onPermission: slowOperator }))
+      .toMatchObject({ status: "success", response: "parte 1 parte 2 permitiu" });
+  });
+
+  it("le os limites do turno do ambiente, em minutos, com 0 para desligar", () => {
+    expect(turnLimits({})).toEqual({ totalMs: 60 * 60_000, idleMs: 10 * 60_000 });
+    expect(turnLimits({ ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES: "120", ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES: "2,5" })).toEqual({ totalMs: 120 * 60_000, idleMs: 150_000 });
+    expect(turnLimits({ ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES: "0", ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES: "abc" })).toEqual({ totalMs: null, idleMs: 10 * 60_000 });
   });
 });

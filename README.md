@@ -136,6 +136,19 @@ Cada projeto Git escolhe, na tela **Projetos**, entre **Worktree por tarefa** e 
 
 Defina `ELEAZAR_CONTROL_ROOM_WORKTREES=off` antes de `npm run control-room` para rodar sempre direto na pasta.
 
+### Limite de tempo do turno
+
+Um turno de agente (Codex, Claude Code ou Antigravity) termina quando o agente fica **10 minutos sem enviar nada** ou quando chega ao teto de **60 minutos**. O tempo de inatividade não corre enquanto uma ferramenta ainda está em execução (um build ou uma suíte de testes longa) nem enquanto uma permissão espera a sua resposta. Para projetos grandes, ajuste antes de `npm run control-room`:
+
+```powershell
+$env:ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES = "120"   # teto do turno; 0 desliga
+$env:ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES = "15"    # inatividade; 0 desliga
+```
+
+### Explorar arquivos e diff
+
+O botão **Explorar arquivos** (na tarefa e no resultado da execução) abre a pasta em que o agente trabalha, seja a worktree da tarefa ou a pasta do projeto no modo direto, com a lista de alterações, a árvore completa e o diff de cada arquivo. Funciona com qualquer servidor Git (GitHub, Gogs ou nenhum) porque só lê o repositório local.
+
 ### Continuar a mesma tarefa
 
 Quando um turno termina (`completed` ou `failed`), a tela da tarefa mostra **Nova mensagem para o agente**. O novo turno roda na mesma pasta ou worktree. Com Codex e Claude Code, a sessão ACP anterior é retomada quando o agente anuncia suporte; caso contrário o pedido original segue junto com a nova mensagem.

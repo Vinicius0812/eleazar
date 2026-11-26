@@ -25,6 +25,32 @@ export interface AcpSessionInfo {
   meta?: Record<string, unknown> | null;
 }
 
+/** Turn limits. Large repositories can keep an agent busy well past a few minutes, so the default is
+ * generous and a stalled agent is caught by inactivity instead. Both can be set by the host's environment. */
+export const defaultTurnTimeoutMs = 60 * 60_000;
+export const defaultIdleTimeoutMs = 10 * 60_000;
+/** Without a run limit (inspection), the connection keeps the previous five minute cap. */
+const defaultConnectionTimeoutMs = 5 * 60_000;
+
+/** Minutes from `ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES` / `ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES`; `0` turns the limit off. */
+export function turnLimits(env: NodeJS.ProcessEnv = process.env): { totalMs: number | null; idleMs: number | null } {
+  return {
+    totalMs: minutesFrom(env.ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES, defaultTurnTimeoutMs),
+    idleMs: minutesFrom(env.ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES, defaultIdleTimeoutMs)
+  };
+}
+function minutesFrom(value: string | undefined, fallback: number): number | null {
+  if (value === undefined || value.trim() === "") return fallback;
+  const minutes = Number(value.replace(",", "."));
+  if (!Number.isFinite(minutes) || minutes < 0) return fallback;
+  return minutes === 0 ? null : Math.round(minutes * 60_000);
+}
+export function describeDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} s`;
+  const minutes = Math.round(ms / 60_000);
+  return `${minutes} min`;
+}
+
 /** How long to wait for the agent to confirm the required mode after session/set_mode. */
 const modeConfirmationMs = 2_000;
 
@@ -67,8 +93,11 @@ export class AcpClient {
     const response = new ResponseText();
     let modeOptions: acp.SessionConfigOption[] | undefined;
     const turn: TurnState = { active: false };
+    const limits = turnLimits();
+    const timeoutMs = request.timeoutMs ?? limits.totalMs ?? undefined;
+    const idleTimeoutMs = request.idleTimeoutMs ?? limits.idleMs ?? undefined;
     try {
-      const result = await this.withConnection(request, async (agent, state, setActiveSession) => {
+      const result = await this.withConnection({ ...request, ...(timeoutMs === undefined ? {} : { timeoutMs }) }, async (agent, state, setActiveSession) => {
         const session = await openSession(agent, state.capabilities, request.cwd, request.sessionId, request.additionalDirectories, this.deps.sessionMeta?.(request));
         sessionId = session.sessionId;
         setActiveSession(sessionId);
@@ -115,7 +144,7 @@ export class AcpClient {
         }
         request.onUpdate?.({ sessionId: notification.sessionId, kind: notification.update.sessionUpdate,
           payload: notification.update as unknown as Record<string, unknown> });
-      }, turn);
+      }, turn, idleTimeoutMs ?? null);
       return { provider: this.provider, status: result.stopReason === "end_turn" ? "success" : "error", response: response.text,
         durationMs: Date.now() - startedAt, ...(sessionId ? { sessionId } : {}),
         ...(result.usage ? { usage: result.usage } : {}),
@@ -130,19 +159,36 @@ export class AcpClient {
     request: AgentRunRequest,
     operation: (agent: acp.ClientContext, state: Omit<AcpSessionInfo, "sessionId" | "configOptions" | "modes" | "meta">, setActiveSession: (id: string) => void) => Promise<T>,
     onUpdate?: (notification: acp.SessionNotification) => void,
-    turn: TurnState = { active: false }
+    turn: TurnState = { active: false },
+    idleTimeoutMs: number | null = null
   ): Promise<T> {
+    // Activity watchdog: any message from the agent counts. A permission waiting for the operator, or a tool
+    // call still running (a long build or test command reports nothing until it ends), pauses it.
+    const activity = { last: Date.now(), waitingOperator: 0, runningTools: new Set<string>() };
+    const touch = () => { activity.last = Date.now(); };
+    const trackTools = (notification: acp.SessionNotification) => {
+      const update = notification.update as { sessionUpdate: string; toolCallId?: string; status?: string | null };
+      if ((update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") || !update.toolCallId) return;
+      if (update.status === "completed" || update.status === "failed") activity.runningTools.delete(update.toolCallId);
+      else if (update.sessionUpdate === "tool_call" || update.status === "in_progress" || update.status === "pending") activity.runningTools.add(update.toolCallId);
+    };
     const runtime = await this.deps.resolveRuntime();
     const { command, args } = this.deps.launch(runtime);
     const child = spawn(command, args, {
       cwd: request.cwd, stdio: "pipe", shell: false, windowsHide: true,
       detached: process.platform !== "win32", env: gitEnvironment(this.deps.environment(runtime))
     });
+    child.stderr.on("data", touch);
     child.stderr.resume();
     const stream = acp.ndJsonStream(Writable.toWeb(child.stdin), Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
     const app = acp.client({ name: "eleazar" })
-      .onNotification(acp.methods.client.session.update, ({ params }) => onUpdate?.(params))
+      .onNotification(acp.methods.client.session.update, ({ params }) => { touch(); trackTools(params); onUpdate?.(params); })
       .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
+        touch();
+        activity.waitingOperator += 1;
+        try { return await answerPermission(params); } finally { activity.waitingOperator -= 1; touch(); }
+      });
+    const answerPermission = async (params: acp.RequestPermissionRequest) => {
         // A permission asked outside the turn (replayed history, or late during teardown) is not an
         // active tool call: cancel it safely without involving the executor.
         // The turn can end (or the run be aborted) while we await file checks or the operator's choice,
@@ -170,14 +216,22 @@ export class AcpClient {
         return live() && choice && options.some((item) => item.id === choice)
           ? { outcome: { outcome: "selected" as const, optionId: choice } }
           : cancelled;
-      });
+    };
     const connection = app.connect(stream);
-    const timeoutMs = request.timeoutMs ?? 5 * 60_000;
+    const timeoutMs = request.timeoutMs ?? defaultConnectionTimeoutMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setInterval> | undefined;
     let abortListener: (() => void) | undefined;
     let activeSession: string | undefined;
     const interruption = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`Tempo ACP esgotado apos ${timeoutMs} ms.`)), timeoutMs);
+      timer = setTimeout(() => reject(new Error(`Tempo ACP esgotado apos ${describeDuration(timeoutMs)}: limite total do turno (ELEAZAR_AGENT_TURN_TIMEOUT_MINUTES).`)), timeoutMs);
+      if (idleTimeoutMs) {
+        watchdog = setInterval(() => {
+          if (activity.waitingOperator > 0 || activity.runningTools.size > 0 || Date.now() - activity.last < idleTimeoutMs) return;
+          reject(new Error(`Tempo ACP esgotado: o agente ficou ${describeDuration(idleTimeoutMs)} sem enviar atividade (ELEAZAR_AGENT_IDLE_TIMEOUT_MINUTES).`));
+        }, Math.max(20, Math.min(5_000, Math.floor(idleTimeoutMs / 4))));
+        watchdog.unref?.();
+      }
       abortListener = () => reject(new Error("Execucao ACP cancelada."));
       request.signal?.addEventListener("abort", abortListener, { once: true });
       if (request.signal?.aborted) abortListener();
@@ -208,6 +262,7 @@ export class AcpClient {
     } finally {
       turn.active = false;
       if (timer) clearTimeout(timer);
+      if (watchdog) clearInterval(watchdog);
       if (abortListener) request.signal?.removeEventListener("abort", abortListener);
       // The ACP bridge may spawn a native CLI; it was spawned detached (POSIX), so its group is ours.
       await terminateProcessTree(child, { groupIsolated: process.platform !== "win32" });

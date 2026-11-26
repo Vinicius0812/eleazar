@@ -70,6 +70,8 @@ function handle(message) {
     if (text === "EXIT") { process.exit(3); return; }
     if (text === "HANG") return;
     const sessionId = message.params.sessionId;
+    // A long command: the tool call starts and nothing else arrives until it ends.
+    if (text === "TOOLHANG") { notify(sessionId, { sessionUpdate: "tool_call", toolCallId: "tool-long", title: "npm test", status: "in_progress" }); return; }
     notify(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "parte 1 " } });
     notify(sessionId, { sessionUpdate: "tool_call", toolCallId: "tool-1", title: "ler arquivo", status: "pending" });
     notify(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "parte 2" } });
