@@ -754,10 +754,12 @@ describe("Control Room routes", () => {
     const snapshot = await controlled.getSnapshot();
     snapshot.projects[0]!.isolation = "direct";
     const update = vi.spyOn(controlled, "updateProjectIsolation"); const register = vi.spyOn(controlled, "registerProject");
-    window.location.hash = "#/projects";
+    window.location.hash = "#/projects/project-1";
     render(<App client={controlled} />);
     await userEvent.selectOptions(await screen.findByLabelText("Onde o agente trabalha em Projeto"), "worktree");
     expect(update).toHaveBeenCalledWith("project-1", "worktree");
+    window.location.hash = "#/projects";
+    expect(await screen.findByRole("link", { name: "Abrir Projeto" })).toHaveAttribute("href", "#/projects/project-1");
     await userEvent.click(await screen.findByRole("button", { name: "Cadastrar projeto" }));
     await userEvent.type(screen.getByLabelText("Nome do projeto"), "Novo");
     await userEvent.type(screen.getByLabelText("Caminho local absoluto"), "C:/novo");

@@ -3155,3 +3155,25 @@ dialog.command-palette:not([open]) { display: none; }
   .terminal-output { height: 50vh; }
 }
 .project-page, .project-terminal, .comparison { grid-template-columns: minmax(0, 1fr); }
+
+/* Project list: general facts only; settings live on the project's screen. */
+.project-grid .project-card { display: grid; gap: 12px; padding: 16px; color: var(--text); text-decoration: none; border-radius: 12px; }
+.project-grid .project-card:hover { text-decoration: none; }
+.project-card-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.project-card-heading .project-icon { margin: 0; }
+.project-card-title { display: grid; gap: 2px; min-width: 0; }
+.project-card-title .project-name { font-size: 14px; color: var(--text-strong); }
+.project-card-title small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.project-card-arrow { color: var(--text-muted); }
+.project-card-facts { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+.project-card-facts span { display: inline-flex; gap: 7px; align-items: center; }
+.project-icon.has-favicon { background: var(--surface-hover); }
+.project-icon img { display: block; object-fit: contain; }
+.project-page-heading .project-icon { width: 48px; height: 48px; margin: 0; }
+.project-page-facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 12px 0 0; }
+.project-page-facts div { display: grid; gap: 2px; }
+.project-page-facts dt { color: var(--text-muted); font-size: 12px; }
+.project-page-facts dd { margin: 0; color: var(--text-strong); font-size: 16px; font-weight: 700; }
+.project-page-settings { margin-top: 14px; max-width: 360px; }
+.project-page-settings .project-isolation small { color: var(--text-muted); }
+.project-isolation-note { margin: 0; color: var(--text-muted); font-size: 12px; }

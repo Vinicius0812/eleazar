@@ -1,7 +1,8 @@
 import { useMemo, type ReactNode } from "react";
-import { FolderGit2, FolderTree, ListTodo, Pin, Plus, TerminalSquare } from "lucide-react";
+import { FolderTree, ListTodo, Pin, Plus, TerminalSquare } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph.js";
+import { ProjectIcon } from "./ProjectIcon.js";
 import { FileExplorerPage, projectExplorerSource, type FileExplorerLocation } from "./FileExplorerPage.js";
 import { pinnedFirst, relativeTime, type BoardCard } from "../services/board.js";
 import type { ControlRoomClient, Project } from "../services/contracts.js";
@@ -37,7 +38,9 @@ const sections: ReadonlyArray<{ id: ProjectSection; label: string; icon: typeof 
 ];
 
 /** One project: its folders, its tasks, a file explorer over its folders and a terminal in them. */
-export function ProjectPage({ client, project, cards, section, location, statusLabel, actions, terminal, taskActions }: {
+export function ProjectPage({ client, project, cards, section, location, statusLabel, actions, terminal, taskActions, settings }: {
+  /** Project settings shown under the heading, such as where agents work. */
+  settings?: ReactNode;
   client: ControlRoomClient;
   project: Project;
   /** The project's tasks, already placed on the board. */
@@ -58,7 +61,7 @@ export function ProjectPage({ client, project, cards, section, location, statusL
   return (
     <section className="project-page" aria-labelledby="project-title">
       <header className="project-page-heading">
-        <span className="project-icon purple" aria-hidden="true"><FolderGit2 size={22} /></span>
+        <ProjectIcon client={client} projectId={project.id} size={26} />
         <div>
           <span className="eyebrow">PROJETO</span>
           <h1 id="project-title" tabIndex={-1}>{project.name}</h1>
@@ -67,6 +70,12 @@ export function ProjectPage({ client, project, cards, section, location, statusL
               <li key={directory.id} title={directory.path}><strong>{directory.name}</strong> <code>{directory.path}</code>{directory.isGitRepository && <span className="chip">Git</span>}</li>
             ))}
           </ul>
+          <dl className="project-page-facts">
+            <div><dt>Tarefas em aberto</dt><dd>{active.filter((card) => card.task.status !== "completed").length}</dd></div>
+            <div><dt>Concluídas</dt><dd>{cards.filter((card) => card.task.status === "completed").length}</dd></div>
+            <div><dt>Arquivadas</dt><dd>{archived.length}</dd></div>
+          </dl>
+          {settings && <div className="project-page-settings">{settings}</div>}
         </div>
         <div className="heading-actions">{actions}</div>
       </header>

@@ -56,6 +56,7 @@ import { TaskTabs, taskPublishRoute } from "./components/TaskTabs.js";
 import { ComparisonPage, comparisonRoute } from "./components/ComparisonPage.js";
 import { ProjectPage, projectHash, projectRoute } from "./components/ProjectPage.js";
 import { ProjectTerminal } from "./components/ProjectTerminal.js";
+import { ProjectList } from "./components/ProjectList.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -776,6 +777,15 @@ export function App({ client }: { client: ControlRoomClient }) {
                        <a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>
                      </>}
                      taskActions={(card) => manageTask(card.task, true)}
+                     settings={viewedProject.directories.every((directory) => directory.isGitRepository) ? <label className="project-isolation">
+                       Onde o agente trabalha
+                       <select value={viewedProject.isolation} disabled={busy} aria-label={`Onde o agente trabalha em ${viewedProject.name}`}
+                         onChange={(event) => { const isolation = event.target.value as ProjectIsolation; void mutate(() => client.updateProjectIsolation(viewedProject.id, isolation), `${viewedProject.name}: as próximas execuções usarão "${isolationLabels[isolation]}".`); }}>
+                         <option value="worktree">{isolationLabels.worktree}</option>
+                         <option value="direct">{isolationLabels.direct}</option>
+                       </select>
+                       <small>{viewedProject.isolation === "worktree" ? "Cada tarefa ganha uma branch e uma worktree próprias." : "Os agentes alteram a pasta do projeto, uma tarefa por vez."}</small>
+                     </label> : <p className="project-isolation-note">Pastas sem Git: os agentes trabalham direto nelas.</p>}
                      terminal={<ProjectTerminal key={viewedProject.id} client={client} project={viewedProject} />} />
                  : <div className="empty">Projeto não encontrado. <a className="text-button" href="#/projects">Voltar aos projetos</a></div>}
              </section>
@@ -992,58 +1002,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                       </button>
                     }
                   >
-                    <div className="project-grid">
-                      {projects.map((project) => (
-                        <div className="project-item" key={project.id}>
-                        <button
-                          className={`project-card ${projectFilter === project.id ? "selected" : ""}`}
-                          aria-label={`Abrir ${project.name}`}
-                          onClick={() => { window.location.hash = projectHash(project.id).slice(1); }}
-                        >
-                          <span className="project-icon purple">
-                            <FolderGit2 size={22} />
-                          </span>
-                          <span className="project-name">{project.name}</span>
-                          <span className="project-path" title={project.path}>
-                            {project.directories.length} diretório{project.directories.length === 1 ? "" : "s"}
-                          </span>
-                          <span className="project-directories" aria-label={`Diretórios de ${project.name}`}>
-                            {project.directories.map((directory) => (
-                              <span key={directory.id} title={directory.path}>
-                                {directory.name}{directory.isGitRepository ? " · Git" : ""}
-                              </span>
-                            ))}
-                          </span>
-                          <span className="project-footer">
-                            <span>
-                              <GitBranch size={12} />
-                              Local
-                            </span>
-                            <span>
-                              {
-                                tasks.filter(
-                                  (task) =>
-                                    task.projectId === project.id &&
-                                    task.status !== "completed",
-                                ).length
-                              }{" "}
-                              tarefas
-                              <ArrowRight size={13} />
-                            </span>
-                          </span>
-                        </button>
-                        <button type="button" className="text-button project-edit" disabled={busy} onClick={() => open({ kind: "edit-project", project })} aria-label={`Editar ${project.name}`}><Pencil size={14} aria-hidden="true" /> Editar</button>
-                        {project.directories.every((directory) => directory.isGitRepository) && <label className="project-isolation">
-                          Onde o agente trabalha
-                          <select value={project.isolation} disabled={busy} aria-label={`Onde o agente trabalha em ${project.name}`}
-                            onChange={(event) => { const isolation = event.target.value as ProjectIsolation; void mutate(() => client.updateProjectIsolation(project.id, isolation), `${project.name}: as próximas execuções usarão "${isolationLabels[isolation]}".`); }}>
-                            <option value="worktree">{isolationLabels.worktree}</option>
-                            <option value="direct">{isolationLabels.direct}</option>
-                          </select>
-                        </label>}
-                        </div>
-                      ))}
-                    </div>
+                    <ProjectList client={client} projects={projects} tasks={tasks} runs={data.runs} />
                     {!projects.length && (
                       <div className="empty">
                         Cadastre seu primeiro projeto local para começar.

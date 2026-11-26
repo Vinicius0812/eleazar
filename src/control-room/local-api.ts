@@ -9,6 +9,7 @@ import type { OutboundActionService } from "../core/outbound-actions.js";
 import type { PullRequestService } from "../core/pull-requests.js";
 import { TaskFileExplorer } from "./file-explorer.js";
 import type { ProjectTerminals, TerminalEvent } from "./project-terminal.js";
+import { findProjectIcon } from "./project-icon.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -140,6 +141,18 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
       return json(response, 202, terminals.get(sessionId));
     }
     if (method === "POST" && terminalMatch[2] === "close") { await readBody(request); return json(response, 200, await terminals.close(sessionId)); }
+  }
+  const iconMatch = /^\/api\/control-room\/projects\/([^/]+)\/icon$/.exec(url.pathname);
+  if (method === "GET" && iconMatch?.[1]) {
+    const project = service.getProject(decodeURIComponent(iconMatch[1]));
+    if (!project) throw Object.assign(new Error("Projeto local nao encontrado."), { statusCode: 404 });
+    const icon = await findProjectIcon(project);
+    if (!icon) throw Object.assign(new Error("O projeto nao tem favicon."), { statusCode: 404 });
+    // Served only as an image: nothing in an SVG may run if the address is opened directly.
+    response.writeHead(200, { "content-type": icon.contentType, "cache-control": "max-age=300", "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
+    response.end(icon.body);
+    return;
   }
   // The same read-only explorer over the project's own folders.
   const projectFilesMatch = /^\/api\/control-room\/projects\/([^/]+)\/(files\/roots|files\/content|files\/search|files|changes)$/.exec(url.pathname);

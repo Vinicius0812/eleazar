@@ -131,6 +131,8 @@ export interface ControlRoomClient {
   pinTask(taskId: string, pinned: boolean): Promise<Task>;
   /** Deletes the task and its history; the host refuses while it runs or still owns a worktree. */
   deleteTask(taskId: string): Promise<void>;
+  /** Address of the project's favicon (404 when it has none); optional for clients without one. */
+  projectIconUrl?(projectId: string): string;
   listTerminals(projectId: string): Promise<TerminalSession[]>;
   openTerminal(projectId: string, directoryId: string): Promise<TerminalSession>;
   /** Writes one command line to the shell; the output arrives through the stream. */

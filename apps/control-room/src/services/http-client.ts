@@ -48,6 +48,7 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
     pinTask(taskId, pinned) { return request<Task>(`/tasks/${encodeURIComponent(taskId)}/pin`, { method: "POST", body: JSON.stringify({ pinned }) }); },
     async deleteTask(taskId) { await request<unknown>(`/tasks/${encodeURIComponent(taskId)}/delete`, { method: "POST", body: "{}" }); },
+    projectIconUrl(projectId) { return `${baseUrl}/projects/${encodeURIComponent(projectId)}/icon`; },
     listTerminals(projectId) { return request<TerminalSession[]>(`/projects/${encodeURIComponent(projectId)}/terminals`); },
     openTerminal(projectId, directoryId) { return request<TerminalSession>(`/projects/${encodeURIComponent(projectId)}/terminals`, { method: "POST", body: JSON.stringify({ directoryId }) }); },
     sendTerminalInput(sessionId, command) { return request<TerminalSession>(`/terminals/${encodeURIComponent(sessionId)}/input`, { method: "POST", body: JSON.stringify({ command }) }); },
