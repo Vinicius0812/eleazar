@@ -333,6 +333,29 @@ export interface NewTask {
   comparisonId?: string;
 }
 
+/** A request the operator runs often, saved to start new tasks from it. */
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  /** Title for the new task; empty means "first line of the prompt". */
+  title: string;
+  prompt: string;
+  kind: TaskKind | null;
+  priority: TaskPriority;
+  /** Project the template belongs to; null when it serves any project. */
+  projectId: string | null;
+  createdAt: string;
+}
+
+export interface NewTaskTemplate {
+  name: string;
+  title?: string;
+  prompt: string;
+  kind?: TaskKind;
+  priority?: TaskPriority;
+  projectId?: string;
+}
+
 export interface ControlRoomStore {
   createProject(project: LocalProject): void;
   getProject(id: string): LocalProject | null;
@@ -378,6 +401,10 @@ export interface ControlRoomStore {
   getOutboundAction(id: string): TaskOutboundAction | null;
   listOutboundActions(taskId?: string): TaskOutboundAction[];
   /** Compare-and-set on the status so two decisions cannot both win. */
+  createTaskTemplate(template: TaskTemplate): void;
+  listTaskTemplates(): TaskTemplate[];
+  /** True when a template was removed. */
+  deleteTaskTemplate(id: string): boolean;
   updateOutboundAction(id: string, fromStatus: OutboundActionStatus, patch: Pick<TaskOutboundAction, "status"> & Partial<Pick<TaskOutboundAction, "result" | "decidedAt" | "finishedAt">>): TaskOutboundAction | null;
 }
 

@@ -62,6 +62,9 @@ export interface ControlRoomSnapshot { projects: Project[]; tasks: Task[]; runs:
 export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; isolation?: ProjectIsolation; }
 /** Attempts of one comparison; an attempt that could not start stays queued and is listed in `errors`. */
 export interface ComparisonStart { comparisonId: string; tasks: Task[]; errors: Array<{ taskId: string; provider: string; error: string }>; }
+/** A request the operator runs often, saved to start new tasks from it. */
+export interface TaskTemplate { id: string; name: string; title: string; prompt: string; kind: string | null; priority: Priority; projectId: string | null; createdAt: string; }
+export interface TaskTemplateInput { name: string; title?: string; prompt: string; kind?: string; priority?: Priority; projectId?: string; }
 export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
 /** `auto` or a registered provider id. */
 export type ExecutionProvider = string;
@@ -93,6 +96,10 @@ export interface ControlRoomClient {
   cancelExecution(executionId: string): Promise<void>;
   respondPermission(executionId: string, permissionId: string, optionId: string): Promise<void>;
   retryTask(taskId: string): Promise<void>;
+  listTemplates(): Promise<TaskTemplate[]>;
+  createTemplate(input: TaskTemplateInput): Promise<TaskTemplate>;
+  /** Removes a saved template and returns the ones left. */
+  deleteTemplate(templateId: string): Promise<TaskTemplate[]>;
   /** Runs the same request with several agents, each in its own task and worktree. */
   startComparison(input: CreateTaskInput, providers: string[]): Promise<ComparisonStart>;
   /** Keeps one attempt and sets the other finished ones aside. */

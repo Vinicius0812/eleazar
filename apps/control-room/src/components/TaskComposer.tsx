@@ -1,10 +1,14 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
-import { ArrowUp, FolderGit2 } from "lucide-react";
+import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ArrowUp, BookmarkPlus, FolderGit2, Trash2 } from "lucide-react";
 
-import type { CreateTaskInput, Priority, Project } from "../services/contracts.js";
+import type { CreateTaskInput, Priority, Project, TaskTemplate, TaskTemplateInput } from "../services/contracts.js";
 
-export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject, agents = [], onCompare }: {
+export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject, agents = [], onCompare, templates = [], onSaveTemplate, onDeleteTemplate }: {
   projects: Project[];
+  /** Saved requests the operator can start from. */
+  templates?: TaskTemplate[];
+  onSaveTemplate?(input: TaskTemplateInput): void;
+  onDeleteTemplate?(template: TaskTemplate): void;
   /** Agents that can take part in a comparison: enabled and not signed out. */
   agents?: Array<{ id: string; label: string }>;
   /** Runs the request with several agents at once, each in its own worktree. */
@@ -24,6 +28,35 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
   const target = project?.directories.find((directory) => directory.id === targetDirectoryId) ?? project?.directories[0];
   const additional = project?.directories.filter((directory) => directory.id !== target?.id) ?? [];
   const [compare, setCompare] = useState(false);
+  const [templateId, setTemplateId] = useState("");
+  const [naming, setNaming] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const form = useRef<HTMLFormElement>(null);
+  const template = templates.find((item) => item.id === templateId);
+  const available = templates.filter((item) => !item.projectId || projects.some((candidate) => candidate.id === item.projectId));
+
+  function chooseProject(nextId: string) {
+    const next = projects.find((item) => item.id === nextId);
+    const directoryId = next?.directories[0]?.id ?? "";
+    setProjectId(nextId);
+    setTargetDirectoryId(directoryId);
+    setDirectoryIds(directoryId ? [directoryId] : []);
+  }
+  function chooseTemplate(id: string) {
+    setTemplateId(id);
+    const chosen = templates.find((item) => item.id === id);
+    if (chosen?.projectId && chosen.projectId !== project?.id && projects.some((item) => item.id === chosen.projectId)) chooseProject(chosen.projectId);
+  }
+  function saveTemplate() {
+    if (!form.current || !onSaveTemplate || !templateName.trim()) return;
+    const fields = new FormData(form.current);
+    const prompt = String(fields.get("prompt") ?? "").trim();
+    const title = String(fields.get("title") ?? "").trim();
+    const kind = fields.get("kind");
+    onSaveTemplate({ name: templateName.trim(), prompt, priority: String(fields.get("priority")) as Priority,
+      ...(title ? { title } : {}), ...(kind === "review" || kind === "planning" ? { kind } : {}), ...(project ? { projectId: project.id } : {}) });
+    setNaming(false); setTemplateName("");
+  }
   const [picked, setRivals] = useState<[string, string]>(["", ""]);
   // The agents arrive after the first render; until the operator picks, the first two are used.
   const rivals: [string, string] = [picked[0] || agents[0]?.id || "", picked[1] || agents[1]?.id || ""];
@@ -56,26 +89,33 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
   );
 
   return (
-    <form className="task-composer" onSubmit={submit}>
+    // Choosing a template remounts the fields so they start from its text.
+    <form className="task-composer" onSubmit={submit} ref={form} key={templateId || "blank"}>
+      {available.length > 0 && (
+        <div className="composer-template">
+          <label>
+            Começar de um modelo
+            <select value={templateId} onChange={(event) => chooseTemplate(event.target.value)}>
+              <option value="">Em branco</option>
+              {available.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          {template && onDeleteTemplate && <button type="button" className="text-button danger" disabled={busy} onClick={() => { onDeleteTemplate(template); setTemplateId(""); }}><Trash2 size={14} aria-hidden="true" /> Excluir modelo</button>}
+        </div>
+      )}
       <label className="composer-prompt">
         Solicitação
-        <textarea name="prompt" required maxLength={20000} rows={6} autoFocus onKeyDown={submitOnShortcut}
+        <textarea name="prompt" required maxLength={20000} rows={6} autoFocus onKeyDown={submitOnShortcut} defaultValue={template?.prompt}
           placeholder="Descreva o que o agente deve fazer: o objetivo, o contexto e como saber que ficou pronto." />
       </label>
       <label>
         Título
-        <input name="title" maxLength={160} placeholder="Opcional: usamos a primeira linha da solicitação" />
+        <input name="title" maxLength={160} defaultValue={template?.title} placeholder="Opcional: usamos a primeira linha da solicitação" />
       </label>
       <div className="composer-target">
         <label>
           Projeto
-          <select value={project.id} required onChange={(event) => {
-            const next = projects.find((item) => item.id === event.target.value);
-            const directoryId = next?.directories[0]?.id ?? "";
-            setProjectId(event.target.value);
-            setTargetDirectoryId(directoryId);
-            setDirectoryIds(directoryId ? [directoryId] : []);
-          }}>
+          <select value={project.id} required onChange={(event) => chooseProject(event.target.value)}>
             {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
@@ -94,7 +134,7 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
         <summary>Tipo, prioridade e escopo</summary>
         <label>
           Tipo de tarefa
-          <select name="kind" defaultValue="auto">
+          <select name="kind" defaultValue={template?.kind === "review" || template?.kind === "planning" ? template.kind : "auto"}>
             <option value="auto">Classificar pela solicitação</option>
             <option value="review">Revisão</option>
             <option value="planning">Planejamento</option>
@@ -139,7 +179,7 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
         )}
         <label>
           Prioridade
-          <select name="priority" defaultValue="normal">
+          <select name="priority" defaultValue={template?.priority ?? "normal"}>
             <option value="critical">Crítica</option>
             <option value="high">Alta</option>
             <option value="normal">Normal</option>
@@ -148,6 +188,21 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
         </label>
       </details>
       {error && <div className="error" role="alert">{error}</div>}
+      {onSaveTemplate && (naming ? (
+        <div className="composer-save-template">
+          <label>
+            Nome do modelo
+            <input value={templateName} maxLength={100} autoFocus placeholder="Ex.: Revisar pull request" onChange={(event) => setTemplateName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); saveTemplate(); } }} />
+          </label>
+          <button type="button" className="secondary" disabled={busy || !templateName.trim()} onClick={saveTemplate}>Salvar modelo</button>
+          <button type="button" className="text-button" onClick={() => setNaming(false)}>Cancelar</button>
+        </div>
+      ) : (
+        <button type="button" className="text-button composer-save-trigger" disabled={busy} onClick={() => { setNaming(true); setTemplateName(template?.name ? `${template.name} (cópia)` : ""); }}>
+          <BookmarkPlus size={14} aria-hidden="true" /> Salvar como modelo
+        </button>
+      ))}
       <div className="composer-footer">
         <small>{comparing ? "Os dois agentes começam a trabalhar assim que você criar." : "Você confirma a execução depois de criar a tarefa."} <kbd>Ctrl</kbd> + <kbd>Enter</kbd> cria.</small>
         <button className="primary" disabled={busy || !target || (comparing && rivals[0] === rivals[1])}><ArrowUp size={16} /> {busy ? "Criando…" : comparing ? "Criar e comparar" : "Criar tarefa"}</button>

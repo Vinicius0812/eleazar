@@ -21,6 +21,8 @@ import {
   type LocalProjectDirectory,
   type NewProject,
   type NewTask,
+  type NewTaskTemplate,
+  type TaskTemplate,
   type ProjectIsolation,
   projectIsolations,
   type TaskAction,
@@ -145,6 +147,29 @@ export class ControlRoomService {
     };
     this.store.createTask(task);
     return task;
+  }
+
+  createTemplate(input: NewTaskTemplate): TaskTemplate {
+    const name = input.name.trim();
+    const prompt = input.prompt.trim();
+    if (!name || name.length > 100) throw new Error("Informe um nome de ate 100 caracteres para o modelo.");
+    if (!prompt || prompt.length > 20_000) throw new Error("O modelo precisa de um prompt de ate 20000 caracteres.");
+    if (input.priority && !taskPriorities.includes(input.priority)) throw new Error("Prioridade invalida.");
+    if (input.kind && !taskKinds.includes(input.kind)) throw new Error("Tipo de tarefa invalido.");
+    if (input.projectId) this.requireProject(input.projectId);
+    if (this.store.listTaskTemplates().some((template) => template.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      throw conflict("Ja existe um modelo com este nome.");
+    }
+    const template: TaskTemplate = { id: randomUUID(), name, title: input.title?.trim().slice(0, 160) ?? "", prompt, kind: input.kind ?? null,
+      priority: input.priority ?? "normal", projectId: input.projectId ?? null, createdAt: now() };
+    this.store.createTaskTemplate(template);
+    return template;
+  }
+
+  listTemplates(): TaskTemplate[] { return this.store.listTaskTemplates(); }
+
+  deleteTemplate(id: string): void {
+    if (!this.store.deleteTaskTemplate(id)) throw Object.assign(new Error("Modelo nao encontrado."), { statusCode: 404 });
   }
 
   /**

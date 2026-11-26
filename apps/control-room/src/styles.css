@@ -3067,3 +3067,10 @@ dialog.command-palette:not([open]) { display: none; }
 .quota-state.exhausted { color: var(--danger); }
 .provider-budget { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .provider-budget label { flex: 1 1 200px; }
+
+/* Reusable task templates in the composer. */
+.composer-template { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.composer-template label { flex: 1 1 260px; }
+.composer-save-template { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.composer-save-template label { flex: 1 1 240px; }
+.composer-save-trigger { justify-self: start; }

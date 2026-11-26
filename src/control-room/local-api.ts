@@ -102,6 +102,22 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (filesMatch[2] === "files/search") return json(response, 200, await explorer.search(taskId, directoryId, (url.searchParams.get("q") ?? "").slice(0, 200)));
     return json(response, 200, await explorer.file(taskId, directoryId, path));
   }
+  if (url.pathname === "/api/control-room/templates" && (method === "GET" || method === "POST")) {
+    if (method === "GET") return json(response, 200, service.listTemplates());
+    const body = await readBody(request); const priority = optionalString(body, "priority"); const kind = optionalString(body, "kind");
+    if (priority && !isTaskPriority(priority)) throw new Error("Prioridade invalida.");
+    if (kind && !taskKinds.includes(kind as typeof taskKinds[number])) throw new Error("Tipo de tarefa invalido.");
+    const title = optionalString(body, "title"); const projectId = optionalString(body, "projectId");
+    return json(response, 201, service.createTemplate({ name: stringField(body, "name"), prompt: stringField(body, "prompt"),
+      ...(title ? { title } : {}), ...(projectId ? { projectId } : {}),
+      ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}) }));
+  }
+  const templateDeleteMatch = /^\/api\/control-room\/templates\/([^/]+)\/delete$/.exec(url.pathname);
+  if (method === "POST" && templateDeleteMatch?.[1]) {
+    await readBody(request);
+    service.deleteTemplate(decodeURIComponent(templateDeleteMatch[1]));
+    return json(response, 200, service.listTemplates());
+  }
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {

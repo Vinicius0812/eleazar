@@ -17,6 +17,7 @@ import type {
   TaskExecution,
   TaskOutboundAction,
   TaskPullRequest,
+  TaskTemplate,
   TaskWorktree,
   TaskTransition
 } from "../core/control-room.js";
@@ -393,6 +394,20 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return result.changes === 1 ? this.getOutboundAction(id) : null;
   }
 
+  createTaskTemplate(template: TaskTemplate): void {
+    this.#db.prepare(`INSERT INTO task_templates (id, name, title, prompt, kind, priority, project_id, created_at)
+      VALUES (@id, @name, @title, @prompt, @kind, @priority, @projectId, @createdAt)`).run(template);
+  }
+  listTaskTemplates(): TaskTemplate[] {
+    return (this.#db.prepare("SELECT * FROM task_templates ORDER BY name COLLATE NOCASE").all() as Row[]).map((item) => ({
+      id: stringValue(item, "id"), name: stringValue(item, "name"), title: stringValue(item, "title"), prompt: stringValue(item, "prompt"),
+      kind: nullableString(item, "kind") as TaskTemplate["kind"], priority: stringValue(item, "priority") as TaskTemplate["priority"],
+      projectId: nullableString(item, "project_id"), createdAt: stringValue(item, "created_at") }));
+  }
+  deleteTaskTemplate(id: string): boolean {
+    return this.#db.prepare("DELETE FROM task_templates WHERE id = ?").run(id).changes === 1;
+  }
+
   #executionIdFor(taskId: string, leaseId: string): string {
     return stringValue(this.#db.prepare("SELECT id FROM executions WHERE task_id = ? AND lease_id = ?").get(taskId, leaseId) as Row, "id");
   }
@@ -443,6 +458,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS task_outbound_actions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), kind TEXT NOT NULL,
         status TEXT NOT NULL, title TEXT, body TEXT, targets_json TEXT NOT NULL, result TEXT, requested_by TEXT NOT NULL,
         created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT);
+      CREATE TABLE IF NOT EXISTS task_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,
+        kind TEXT, priority TEXT NOT NULL, project_id TEXT REFERENCES projects(id), created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, automatic INTEGER NOT NULL,
         executable_path TEXT, default_model TEXT, updated_at TEXT NOT NULL);
     `);

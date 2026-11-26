@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
@@ -92,6 +92,9 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
       }
       return terminal;
     },
+    listTemplates() { return request<TaskTemplate[]>("/templates"); },
+    createTemplate(input) { return request<TaskTemplate>("/templates", { method: "POST", body: JSON.stringify(input) }); },
+    deleteTemplate(templateId) { return request<TaskTemplate[]>(`/templates/${encodeURIComponent(templateId)}/delete`, { method: "POST", body: "{}" }); },
     startComparison(input, providers) {
       return request<ComparisonStart>("/comparisons", { method: "POST", body: JSON.stringify({ projectId: input.projectId, targetDirectoryId: input.targetDirectoryId, title: input.title, prompt: input.prompt, priority: input.priority, ...(input.kind ? { kind: input.kind } : {}), providers }) });
     },

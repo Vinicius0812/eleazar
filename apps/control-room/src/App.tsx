@@ -70,6 +70,7 @@ import type {
   ExecutionDetail,
   ProjectIsolation,
   ProviderStatus,
+  TaskTemplate,
   LogEntry,
   Run,
   Task,
@@ -337,6 +338,14 @@ export function App({ client }: { client: ControlRoomClient }) {
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
   }, [active, client, dialog?.kind, taskRoute === "new"]);
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const composing = taskRoute === "new";
+  useEffect(() => {
+    if (!composing) return;
+    let alive = true;
+    client.listTemplates().then((items) => { if (alive) setTemplates(items); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [client, composing]);
   const launch = useExecutionLaunch(client, data?.runs ?? [], data?.tasks ?? [], dialog?.kind === "execute" ? dialog.task : null, providers);
   const refreshSession = useCallback(() => {
     void client.getSnapshot().then(setData).catch(() => undefined);
@@ -743,7 +752,9 @@ export function App({ client }: { client: ControlRoomClient }) {
                ) : taskRoute === "new" ? (
                  <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })}
                    agents={providers.filter((provider) => provider.preferences.enabled && provider.available && provider.authenticated !== false && provider.roles.implementer).map((provider) => ({ id: provider.provider, label: provider.label }))}
-                   onCompare={submitComparison} />
+                   onCompare={submitComparison} templates={templates}
+                   onSaveTemplate={(input) => void mutate(() => client.createTemplate(input), `Modelo "${input.name}" salvo. Ele aparece em "Começar de um modelo".`, (saved) => setTemplates((current) => [...current, saved].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))))}
+                   onDeleteTemplate={(template) => { if (window.confirm(`Excluir o modelo "${template.name}"? As tarefas já criadas com ele não mudam.`)) void mutate(() => client.deleteTemplate(template.id), "Modelo excluído.", setTemplates); }} />
                ) : selectedTask ? (
                  <TaskWorkspace
                    view={publishRoute ? "publish" : "conversation"}
