@@ -693,7 +693,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                     {visible.slice(0, sidebarTaskLimit).map(({ task, place, fact }) => (
                       <a key={task.id} href={`#/tasks/${encodeURIComponent(task.id)}`} aria-current={taskRoute === task.id || filesRoute?.taskId === task.id || executionDetail?.task.id === task.id && executionRoute ? "page" : undefined} title={`${task.title} · ${fact}`}>
                         <span className={`lane-dot lane-${place}`} aria-hidden="true" />
-                        <span>{task.title}</span>
+                        <span className="sidebar-task-title">{task.title}</span>
                         {task.pinnedAt && <Pin size={12} className="pin-mark" aria-label="Fixada" />}
                       </a>
                     ))}

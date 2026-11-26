@@ -3130,3 +3130,28 @@ dialog.command-palette:not([open]) { display: none; }
 .pin-mark { flex: none; color: var(--accent); }
 .project-task-title .pin-mark { margin-right: 6px; vertical-align: -2px; }
 .project-edit { justify-self: start; }
+
+/* Spacing review: nothing touches or leaves the border of the box it sits in. */
+.sidebar-project-tasks { grid-template-columns: minmax(0, 1fr); }
+.sidebar .sidebar-project-tasks a { min-width: 0; }
+.sidebar .sidebar-project a > .sidebar-task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-actions { display: grid; gap: 6px; }
+.provider-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(96px, 42%); }
+.provider-row > div:nth-child(2) { min-width: 0; }
+.provider-row > div:nth-child(2) strong { overflow-wrap: anywhere; }
+.provider-usage { min-width: 0; margin-left: 0; }
+.provider-usage .provider-progress { width: 100%; }
+.task-tabs { overflow-y: hidden; }
+.task-tabs a { margin-bottom: 0; }
+.task-next-actions > a.primary,
+.task-next-actions > a.secondary { padding: 10px 15px; margin-right: 0; }
+.project-page-heading > div { min-width: 0; }
+.project-page-directories code { min-width: 0; word-break: break-all; }
+@media (max-width: 760px) {
+  .project-task-row { display: flex; flex-wrap: wrap; row-gap: 6px; }
+  .project-task-row .project-task-title { flex: 1 1 60%; }
+  .project-task-row .status { margin-left: 22px; }
+  .project-task-actions { margin-left: auto; }
+  .terminal-output { height: 50vh; }
+}
+.project-page, .project-terminal, .comparison { grid-template-columns: minmax(0, 1fr); }

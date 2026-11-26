@@ -1,7 +1,8 @@
 import { readableProviderMessage } from "./run-messages.js";
 import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
-const apiBase = "http://127.0.0.1:4317/api/control-room";
+// VITE_CONTROL_ROOM_API points a second copy of the interface at another local host, such as a test database.
+const apiBase = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_CONTROL_ROOM_API ?? "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
 
 function explorerQuery(directoryId: string, path?: string): string {
