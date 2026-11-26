@@ -2995,3 +2995,15 @@ dialog.command-palette:not([open]) { display: none; }
   .command-trigger span, .command-trigger kbd { display: none; }
   .breadcrumbs li:not(:last-child):not(:nth-last-child(2)) { display: none; }
 }
+
+/* Task tabs: conversation, files and publication of one task. */
+.task-workspace-heading { margin-bottom: 14px; }
+.task-tabs { display: flex; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.task-tabs a { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--text-muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.task-tabs a:hover { color: var(--text-strong); }
+.task-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+.task-tab-count { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--surface-hover); color: var(--text); font-size: 12px; text-align: center; }
+.task-tab-count.attention { background: var(--accent-soft); color: var(--accent); }
+.explorer-page > .task-tabs { margin-top: 4px; }
+.task-publish-empty { display: grid; gap: 6px; text-align: left; }
+.task-publish-empty p { margin: 0; }

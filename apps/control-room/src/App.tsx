@@ -43,6 +43,7 @@ import { useExecutionLaunch } from "./components/useExecutionLaunch.js";
 import { PendingPermissions } from "./components/PendingPermissions.js";
 import { TaskComposer } from "./components/TaskComposer.js";
 import { TaskWorkspace } from "./components/TaskWorkspace.js";
+import { TaskTabs, taskPublishRoute } from "./components/TaskTabs.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -214,7 +215,8 @@ export function App({ client }: { client: ControlRoomClient }) {
   useEffect(() => { setNoticeState((current) => current.hash === hash ? current : { text: "", hash: "" }); }, [hash]);
   const active = pageFromHash(hash);
   const executionRoute = routeId(hash, "executions");
-  const taskRoute = routeId(hash, "tasks");
+  const publishRoute = taskPublishRoute(hash);
+  const taskRoute = routeId(hash, "tasks") ?? publishRoute;
   const filesRoute = fileExplorerRoute(hash);
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
@@ -479,6 +481,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const selectedPreviousRuns = selectedTask ? (data?.runs ?? []).filter((run) => run.taskId === selectedTask.id).slice(1).reverse() : [];
   const placed = (task: Task) => placeTask(task, data?.runs ?? [], data?.actions ?? [], data?.pullRequests ?? []);
   const projectsWithTasks = projects.map((project) => ({ project, cards: tasks.filter((task) => task.projectId === project.id).map(placed) }));
+  const pendingPublications = (taskId: string) => (data?.actions ?? []).filter((action) => action.taskId === taskId && action.status === "pending").length;
   const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
   const selectedTaskFinished = selectedTask?.status === "completed" || selectedTask?.status === "failed";
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
@@ -500,6 +503,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     : [tasksCrumb, { label: title ?? "Tarefa" }];
   const filesTask = filesRoute ? tasks.find((task) => task.id === filesRoute.taskId) : undefined;
   const crumbs: Crumb[] = filesRoute ? [...taskCrumbs(filesTask, undefined, false), { label: "Arquivos" }]
+    : publishRoute ? [...taskCrumbs(selectedTask, undefined, false), { label: "Publicação" }]
     : executionRoute ? [...(executionDetail ? taskCrumbs(tasks.find((task) => task.id === executionDetail.task.id) ?? executionDetail.task, undefined, false) : [{ label: "Execuções", href: "#/executions" }]), { label: "Execução" }]
     : taskRoute === "new" ? [tasksCrumb, { label: "Nova tarefa" }]
     : taskRoute ? taskCrumbs(selectedTask, undefined, true)
@@ -621,6 +625,7 @@ export function App({ client }: { client: ControlRoomClient }) {
         {filesRoute ? <FileExplorerPage key={filesRoute.taskId} client={client} initial={filesRoute}
           task={tasks.find((task) => task.id === filesRoute.taskId)}
           project={projects.find((project) => project.id === tasks.find((task) => task.id === filesRoute.taskId)?.projectId)}
+          tabs={<TaskTabs taskId={filesRoute.taskId} active="files" pendingPublications={pendingPublications(filesRoute.taskId)} />}
           onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={() => executionDetail ? openTask(executionDetail.task.id) : backToDashboard()} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
            {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
            {taskRoute ? (
@@ -629,6 +634,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                  <span className="eyebrow">{selectedTask ? projectName(selectedTask.projectId) : "Tarefas"}</span>
                  <h1 id="task-workspace-title" ref={taskViewHeading} tabIndex={-1}>{taskRoute === "new" ? "O que você quer fazer?" : selectedTask?.title ?? "Tarefa"}</h1>
                </header>
+               {selectedTask && <TaskTabs taskId={selectedTask.id} active={publishRoute ? "publish" : "conversation"} pendingPublications={pendingPublications(selectedTask.id)} />}
                <div className="feedback" role="status">{notice}</div>
                {error && <div className="error" role="alert">{error} <button className="text-button" disabled={busy} onClick={() => void refresh()}>Atualizar</button></div>}
                {!data ? (
@@ -637,6 +643,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                  <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })} />
                ) : selectedTask ? (
                  <TaskWorkspace
+                   view={publishRoute ? "publish" : "conversation"}
                    client={client}
                    onSessionChanged={refreshSession}
                    task={selectedTask}

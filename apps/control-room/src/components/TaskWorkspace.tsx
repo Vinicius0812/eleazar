@@ -16,7 +16,7 @@ const statusCopy: Record<Task["status"], string> = {
   cancelled: "A tarefa foi cancelada.",
 };
 
-export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, previousRuns = [], latestLog, failure, actions, followUp, publishing }: {
+export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, previousRuns = [], latestLog, failure, actions, followUp, publishing, view = "conversation" }: {
   client: ControlRoomClient;
   onSessionChanged?: () => void;
   task: Task;
@@ -34,7 +34,17 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
   followUp?: ReactNode;
   /** Commit, push and pull request panel, only for tasks that own a branch. */
   publishing?: ReactNode;
+  /** Which tab is open: the conversation with the agent, or what leaves the worktree. */
+  view?: "conversation" | "publish";
 }) {
+  if (view === "publish") {
+    return publishing ? <>{publishing}</> : (
+      <div className="empty task-publish-empty">
+        <strong>Nada para publicar por aqui</strong>
+        <p>Esta tarefa trabalha direto na pasta do projeto, sem branch própria. Commit, envio e pull request ficam disponíveis para tarefas em worktree.</p>
+      </div>
+    );
+  }
   const awaitsAcpDecision = task.status === "waiting_approval" && run !== undefined && isLiveExecution(task, run);
   const showSession = Boolean(run) && (awaitsAcpDecision || (task.status !== "queued" && task.status !== "waiting_approval"));
   const showLog = (task.status === "planning" || task.status === "running" || task.status === "failed");
@@ -88,7 +98,6 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
           {actions}
         </div>
       </article>
-      {publishing}
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, File, FileDiff, FileText, Folder, FolderOpen, GitCompare, RefreshCw } from "lucide-react";
 
 import { LoadingOverlay } from "./LoadingOverlay.js";
@@ -34,8 +34,10 @@ export function fileExplorerHash(taskId: string, location: FileExplorerLocation 
   return `#/tasks/${encodeURIComponent(taskId)}/files${query ? `?${query}` : ""}`;
 }
 
-export function FileExplorerPage({ client, task, project, initial, onBack }: {
+export function FileExplorerPage({ client, task, project, initial, onBack, tabs }: {
   client: ControlRoomClient;
+  /** Links to the other sides of the task, shown under the heading. */
+  tabs?: ReactNode;
   task: Task | undefined;
   project: Project | undefined;
   initial: { taskId: string } & FileExplorerLocation;
@@ -205,6 +207,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack }: {
         </div>
         <button className="secondary" disabled={!root || listLoading} onClick={() => void refresh()}><RefreshCw size={15} aria-hidden="true" /> Atualizar</button>
       </header>
+      {tabs}
 
       {roots && roots.length > 1 && (
         <div className="explorer-roots" role="group" aria-label="Diretórios da tarefa">

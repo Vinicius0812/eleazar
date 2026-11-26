@@ -34,6 +34,26 @@ describe("File explorer", () => {
   });
 });
 
+describe("Task tabs", () => {
+  it("moves between conversation, files and publication of the same task", async () => {
+    window.location.hash = "#/tasks/task-1";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    const tabs = within(await screen.findByRole("navigation", { name: "Seções da tarefa" }));
+    expect(tabs.getByRole("link", { name: /Conversa/ })).toHaveAttribute("aria-current", "page");
+    await user.click(tabs.getByRole("link", { name: /Publicação/ }));
+    expect(window.location.hash).toBe("#/tasks/task-1/publish");
+    expect(await screen.findByText("Nada para publicar por aqui")).toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Você está em" })).getByText("Publicação")).toHaveAttribute("aria-current", "location");
+    await user.click(within(screen.getByRole("navigation", { name: "Seções da tarefa" })).getByRole("link", { name: /Arquivos/ }));
+    expect(window.location.hash).toBe("#/tasks/task-1/files");
+    expect(await screen.findByRole("button", { name: /README\.md/ })).toBeInTheDocument();
+    await user.click(within(screen.getByRole("navigation", { name: "Seções da tarefa" })).getByRole("link", { name: /Conversa/ }));
+    expect(window.location.hash).toBe("#/tasks/task-1");
+    expect(await screen.findByRole("heading", { name: "Sua solicitação" })).toBeInTheDocument();
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
