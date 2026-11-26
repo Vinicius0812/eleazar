@@ -78,6 +78,11 @@ export interface ExplorerSearch { root: ExplorerRoot; query: string; paths: stri
 export interface ExplorerChanges { root: ExplorerRoot; changes: ExplorerChange[]; warnings: string[]; }
 export interface ExplorerFile { root: ExplorerRoot; path: string; exists: boolean; size: number | null; binary: boolean; content: string | null; tooLarge: boolean; change: ExplorerChange | null; diff: string | null; diffTruncated: boolean; }
 
+/** A bash shell the host runs in one of the project's folders. */
+export interface TerminalSession { id: string; projectId: string; directoryId: string; root: string; cwd: string; shell: string; startedAt: string; busy: boolean; exitCode: number | null; closed: boolean; }
+export interface TerminalEvent { sessionId: string; sequence: number; id: string; kind: "input" | "stdout" | "stderr" | "done" | "exit"; text?: string; exitCode?: number | null; cwd?: string; createdAt: string; }
+export interface TerminalStreamOptions { afterId?: string | undefined; signal: AbortSignal; onEvent(event: TerminalEvent): void; }
+
 export interface ControlRoomClient {
   getSnapshot(): Promise<ControlRoomSnapshot>;
   getExecutionDetail(executionId: string): Promise<ExecutionDetail>;
@@ -120,6 +125,13 @@ export interface ControlRoomClient {
   getTaskChanges(taskId: string, directoryId: string): Promise<ExplorerChanges>;
   getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
   searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
+  listTerminals(projectId: string): Promise<TerminalSession[]>;
+  openTerminal(projectId: string, directoryId: string): Promise<TerminalSession>;
+  /** Writes one command line to the shell; the output arrives through the stream. */
+  sendTerminalInput(sessionId: string, command: string): Promise<TerminalSession>;
+  closeTerminal(sessionId: string): Promise<TerminalSession>;
+  /** Resolves true when the shell exited, false when the stream ended for another reason. */
+  streamTerminalEvents(sessionId: string, options: TerminalStreamOptions): Promise<boolean>;
   /** The same explorer over the project's own folders, compared with their HEAD. */
   getProjectFileRoots(projectId: string): Promise<ExplorerRoot[]>;
   listProjectFiles(projectId: string, directoryId: string, path?: string): Promise<ExplorerListing>;

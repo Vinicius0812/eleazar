@@ -10,6 +10,8 @@ import { OutboundActionService } from "../core/outbound-actions.js";
 import { GitRepositoryPublisher } from "../adapters/git-publisher.js";
 import { PullRequestService } from "../core/pull-requests.js";
 import { GhPullRequestInspector } from "../adapters/gh-pull-requests.js";
+import { TaskFileExplorer } from "./file-explorer.js";
+import { ProjectTerminals } from "./project-terminal.js";
 
 const port = Number(process.env.ELEAZAR_CONTROL_ROOM_PORT ?? "4317");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("ELEAZAR_CONTROL_ROOM_PORT deve ser uma porta valida.");
@@ -34,7 +36,10 @@ const executor = new ControlRoomTaskExecutor(service, orchestrator, orchestrator
 const providers = new ProviderStatusService(orchestrator, service);
 // Automatico reads the account limit and the operator's daily budget before choosing a provider.
 orchestrator.router.useQuota((provider) => providers.quotaSignal(provider));
-const server = createControlRoomServer(service, executor, providers, actions, pullRequests);
+const terminals = new ProjectTerminals(service);
+const server = createControlRoomServer(service, executor, providers, actions, pullRequests, new TaskFileExplorer(service), terminals);
+// The shells belong to this host: they end with it.
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void terminals.closeAll().finally(() => process.exit(0)); });
 server.listen(port, "127.0.0.1", () => {
   console.log(`Eleazar Control Room API: http://127.0.0.1:${port}`);
 });

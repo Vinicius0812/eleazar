@@ -8,6 +8,7 @@ import type { ProviderStatusService } from "./provider-status.js";
 import type { OutboundActionService } from "../core/outbound-actions.js";
 import type { PullRequestService } from "../core/pull-requests.js";
 import { TaskFileExplorer } from "./file-explorer.js";
+import type { ProjectTerminals, TerminalEvent } from "./project-terminal.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -15,10 +16,10 @@ const uiOrigins = new Set([
 ]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service)): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service), terminals?: ProjectTerminals): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, executor, providers, actions, pullRequests, explorer, request, response);
+      await route(service, executor, providers, actions, pullRequests, explorer, terminals, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -27,7 +28,7 @@ export function createControlRoomServer(service: ControlRoomService, executor?: 
   });
 }
 
-async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, terminals: ProjectTerminals | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -117,6 +118,28 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     await readBody(request);
     service.deleteTemplate(decodeURIComponent(templateDeleteMatch[1]));
     return json(response, 200, service.listTemplates());
+  }
+  // Bash in one of the project's folders, opened and driven only by the local operator.
+  const projectTerminalMatch = /^\/api\/control-room\/projects\/([^/]+)\/terminals$/.exec(url.pathname);
+  if (projectTerminalMatch?.[1] && (method === "GET" || method === "POST")) {
+    if (!terminals) throw new Error("Terminal nao configurado neste host local.");
+    const projectId = decodeURIComponent(projectTerminalMatch[1]);
+    if (method === "GET") return json(response, 200, terminals.list(projectId));
+    return json(response, 201, terminals.open(projectId, stringField(await readBody(request), "directoryId")));
+  }
+  const terminalMatch = /^\/api\/control-room\/terminals\/([^/]+)\/(events|input|close)$/.exec(url.pathname);
+  if (terminalMatch?.[1] && terminalMatch[2]) {
+    if (!terminals) throw new Error("Terminal nao configurado neste host local.");
+    const sessionId = decodeURIComponent(terminalMatch[1]);
+    if (method === "GET" && terminalMatch[2] === "events") return streamTerminal(terminals, sessionId, request, response);
+    if (method === "POST" && terminalMatch[2] === "input") {
+      const body = await readBody(request);
+      const command = typeof body.command === "string" ? body.command : "";
+      if (!command.trim()) throw new Error("Campo obrigatorio: command");
+      terminals.write(sessionId, command);
+      return json(response, 202, terminals.get(sessionId));
+    }
+    if (method === "POST" && terminalMatch[2] === "close") { await readBody(request); return json(response, 200, await terminals.close(sessionId)); }
   }
   // The same read-only explorer over the project's own folders.
   const projectFilesMatch = /^\/api\/control-room\/projects\/([^/]+)\/(files\/roots|files\/content|files\/search|files|changes)$/.exec(url.pathname);
@@ -286,6 +309,29 @@ function streamExecutionEvents(service: ControlRoomService, executionId: string,
   if (["completed", "failed", "cancelled"].includes(service.store.getExecution(executionId)?.status ?? "")) {
     cleanup(); response.end(); return;
   }
+  heartbeat = setInterval(() => { if (!closed) response.write(": heartbeat\n\n"); }, 15_000);
+  heartbeat.unref();
+}
+function streamTerminal(terminals: ProjectTerminals, sessionId: string, request: IncomingMessage, response: ServerResponse): void {
+  const info = terminals.get(sessionId);
+  const lastId = request.headers["last-event-id"];
+  const match = lastId ? new RegExp(`^${escapeRegExp(sessionId)}:(\\d+)$`).exec(Array.isArray(lastId) ? lastId[0] ?? "" : lastId) : null;
+  if (lastId && !match) throw new Error("Last-Event-ID invalido para este terminal.");
+  response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+  response.write(": connected\n\n");
+  let closed = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe = () => {};
+  const cleanup = () => { if (closed) return; closed = true; if (heartbeat) clearInterval(heartbeat); unsubscribe(); };
+  const deliver = (event: TerminalEvent) => {
+    if (closed) return;
+    response.write(`id: ${event.id}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
+    if (event.kind === "exit") { cleanup(); response.end(); }
+  };
+  response.on("close", cleanup);
+  unsubscribe = terminals.subscribe(sessionId, match ? Number(match[1]) : 0, deliver);
+  if (closed) return;
+  if (info.closed) { cleanup(); response.end(); return; }
   heartbeat = setInterval(() => { if (!closed) response.write(": heartbeat\n\n"); }, 15_000);
   heartbeat.unref();
 }

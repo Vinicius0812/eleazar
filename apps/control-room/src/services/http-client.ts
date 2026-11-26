@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 const apiBase = "http://127.0.0.1:4317/api/control-room";
 type ApiSnapshot = { projects: Project[]; tasks: Task[]; executions: Run[]; logs: ControlRoomSnapshot["logs"]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; };
@@ -45,6 +45,36 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     getTaskChanges(taskId, directoryId) { return request<ExplorerChanges>(`/tasks/${encodeURIComponent(taskId)}/changes?${explorerQuery(directoryId)}`); },
     getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
     searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
+    listTerminals(projectId) { return request<TerminalSession[]>(`/projects/${encodeURIComponent(projectId)}/terminals`); },
+    openTerminal(projectId, directoryId) { return request<TerminalSession>(`/projects/${encodeURIComponent(projectId)}/terminals`, { method: "POST", body: JSON.stringify({ directoryId }) }); },
+    sendTerminalInput(sessionId, command) { return request<TerminalSession>(`/terminals/${encodeURIComponent(sessionId)}/input`, { method: "POST", body: JSON.stringify({ command }) }); },
+    closeTerminal(sessionId) { return request<TerminalSession>(`/terminals/${encodeURIComponent(sessionId)}/close`, { method: "POST", body: "{}" }); },
+    async streamTerminalEvents(sessionId, options) {
+      const headers: Record<string, string> = { accept: "text/event-stream" };
+      if (options.afterId) headers["last-event-id"] = options.afterId;
+      const response = await fetch(`${baseUrl}/terminals/${encodeURIComponent(sessionId)}/events`, { headers, signal: options.signal });
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => ({}));
+        throw new Error(errorMessage(body, response.status));
+      }
+      if (!response.body) throw new Error("A API local nao retornou um fluxo de eventos.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = createSseParser<TerminalEvent>(isTerminalEvent);
+      let exited = false;
+      const deliver = (events: TerminalEvent[]) => { for (const event of events) { options.onEvent(event); if (event.kind === "exit") exited = true; } };
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          deliver(parser.push(decoder.decode(value, { stream: true })));
+        }
+        deliver(parser.push(decoder.decode()));
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+      return exited;
+    },
     getProjectFileRoots(projectId) { return request<ExplorerRoot[]>(`/projects/${encodeURIComponent(projectId)}/files/roots`); },
     listProjectFiles(projectId, directoryId, path = "") { return request<ExplorerListing>(`/projects/${encodeURIComponent(projectId)}/files?${explorerQuery(directoryId, path)}`); },
     getProjectChanges(projectId, directoryId) { return request<ExplorerChanges>(`/projects/${encodeURIComponent(projectId)}/changes?${explorerQuery(directoryId)}`); },
@@ -141,12 +171,21 @@ function errorMessage(body: unknown, status: number): string {
  * only well-formed execution events; comments, heartbeats and malformed JSON are ignored.
  * An unterminated trailing frame is discarded, as the SSE specification requires.
  */
-export function createSseParser() {
+function isExecutionEvent(item: unknown): item is ExecutionEvent {
+  const event = item as Partial<ExecutionEvent> | null;
+  return Boolean(event && typeof event.id === "string" && typeof event.kind === "string" && typeof event.sequence === "number" && event.payload && typeof event.payload === "object");
+}
+function isTerminalEvent(item: unknown): item is TerminalEvent {
+  const event = item as Partial<TerminalEvent> | null;
+  return Boolean(event && typeof event.id === "string" && typeof event.kind === "string" && typeof event.sequence === "number");
+}
+
+export function createSseParser<T = ExecutionEvent>(accept: (item: unknown) => item is T = isExecutionEvent as unknown as (item: unknown) => item is T) {
   let buffer = "";
   let data: string[] = [];
   return {
-    push(chunk: string): ExecutionEvent[] {
-      const out: ExecutionEvent[] = [];
+    push(chunk: string): T[] {
+      const out: T[] = [];
       buffer += chunk;
       // A trailing CR may be the first half of a CRLF split across chunks; hold it back.
       const held = buffer.endsWith("\r") ? "\r" : "";
@@ -158,8 +197,8 @@ export function createSseParser() {
           const text = data.join("\n");
           data = [];
           try {
-            const item = JSON.parse(text) as Partial<ExecutionEvent> | null;
-            if (item && typeof item.id === "string" && typeof item.kind === "string" && typeof item.sequence === "number" && item.payload && typeof item.payload === "object") out.push(item as ExecutionEvent);
+            const item: unknown = JSON.parse(text);
+            if (accept(item)) out.push(item);
           } catch { /* A foreign or truncated frame must not break the stream. */ }
           continue;
         }

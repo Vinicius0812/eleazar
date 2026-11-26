@@ -51,6 +51,7 @@ import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import { TaskTabs, taskPublishRoute } from "./components/TaskTabs.js";
 import { ComparisonPage, comparisonRoute } from "./components/ComparisonPage.js";
 import { ProjectPage, projectHash, projectRoute } from "./components/ProjectPage.js";
+import { ProjectTerminal } from "./components/ProjectTerminal.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -740,7 +741,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                      location={{ ...(projectView.directoryId ? { directoryId: projectView.directoryId } : {}), ...(projectView.path ? { path: projectView.path } : {}) }}
                      cards={tasks.filter((task) => task.projectId === viewedProject.id).map(placed)} statusLabel={(card) => statuses[card.task.status]}
                      actions={<a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>}
-                     terminal={<div className="empty">O terminal do projeto ainda não está disponível neste host.</div>} />
+                     terminal={<ProjectTerminal key={viewedProject.id} client={client} project={viewedProject} />} />
                  : <div className="empty">Projeto não encontrado. <a className="text-button" href="#/projects">Voltar aos projetos</a></div>}
              </section>
            ) : comparisonId ? (

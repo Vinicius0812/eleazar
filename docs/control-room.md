@@ -144,6 +144,12 @@ Os ícones em `apps/control-room/src/assets/icons` (marca do Eleazar e glifos do
 - `usage.quota` em `GET /providers/status` traz `{ usedPercent, source, dailyTokenBudget, todayTokens, state }`: o limite da conta quando o provedor o informa (Codex), ou os tokens das execuções encerradas hoje contra o orçamento, valendo o mais apertado.
 - O roteador lê a cota sem abrir processos: a partir de 80% o provedor perde 40 pontos e, com 100%, o Automático deixa de escolhê-lo. A escolha explícita de um provedor continua valendo.
 
+### Tela do projeto e terminal
+
+- `#/projects/:id` mostra as pastas do projeto e as tarefas dele; `#/projects/:id/files` abre o explorador somente leitura sobre as pastas do próprio projeto (rotas `GET /projects/:id/files/roots`, `/files`, `/changes`, `/files/search` e `/files/content`, comparando com o HEAD); `#/projects/:id/terminal` abre o terminal.
+- `POST /projects/:id/terminals` recebe `{ "directoryId": "..." }` e inicia um bash na pasta (Git for Windows no Windows, nunca o lançador do WSL; `ELEAZAR_BASH` define outro caminho). `GET /projects/:id/terminals` lista os abertos, `POST /terminals/:id/input` recebe `{ "command": "..." }` (uma linha, até 10.000 caracteres), `POST /terminals/:id/close` encerra a árvore de processos e `GET /terminals/:id/events` transmite `input`, `stdout`, `stderr`, `done` (código de saída e diretório atual) e `exit` por SSE, com replay por `Last-Event-ID`.
+- O comando é escrito na entrada do bash como o operador digitou, nunca montado dentro de outra linha de comando. Não há pseudo terminal: programas que pedem interação pelo teclado não funcionam, e o diretório é mantido entre comandos. Nada é gravado no banco; no máximo seis terminais ficam abertos e todos terminam com o host.
+
 ### Retomada e modelos
 
 - `POST /tasks/:id/resume` recebe `{}` e continua uma tarefa `failed` (inclusive a interrompida por reinício do host) com o mesmo provedor. Com `capabilities.loadSession`, a sessão ACP anterior é recarregada e a mensagem é curta; sem ela, a mensagem leva o pedido original e o que foi gravado do turno perdido: a mensagem que o iniciou, o plano, as últimas ferramentas e as últimas falas do agente.

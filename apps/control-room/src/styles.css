@@ -3099,3 +3099,26 @@ dialog.command-palette:not([open]) { display: none; }
   .project-task-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .project-task-row .project-task-fact, .project-task-row time { display: none; }
 }
+
+/* Project terminal: bash in one of the project's folders. */
+.project-terminal { display: grid; gap: 10px; }
+.terminal-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.terminal-folder select { min-width: 140px; }
+.terminal-cwd { flex: 1 1 200px; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-state { font-size: 12px; font-weight: 700; color: var(--success); }
+.terminal-state.busy { color: var(--warning); }
+.terminal-state.closed { color: var(--text-muted); }
+.terminal-output { height: min(56vh, 520px); overflow: auto; padding: 14px 16px; border-radius: 12px; background: var(--code-surface); color: var(--code-text); font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; }
+.terminal-line { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.terminal-line.input { margin-top: 8px; color: #a9d7ff; font-weight: 600; }
+.terminal-line.input:first-child { margin-top: 0; }
+.terminal-line.stderr { color: #ffb4a8; }
+.terminal-line.status { color: #9aa6bb; font-size: 12px; }
+.terminal-line.status.failed { color: #ffb4a8; }
+.terminal-hint { margin: 0; color: #9aa6bb; font-size: 13px; }
+.terminal-hint code { color: var(--code-text); }
+.terminal-input { display: flex; gap: 8px; align-items: center; padding: 6px 6px 6px 14px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); }
+.terminal-input > span { color: var(--text-muted); font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.terminal-input input { flex: 1; min-width: 0; border: 0; background: transparent; font: 14px ui-monospace, "Cascadia Code", Consolas, monospace; box-shadow: none; }
+.terminal-input input:focus { outline: none; }
+.terminal-input:focus-within { border-color: var(--focus); }

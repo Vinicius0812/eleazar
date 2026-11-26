@@ -825,6 +825,7 @@ function client(): ControlRoomClient {
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),
     searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }),
+    listTerminals: async () => [], openTerminal: async () => { throw new Error("unused"); }, sendTerminalInput: async () => { throw new Error("unused"); }, closeTerminal: async () => { throw new Error("unused"); }, streamTerminalEvents: async () => true,
     getProjectFileRoots: async () => [explorerRoot], listProjectFiles: async (_project, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "package.json", path: "package.json", type: "file", size: 6, change: null, changedBelow: 0 }], truncated: false }),
     getProjectChanges: async () => ({ root: explorerRoot, changes: [], warnings: [] }),
     getProjectFile: async (_project, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 2, binary: false, content: "{}\n", tooLarge: false, change: null, diff: null, diffTruncated: false }),
