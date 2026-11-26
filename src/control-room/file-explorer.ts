@@ -58,6 +58,9 @@ const maxWalkedEntries = 50_000;
 /** Folders a walk of a plain folder skips: dependencies and build output are rarely what one looks for. */
 const skippedFolders = new Set([".git", "node_modules", "dist", "build", ".next", "target", "bin", "obj", ".venv", "__pycache__"]);
 
+/** A task id, or the project itself: its own folders, as they are on disk. */
+export type ExplorerScope = string | { projectId: string };
+
 export interface ExplorerChanges { root: ExplorerRoot; changes: ExplorerChange[]; warnings: string[]; }
 
 export interface ExplorerFile {
@@ -85,6 +88,14 @@ export class TaskFileExplorer {
 
   constructor(private readonly service: ControlRoomService, private readonly cacheMs = 2_000) {}
 
+  /** The project's own folders, compared with their HEAD, independently of any task. */
+  projectRoots(projectId: string): ExplorerRoot[] {
+    const project = this.service.getProject(projectId);
+    if (!project) throw notFound("Projeto local nao encontrado.");
+    return project.directories.map((directory) => ({ directoryId: directory.id, name: directory.name, path: directory.path, mode: "direct" as const,
+      branch: null, isGitRepository: directory.isGitRepository, base: directory.isGitRepository ? "HEAD" : null }));
+  }
+
   roots(taskId: string): ExplorerRoot[] {
     const task = this.service.getTask(taskId);
     if (!task) throw notFound("Tarefa nao encontrada.");
@@ -102,7 +113,7 @@ export class TaskFileExplorer {
       });
   }
 
-  async list(taskId: string, directoryId: string, path = ""): Promise<ExplorerListing> {
+  async list(taskId: ExplorerScope, directoryId: string, path = ""): Promise<ExplorerListing> {
     const root = this.root(taskId, directoryId);
     const segments = safeSegments(path);
     const absolute = await insideRoot(root.path, segments, true);
@@ -135,13 +146,13 @@ export class TaskFileExplorer {
     return { root, path: segments.join("/"), entries, truncated };
   }
 
-  async changes(taskId: string, directoryId: string): Promise<ExplorerChanges> {
+  async changes(taskId: ExplorerScope, directoryId: string): Promise<ExplorerChanges> {
     const root = this.root(taskId, directoryId);
     if (!root.isGitRepository) {
       return { root, changes: [], warnings: [`${root.name} nao e um repositorio Git; o explorador mostra os arquivos, mas nao ha diff para comparar.`] };
     }
     const collected = await this.collect(root);
-    if (root.mode !== "direct") return collected;
+    if (root.mode !== "direct" || typeof taskId !== "string") return collected;
     // In place, the diff against HEAD also shows what the user had already changed: mark it.
     const first = this.service.store.listExecutions(taskId).filter((execution) => execution.startedAt !== null)
       .sort((left, right) => (left.startedAt ?? "").localeCompare(right.startedAt ?? ""))[0];
@@ -152,7 +163,7 @@ export class TaskFileExplorer {
   }
 
   /** Finds files by name or path fragment across the whole folder, not only the expanded part of the tree. */
-  async search(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch> {
+  async search(taskId: ExplorerScope, directoryId: string, query: string): Promise<ExplorerSearch> {
     const root = this.root(taskId, directoryId);
     const term = query.trim().toLowerCase().replaceAll("\\", "/");
     if (!term) return { root, query, paths: [], truncated: false };
@@ -168,7 +179,7 @@ export class TaskFileExplorer {
     return { root, query, paths: matches.slice(0, maxSearchResults), truncated: matches.length > maxSearchResults };
   }
 
-  async file(taskId: string, directoryId: string, path: string): Promise<ExplorerFile> {
+  async file(taskId: ExplorerScope, directoryId: string, path: string): Promise<ExplorerFile> {
     const root = this.root(taskId, directoryId);
     const segments = safeSegments(path);
     if (!segments.length) throw new Error("Informe o caminho do arquivo.");
@@ -204,9 +215,10 @@ export class TaskFileExplorer {
     return { root, path: relativePath, exists: Boolean(info), size: info?.size ?? null, binary, content, tooLarge, change, diff, diffTruncated };
   }
 
-  private root(taskId: string, directoryId: string): ExplorerRoot {
-    const root = this.roots(taskId).find((item) => item.directoryId === directoryId);
-    if (!root) throw notFound("Diretorio fora do escopo da tarefa.");
+  private root(scope: ExplorerScope, directoryId: string): ExplorerRoot {
+    const roots = typeof scope === "string" ? this.roots(scope) : this.projectRoots(scope.projectId);
+    const root = roots.find((item) => item.directoryId === directoryId);
+    if (!root) throw notFound(typeof scope === "string" ? "Diretorio fora do escopo da tarefa." : "Diretorio nao pertence ao projeto.");
     return root;
   }
 

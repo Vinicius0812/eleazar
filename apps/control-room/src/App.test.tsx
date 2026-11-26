@@ -163,6 +163,22 @@ describe("Task templates", () => {
   });
 });
 
+describe("Project page", () => {
+  it("lists the project's tasks and explores its own folders", async () => {
+    window.location.hash = "#/projects/project-1";
+    const user = userEvent.setup();
+    render(<App client={client()} />);
+    expect(await screen.findByRole("heading", { name: "Projeto", level: 1 })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Projeto" })).getByRole("link", { name: "Resultado" })).toHaveAttribute("href", "#/tasks/task-1");
+    await user.click(within(screen.getByRole("navigation", { name: "Seções do projeto" })).getByRole("link", { name: /Arquivos/ }));
+    expect(window.location.hash).toBe("#/projects/project-1/files");
+    await user.click(await screen.findByRole("tab", { name: /Todos os arquivos/ }));
+    await user.click(await screen.findByRole("button", { name: /package\.json/ }));
+    expect(await screen.findByRole("region", { name: "Conteúdo do arquivo" })).toHaveTextContent("{}");
+    expect(window.location.hash).toBe("#/projects/project-1/files?directory=directory-1&path=package.json");
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -779,13 +795,13 @@ describe("Navigation", () => {
     expect(await screen.findByRole("combobox", { name: "Filtrar por projeto" })).toHaveValue("project-1");
   });
 
-  it("opens the project board from the sidebar and remembers a collapsed project", async () => {
+  it("opens the project page from the sidebar and remembers a collapsed project", async () => {
     window.location.hash = "#/overview";
     const user = userEvent.setup();
     render(<App client={client()} />);
     const sidebar = within(await screen.findByRole("navigation", { name: "Projetos e tarefas" }));
     await user.click(sidebar.getByRole("link", { name: "Projeto" }));
-    await waitFor(() => expect(window.location.hash).toBe("#/tasks"));
+    await waitFor(() => expect(window.location.hash).toBe("#/projects/project-1"));
     expect(sidebar.getByRole("link", { name: "Projeto" })).toHaveAttribute("aria-current", "page");
     await user.click(sidebar.getByRole("button", { name: "Recolher Projeto" }));
     expect(sidebar.getByRole("button", { name: "Expandir Projeto" })).toHaveAttribute("aria-expanded", "false");
@@ -808,6 +824,10 @@ function client(): ControlRoomClient {
     getTaskFileRoots: async () => [explorerRoot], listTaskFiles: async (_task, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "README.md", path: "README.md", type: "file", size: 6, change: "modified", changedBelow: 0 }], truncated: false }),
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),
-    searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }) };
+    searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }),
+    getProjectFileRoots: async () => [explorerRoot], listProjectFiles: async (_project, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "package.json", path: "package.json", type: "file", size: 6, change: null, changedBelow: 0 }], truncated: false }),
+    getProjectChanges: async () => ({ root: explorerRoot, changes: [], warnings: [] }),
+    getProjectFile: async (_project, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 2, binary: false, content: "{}\n", tooLarge: false, change: null, diff: null, diffTruncated: false }),
+    searchProjectFiles: async (_project, _directory, query) => ({ root: explorerRoot, query, paths: [], truncated: false }) };
 }
 const explorerRoot = { directoryId: "directory-1", name: "Principal", path: "C:\\Projeto", mode: "direct" as const, branch: null, isGitRepository: true, base: "HEAD" };

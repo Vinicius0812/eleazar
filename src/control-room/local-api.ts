@@ -118,6 +118,19 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     service.deleteTemplate(decodeURIComponent(templateDeleteMatch[1]));
     return json(response, 200, service.listTemplates());
   }
+  // The same read-only explorer over the project's own folders.
+  const projectFilesMatch = /^\/api\/control-room\/projects\/([^/]+)\/(files\/roots|files\/content|files\/search|files|changes)$/.exec(url.pathname);
+  if (method === "GET" && projectFilesMatch?.[1] && projectFilesMatch[2]) {
+    const scope = { projectId: decodeURIComponent(projectFilesMatch[1]) };
+    if (projectFilesMatch[2] === "files/roots") return json(response, 200, explorer.projectRoots(scope.projectId));
+    const directoryId = url.searchParams.get("directoryId");
+    if (!directoryId) throw new Error("Informe directoryId.");
+    const path = url.searchParams.get("path") ?? "";
+    if (projectFilesMatch[2] === "files") return json(response, 200, await explorer.list(scope, directoryId, path));
+    if (projectFilesMatch[2] === "changes") return json(response, 200, await explorer.changes(scope, directoryId));
+    if (projectFilesMatch[2] === "files/search") return json(response, 200, await explorer.search(scope, directoryId, (url.searchParams.get("q") ?? "").slice(0, 200)));
+    return json(response, 200, await explorer.file(scope, directoryId, path));
+  }
   if (method === "GET" && url.pathname === "/api/control-room/projects") return json(response, 200, service.store.listProjects());
   if (method === "GET" && url.pathname === "/api/control-room/tasks") return json(response, 200, service.listTasks(url.searchParams.get("projectId") ?? undefined));
   if (method === "POST" && url.pathname === "/api/control-room/projects") {

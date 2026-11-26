@@ -3074,3 +3074,28 @@ dialog.command-palette:not([open]) { display: none; }
 .composer-save-template { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .composer-save-template label { flex: 1 1 240px; }
 .composer-save-trigger { justify-self: start; }
+
+/* Project page: folders, tasks, file explorer and terminal of one project. */
+.project-workspace { width: min(100%, 1180px); }
+.project-page { display: grid; gap: 0; }
+.project-page-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: start; margin-bottom: 18px; }
+.project-page-heading h1 { margin: 4px 0 10px; overflow-wrap: anywhere; }
+.project-page-heading .heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-page-directories { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.project-page-directories li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.project-page-directories code { color: var(--text-muted); overflow-wrap: anywhere; }
+.project-page .chip { padding: 1px 7px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 12px; }
+.project-task-list { display: grid; gap: 8px; }
+.project-task-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto; gap: 12px; align-items: center; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.project-task-row.archived { opacity: .7; }
+.project-task-title { overflow: hidden; color: var(--text-strong); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.project-task-fact, .project-task-row time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.project-task-actions { display: inline-flex; gap: 4px; }
+.explorer-page.embedded { padding: 0; }
+.explorer-embedded-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.explorer-embedded-heading p { margin: 0; color: var(--text-muted); font-size: 13px; }
+@media (max-width: 760px) {
+  .project-page-heading { grid-template-columns: 1fr; }
+  .project-task-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .project-task-row .project-task-fact, .project-task-row time { display: none; }
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ArrowLeft, ChevronDown, ChevronRight, File, FileDiff, FileText, Folder, FolderOpen, GitCompare, RefreshCw } from "lucide-react";
 
 import { LoadingOverlay } from "./LoadingOverlay.js";
-import type { ControlRoomClient, ExplorerChange, ExplorerChangeKind, ExplorerEntry, ExplorerFile, ExplorerListing, ExplorerRoot, ExplorerSearch, Project, Task } from "../services/contracts.js";
+import type { ControlRoomClient, ExplorerChanges, ExplorerChange, ExplorerChangeKind, ExplorerEntry, ExplorerFile, ExplorerListing, ExplorerRoot, ExplorerSearch, Project, Task } from "../services/contracts.js";
 
 const changeLabel: Record<ExplorerChangeKind, string> = { added: "Adicionado", modified: "Alterado", deleted: "Removido", renamed: "Renomeado", untracked: "Novo, não rastreado" };
 const changeLetter: Record<ExplorerChangeKind, string> = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U" };
@@ -34,8 +34,43 @@ export function fileExplorerHash(taskId: string, location: FileExplorerLocation 
   return `#/tasks/${encodeURIComponent(taskId)}/files${query ? `?${query}` : ""}`;
 }
 
-export function FileExplorerPage({ client, task, project, initial, onBack, tabs }: {
+/** Where the explorer reads from: a task's folders, or the project's own folders. */
+export interface ExplorerSource {
+  roots(): Promise<ExplorerRoot[]>;
+  list(directoryId: string, path: string): Promise<ExplorerListing>;
+  changes(directoryId: string): Promise<ExplorerChanges>;
+  file(directoryId: string, path: string): Promise<ExplorerFile>;
+  search(directoryId: string, query: string): Promise<ExplorerSearch>;
+}
+
+export function taskExplorerSource(client: ControlRoomClient, taskId: string): ExplorerSource {
+  return {
+    roots: () => client.getTaskFileRoots(taskId),
+    list: (directoryId, path) => client.listTaskFiles(taskId, directoryId, path),
+    changes: (directoryId) => client.getTaskChanges(taskId, directoryId),
+    file: (directoryId, path) => client.getTaskFile(taskId, directoryId, path),
+    search: (directoryId, query) => client.searchTaskFiles(taskId, directoryId, query),
+  };
+}
+
+export function projectExplorerSource(client: ControlRoomClient, projectId: string): ExplorerSource {
+  return {
+    roots: () => client.getProjectFileRoots(projectId),
+    list: (directoryId, path) => client.listProjectFiles(projectId, directoryId, path),
+    changes: (directoryId) => client.getProjectChanges(projectId, directoryId),
+    file: (directoryId, path) => client.getProjectFile(projectId, directoryId, path),
+    search: (directoryId, query) => client.searchProjectFiles(projectId, directoryId, query),
+  };
+}
+
+export function FileExplorerPage({ client, task, project, initial, onBack, tabs, source: given, embedded = false, hashFor }: {
   client: ControlRoomClient;
+  /** Reads somewhere other than the task's folders, such as the project's own. */
+  source?: ExplorerSource;
+  /** Renders inside another page: no heading of its own and no `main` landmark. */
+  embedded?: boolean;
+  /** Address that keeps the open folder and file; defaults to the task explorer route. */
+  hashFor?(location: FileExplorerLocation): string;
   /** Links to the other sides of the task, shown under the heading. */
   tabs?: ReactNode;
   task: Task | undefined;
@@ -44,6 +79,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
   onBack(): void;
 }) {
   const taskId = initial.taskId;
+  const source = useMemo(() => given ?? taskExplorerSource(client, taskId), [given, client, taskId]);
   const [roots, setRoots] = useState<ExplorerRoot[] | null>(null);
   const [directoryId, setDirectoryId] = useState<string | undefined>(initial.directoryId);
   const [mode, setMode] = useState<Mode>("changes");
@@ -69,20 +105,20 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
 
   useEffect(() => {
     let alive = true;
-    client.getTaskFileRoots(taskId).then((loaded) => {
+    source.roots().then((loaded) => {
       if (!alive) return;
       setRoots(loaded);
       setDirectoryId((current) => current && loaded.some((item) => item.directoryId === current) ? current : loaded[0]?.directoryId);
     }).catch((reason: unknown) => { if (alive) { setRoots([]); setError(message(reason)); } });
     return () => { alive = false; };
-  }, [client, taskId]);
+  }, [source]);
 
   const loadChanges = useCallback(async (quiet = false) => {
     if (!directoryId) return;
     const current = generation.current;
     if (!quiet) setListLoading(true);
     try {
-      const result = await client.getTaskChanges(taskId, directoryId);
+      const result = await source.changes(directoryId);
       if (current !== generation.current) return;
       setChanges(result.changes); setWarnings(result.warnings); setError("");
     } catch (reason) {
@@ -90,28 +126,28 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
     } finally {
       if (!quiet && current === generation.current) setListLoading(false);
     }
-  }, [client, taskId, directoryId]);
+  }, [source, directoryId]);
 
   const loadDirectory = useCallback(async (path: string) => {
     if (!directoryId) return;
     const current = generation.current;
     setLoadingDirs((dirs) => new Set(dirs).add(path));
     try {
-      const listing = await client.listTaskFiles(taskId, directoryId, path);
+      const listing = await source.list(directoryId, path);
       if (current === generation.current) setListings((all) => ({ ...all, [path]: listing }));
     } catch (reason) {
       if (current === generation.current) setError(message(reason));
     } finally {
       if (current === generation.current) setLoadingDirs((dirs) => { const next = new Set(dirs); next.delete(path); return next; });
     }
-  }, [client, taskId, directoryId]);
+  }, [source, directoryId]);
 
   const loadFile = useCallback(async (path: string, quiet = false) => {
     if (!directoryId) return;
     const current = generation.current;
     if (!quiet) { setFileLoading(true); setFileError(""); }
     try {
-      const loaded = await client.getTaskFile(taskId, directoryId, path);
+      const loaded = await source.file(directoryId, path);
       if (current !== generation.current) return;
       setFile(loaded);
       if (!quiet) setView(loaded.diff !== null ? "diff" : "content");
@@ -120,7 +156,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
     } finally {
       if (!quiet && current === generation.current) setFileLoading(false);
     }
-  }, [client, taskId, directoryId]);
+  }, [source, directoryId]);
 
   // A new folder starts from a clean state; late answers about the previous one are ignored.
   useEffect(() => {
@@ -137,7 +173,10 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
 
   useEffect(() => {
     if (!directoryId) return;
-    window.history.replaceState(null, "", fileExplorerHash(taskId, { directoryId, ...(selected ? { path: selected } : {}) }));
+    const location = { directoryId, ...(selected ? { path: selected } : {}) };
+    window.history.replaceState(null, "", hashFor ? hashFor(location) : fileExplorerHash(taskId, location));
+    // `hashFor` is a fresh function each render; the address only depends on what it encodes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, directoryId, selected]);
 
   // Project-wide file search, debounced; an answer for an older query or folder is dropped.
@@ -147,13 +186,13 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
     let alive = true;
     setSearching(true);
     const timer = window.setTimeout(() => {
-      client.searchTaskFiles(taskId, directoryId, term)
+      source.search(directoryId, term)
         .then((result) => { if (alive) setSearch(result); })
         .catch((reason: unknown) => { if (alive) setError(message(reason)); })
         .finally(() => { if (alive) setSearching(false); });
     }, 250);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [client, taskId, directoryId, query]);
+  }, [source, directoryId, query]);
 
   const live = task ? liveStatuses.has(task.status) : false;
   useEffect(() => {
@@ -196,9 +235,13 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
   const totals = useMemo(() => (changes ?? []).reduce((sum, change) => ({ additions: sum.additions + (change.additions ?? 0), deletions: sum.deletions + (change.deletions ?? 0) }), { additions: 0, deletions: 0 }), [changes]);
 
   const projectName = project?.name ?? "Projeto";
+  const Landmark = embedded ? "section" : "main";
   return (
-    <main className="explorer-page" id="main" tabIndex={-1}>
-      <header className="explorer-header">
+    <Landmark className={`explorer-page${embedded ? " embedded" : ""}`} {...(embedded ? { "aria-label": "Explorador de arquivos" } : { id: "main", tabIndex: -1 })}>
+      {embedded ? <div className="explorer-embedded-heading">
+        <p>{root ? <>{root.isGitRepository ? "Alterações em relação ao último commit" : "Pasta sem Git"}</> : null}</p>
+        <button className="secondary" disabled={!root || listLoading} onClick={() => void refresh()}><RefreshCw size={15} aria-hidden="true" /> Atualizar</button>
+      </div> : <header className="explorer-header">
         <button className="secondary" onClick={onBack}><ArrowLeft size={16} aria-hidden="true" /> Voltar à tarefa</button>
         <div className="explorer-heading">
           <span className="eyebrow">EXPLORADOR DE ARQUIVOS</span>
@@ -206,7 +249,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
           <p>{projectName}{root ? <> · {root.mode === "worktree" ? <>worktree da branch <code>{root.branch}</code></> : "direto na pasta do projeto"}</> : null}</p>
         </div>
         <button className="secondary" disabled={!root || listLoading} onClick={() => void refresh()}><RefreshCw size={15} aria-hidden="true" /> Atualizar</button>
-      </header>
+      </header>}
       {tabs}
 
       {roots && roots.length > 1 && (
@@ -319,7 +362,7 @@ export function FileExplorerPage({ client, task, project, initial, onBack, tabs 
           </section>
         </div>
       )}
-    </main>
+    </Landmark>
   );
 }
 

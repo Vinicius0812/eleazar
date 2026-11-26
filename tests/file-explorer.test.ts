@@ -130,6 +130,27 @@ describe("explorador de arquivos da tarefa", () => {
     }
   });
 
+  it("explora as pastas do proprio projeto, sem tarefa, pela API local", async () => {
+    const { service, repository } = await fixture();
+    const project = service.registerProject({ name: "Repo", path: repository });
+    const directoryId = project.directories[0]!.id;
+    await writeFile(join(repository, "README.md"), "mudou\n");
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+      const base = `http://127.0.0.1:${address.port}/api/control-room/projects/${project.id}`;
+      await expect(fetch(`${base}/files/roots`).then((response) => response.json())).resolves.toMatchObject([{ directoryId, mode: "direct", path: repository, base: "HEAD" }]);
+      await expect(fetch(`${base}/changes?directoryId=${directoryId}`).then((response) => response.json())).resolves.toMatchObject({ changes: [{ path: "README.md", kind: "modified" }] });
+      const file = await fetch(`${base}/files/content?directoryId=${directoryId}&path=README.md`).then((response) => response.json()) as { diff: string };
+      expect(file.diff).toContain("+mudou");
+      expect((await fetch(`${base}/files?directoryId=outro&path=`)).status).toBe(404);
+      expect((await fetch(`${base}/files/content?directoryId=${directoryId}&path=..%2Fx`)).status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("no modo direto marca o que ja estava alterado antes da tarefa", async () => {
     const { service, store, repository } = await fixture();
     const project = service.registerProject({ name: "Repo", path: repository, isolation: "direct" });

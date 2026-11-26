@@ -50,6 +50,7 @@ import { TaskComposer } from "./components/TaskComposer.js";
 import { TaskWorkspace } from "./components/TaskWorkspace.js";
 import { TaskTabs, taskPublishRoute } from "./components/TaskTabs.js";
 import { ComparisonPage, comparisonRoute } from "./components/ComparisonPage.js";
+import { ProjectPage, projectHash, projectRoute } from "./components/ProjectPage.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -231,6 +232,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const taskRoute = routeId(hash, "tasks") ?? publishRoute;
   const filesRoute = fileExplorerRoute(hash);
   const comparisonId = comparisonRoute(hash);
+  const projectView = projectRoute(hash);
   const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
@@ -560,7 +562,10 @@ export function App({ client }: { client: ControlRoomClient }) {
     ? [tasksCrumb, projectCrumb(task.projectId), current ? { label: task.title } : { label: task.title, href: `#/tasks/${encodeURIComponent(task.id)}` }]
     : [tasksCrumb, { label: title ?? "Tarefa" }];
   const filesTask = filesRoute ? tasks.find((task) => task.id === filesRoute.taskId) : undefined;
-  const crumbs: Crumb[] = comparisonId ? [tasksCrumb, { label: "Comparação de agentes" }]
+  const viewedProject = projectView ? projects.find((project) => project.id === projectView.projectId) : undefined;
+  const crumbs: Crumb[] = projectView ? [{ label: "Projetos", href: "#/projects" }, viewedProject ? { label: viewedProject.name, href: projectHash(viewedProject.id) } : { label: "Projeto" },
+      ...(projectView.section === "files" ? [{ label: "Arquivos" }] : projectView.section === "terminal" ? [{ label: "Terminal" }] : [])]
+    : comparisonId ? [tasksCrumb, { label: "Comparação de agentes" }]
     : filesRoute ? [...taskCrumbs(filesTask, undefined, false), { label: "Arquivos" }]
     : publishRoute ? [...taskCrumbs(selectedTask, undefined, false), { label: "Publicação" }]
     : executionRoute ? [...(executionDetail ? taskCrumbs(tasks.find((task) => task.id === executionDetail.task.id) ?? executionDetail.task, undefined, false) : [{ label: "Execuções", href: "#/executions" }]), { label: "Execução" }]
@@ -649,7 +654,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                     <button type="button" className="sidebar-project-toggle" aria-expanded={open} aria-controls={listId} aria-label={`${open ? "Recolher" : "Expandir"} ${project.name}`} onClick={() => toggleProject(project.id)}>
                       {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                     </button>
-                    <a className="sidebar-project-name" href="#/tasks" title={`Ver tarefas de ${project.name}`} aria-current={active === "tasks" && !taskRoute && projectFilter === project.id ? "page" : undefined} onClick={() => setProjectFilter(project.id)}>
+                    <a className="sidebar-project-name" href={projectHash(project.id)} title={`Abrir ${project.name}`} aria-current={projectView?.projectId === project.id ? "page" : undefined} onClick={() => setProjectFilter(project.id)}>
                       <FolderGit2 size={15} aria-hidden="true" /> <span>{project.name}</span>
                     </a>
                   </div>
@@ -660,7 +665,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                         <span>{task.title}</span>
                       </a>
                     ))}
-                    {visible.length > sidebarTaskLimit && <a className="sidebar-more" href="#/tasks" onClick={() => setProjectFilter(project.id)}><span>Ver todas ({visible.length})</span></a>}
+                    {visible.length > sidebarTaskLimit && <a className="sidebar-more" href={projectHash(project.id)} onClick={() => setProjectFilter(project.id)}><span>Ver todas ({visible.length})</span></a>}
                     {visible.length === 0 && <span className="sidebar-empty">Nenhuma tarefa ativa</span>}
                   </div>}
                 </div>
@@ -725,7 +730,20 @@ export function App({ client }: { client: ControlRoomClient }) {
           tabs={<TaskTabs taskId={filesRoute.taskId} active="files" pendingPublications={pendingPublications(filesRoute.taskId)} />}
           onBack={() => openTask(filesRoute.taskId)} /> : executionRoute ? <ExecutionResultPage client={client} onSessionChanged={refreshSession} detail={executionDetail} loading={executionLoading} error={executionError} onBack={() => executionDetail ? openTask(executionDetail.task.id) : backToDashboard()} onSelect={openExecution} onCreateRelated={(task) => open({ kind: "related", task })} /> : <main id="main" className="loading-host" tabIndex={-1}>
            {busy && !dialog && data && <LoadingOverlay label="Aguarde…" />}
-           {comparisonId ? (
+           {projectView ? (
+             <section className="task-workspace project-workspace">
+               <div className="feedback" role="status">{notice}</div>
+               {error && <div className="error" role="alert">{error}</div>}
+               {formError && !dialog && <div className="error" role="alert">{formError}</div>}
+               {!data ? <div className="loading-area page"><LoadingOverlay label="Carregando projeto…" /></div>
+                 : viewedProject ? <ProjectPage client={client} project={viewedProject} section={projectView.section}
+                     location={{ ...(projectView.directoryId ? { directoryId: projectView.directoryId } : {}), ...(projectView.path ? { path: projectView.path } : {}) }}
+                     cards={tasks.filter((task) => task.projectId === viewedProject.id).map(placed)} statusLabel={(card) => statuses[card.task.status]}
+                     actions={<a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>}
+                     terminal={<div className="empty">O terminal do projeto ainda não está disponível neste host.</div>} />
+                 : <div className="empty">Projeto não encontrado. <a className="text-button" href="#/projects">Voltar aos projetos</a></div>}
+             </section>
+           ) : comparisonId ? (
              <section className="task-workspace comparison-workspace" aria-labelledby="comparison-title">
                <header className="task-workspace-heading">
                  <span className="eyebrow">Comparação de agentes</span>
@@ -942,11 +960,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                         <div className="project-item" key={project.id}>
                         <button
                           className={`project-card ${projectFilter === project.id ? "selected" : ""}`}
-                          aria-pressed={projectFilter === project.id}
-                          onClick={() => {
-                            setProjectFilter(project.id);
-                            navigate("tasks");
-                          }}
+                          aria-label={`Abrir ${project.name}`}
+                          onClick={() => { window.location.hash = projectHash(project.id).slice(1); }}
                         >
                           <span className="project-icon purple">
                             <FolderGit2 size={22} />

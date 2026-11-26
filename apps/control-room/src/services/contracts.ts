@@ -120,5 +120,11 @@ export interface ControlRoomClient {
   getTaskChanges(taskId: string, directoryId: string): Promise<ExplorerChanges>;
   getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
   searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
+  /** The same explorer over the project's own folders, compared with their HEAD. */
+  getProjectFileRoots(projectId: string): Promise<ExplorerRoot[]>;
+  listProjectFiles(projectId: string, directoryId: string, path?: string): Promise<ExplorerListing>;
+  getProjectChanges(projectId: string, directoryId: string): Promise<ExplorerChanges>;
+  getProjectFile(projectId: string, directoryId: string, path: string): Promise<ExplorerFile>;
+  searchProjectFiles(projectId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
 }
 export const priorityOrder: Record<Priority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
