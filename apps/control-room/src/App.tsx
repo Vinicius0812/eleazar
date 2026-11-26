@@ -71,6 +71,7 @@ import { NeedsYouInbox } from "./components/NeedsYouInbox.js";
 import { resolveShortcut, shortcutList, type ShortcutAction } from "./services/shortcuts.js";
 import { notificationSupport, notificationsBetween, showNotifications } from "./services/notifications.js";
 import markUrl from "./assets/icons/eleazar-mark.svg";
+import maestroUrl from "./assets/icons/eleazar-maestro.svg";
 import type {
   Approval,
   ControlRoomClient,
@@ -646,7 +647,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       </a>
       <aside className="sidebar">
         <div className="sidebar-heading">
-          <a className="brand" href="#/overview" aria-label="Eleazar · Visão geral" title="Eleazar · Visão geral">
+          <a className="brand" href="#/overview" aria-label="Eleazar · Visão geral" title="Eleazar · em homenagem ao regente Eleazar de Carvalho">
             <span className="brand-symbol" style={{ backgroundImage: `url("${markUrl}")` }} aria-hidden="true" />
             <span>Eleazar</span>
           </a>
@@ -874,7 +875,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                  actions={selectedActions} pullRequests={(data.pullRequests ?? []).filter((item) => item.taskId === selectedTask.id)} />}
                </div>
              </section>
-           ) : active === "not-found" ? <section className="route-not-found"><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
+           ) : active === "not-found" ? <section className="route-not-found"><img className="maestro-mark" src={maestroUrl} alt="" width={72} height={72} /><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
           <div className="page-heading">
             <div>
               <div className="eyebrow">ELEAZAR / OPERAÇÕES</div>
@@ -1020,8 +1021,10 @@ export function App({ client }: { client: ControlRoomClient }) {
                   >
                     <ProjectList client={client} projects={projects} tasks={tasks} runs={data.runs} />
                     {!projects.length && (
-                      <div className="empty">
-                        Cadastre seu primeiro projeto local para começar.
+                      <div className="empty maestro-empty">
+                        <img src={maestroUrl} alt="" width={88} height={88} />
+                        <strong>A orquestra ainda está afinando</strong>
+                        <span>Cadastre seu primeiro projeto local para o Eleazar começar a reger os agentes.</span>
                       </div>
                     )}
                   </Panel>}

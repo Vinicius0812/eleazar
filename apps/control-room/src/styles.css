@@ -3209,3 +3209,9 @@ dialog.command-palette:not([open]) { display: none; }
   .task-workspace.with-side .task-layout { grid-template-columns: minmax(0, 1fr); }
   .task-side { position: static; }
 }
+
+/* The conductor mark in empty states. */
+.maestro-empty { display: grid; justify-items: center; gap: 8px; padding: 32px 16px; text-align: center; }
+.maestro-empty img, .maestro-mark { border-radius: 22%; box-shadow: 0 8px 24px #3b2c8c33; }
+.maestro-empty strong { color: var(--text-strong); font-size: 15px; }
+.maestro-mark { display: block; margin-bottom: 14px; }
