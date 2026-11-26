@@ -3129,3 +3129,4 @@ dialog.command-palette:not([open]) { display: none; }
 .task-heading-actions { display: inline-flex; gap: 4px; padding-bottom: 4px; }
 .pin-mark { flex: none; color: var(--accent); }
 .project-task-title .pin-mark { margin-right: 6px; vertical-align: -2px; }
+.project-edit { justify-self: start; }

@@ -30,6 +30,7 @@ import {
   Play,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Pin,
   PinOff,
   Trash2,
@@ -74,6 +75,7 @@ import type {
   CreateTaskInput,
   ExecutionDetail,
   ProjectIsolation,
+  Project,
   ProviderStatus,
   TaskTemplate,
   LogEntry,
@@ -118,6 +120,7 @@ function readCollapsedProjects(): string[] {
 }
 type DialogState =
   | { kind: "project" }
+  | { kind: "edit-project"; project: Project }
   | { kind: "execute"; task: Task }
   | { kind: "related"; task: Task }
   | { kind: "approval"; approval: Approval }
@@ -237,7 +240,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const filesRoute = fileExplorerRoute(hash);
   const comparisonId = comparisonRoute(hash);
   const projectView = projectRoute(hash);
-  const [projectDirectories, setProjectDirectories] = useState([{ name: "", path: "" }]);
+  const [projectDirectories, setProjectDirectories] = useState<Array<{ id?: string; name: string; path: string }>>([{ name: "", path: "" }]);
   const [executionDetail, setExecutionDetail] = useState<ExecutionDetail | null>(null);
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionError, setExecutionError] = useState("");
@@ -393,6 +396,7 @@ export function App({ client }: { client: ControlRoomClient }) {
     focusTrigger.current = document.activeElement as HTMLElement | null;
     setFormError("");
     if (next?.kind === "project") setProjectDirectories([{ name: "", path: "" }]);
+    if (next?.kind === "edit-project") setProjectDirectories(next.project.directories.map((directory) => ({ id: directory.id, name: directory.name, path: directory.path })));
     if (next?.kind === "execute") launch.reset();
     setDialog(next);
   }
@@ -486,6 +490,13 @@ export function App({ client }: { client: ControlRoomClient }) {
   function submitProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
+    const isolation = fields.get("isolation") === "direct" ? "direct" as const : "worktree" as const;
+    if (dialog?.kind === "edit-project") {
+      const editing = dialog.project;
+      void mutate(() => client.updateProject(editing.id, { name: String(fields.get("name")), isolation,
+        directories: projectDirectories.map((directory) => directory.id ? { id: directory.id, name: directory.name } : { name: directory.name, path: directory.path }) }), "Projeto atualizado.");
+      return;
+    }
     void mutate(
       () =>
         client.registerProject({
@@ -760,7 +771,10 @@ export function App({ client }: { client: ControlRoomClient }) {
                  : viewedProject ? <ProjectPage client={client} project={viewedProject} section={projectView.section}
                      location={{ ...(projectView.directoryId ? { directoryId: projectView.directoryId } : {}), ...(projectView.path ? { path: projectView.path } : {}) }}
                      cards={tasks.filter((task) => task.projectId === viewedProject.id).map(placed)} statusLabel={(card) => statuses[card.task.status]}
-                     actions={<a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>}
+                     actions={<>
+                       <button type="button" className="secondary" disabled={busy} onClick={() => open({ kind: "edit-project", project: viewedProject })}><Pencil size={15} aria-hidden="true" /> Editar projeto</button>
+                       <a className="primary" href="#/tasks/new" onClick={() => setProjectFilter(viewedProject.id)}><Plus size={16} aria-hidden="true" /> Nova tarefa</a>
+                     </>}
                      taskActions={(card) => manageTask(card.task, true)}
                      terminal={<ProjectTerminal key={viewedProject.id} client={client} project={viewedProject} />} />
                  : <div className="empty">Projeto não encontrado. <a className="text-button" href="#/projects">Voltar aos projetos</a></div>}
@@ -1018,6 +1032,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                             </span>
                           </span>
                         </button>
+                        <button type="button" className="text-button project-edit" disabled={busy} onClick={() => open({ kind: "edit-project", project })} aria-label={`Editar ${project.name}`}><Pencil size={14} aria-hidden="true" /> Editar</button>
                         {project.directories.every((directory) => directory.isGitRepository) && <label className="project-isolation">
                           Onde o agente trabalha
                           <select value={project.isolation} disabled={busy} aria-label={`Onde o agente trabalha em ${project.name}`}
@@ -1359,6 +1374,8 @@ export function App({ client }: { client: ControlRoomClient }) {
           title={
             dialog.kind === "project"
               ? "Cadastrar projeto local"
+              : dialog.kind === "edit-project"
+              ? "Editar projeto"
                : dialog.kind === "execute"
                  ? "Executar tarefa"
                  : dialog.kind === "related"
@@ -1374,11 +1391,12 @@ export function App({ client }: { client: ControlRoomClient }) {
               {formError}
             </div>
           )}
-          {dialog.kind === "project" && (
+          {(dialog.kind === "project" || dialog.kind === "edit-project") && (
             <form onSubmit={submitProject}>
               <p className="form-intro">
-                Informe um ou mais diretórios do projeto. O núcleo local valida e
-                persiste o cadastro antes de a interface ser atualizada.
+                {dialog.kind === "edit-project"
+                  ? "Renomeie o projeto e os diretórios, mude a ordem, adicione pastas ou remova as que nenhuma tarefa usa. O caminho de um diretório já cadastrado não muda."
+                  : "Informe um ou mais diretórios do projeto. O núcleo local valida e persiste o cadastro antes de a interface ser atualizada."}
               </p>
               <label>
                 Nome do projeto
@@ -1386,7 +1404,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                   name="name"
                   required
                   maxLength={100}
-
+                  defaultValue={dialog.kind === "edit-project" ? dialog.project.name : undefined}
                   placeholder="Meu projeto"
                 />
               </label>
@@ -1408,6 +1426,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                       <input
                         required
                         value={directory.path}
+                        readOnly={Boolean(directory.id)}
+                        title={directory.id ? "O caminho de um diretório cadastrado não muda" : undefined}
                         maxLength={500}
                         placeholder="C:\Projetos\meu-projeto"
                         onChange={(event) => setProjectDirectories((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, path: event.target.value } : item))}
@@ -1426,7 +1446,7 @@ export function App({ client }: { client: ControlRoomClient }) {
               <label>
                 Onde o agente trabalha
                 {/* A machine tends to work one way, so the last project's choice is the starting point. */}
-                <select name="isolation" defaultValue={projects[0]?.isolation ?? "worktree"}>
+                <select name="isolation" defaultValue={dialog.kind === "edit-project" ? dialog.project.isolation : projects[0]?.isolation ?? "worktree"}>
                   <option value="worktree">{isolationLabels.worktree}</option>
                   <option value="direct">{isolationLabels.direct}</option>
                 </select>
@@ -1442,7 +1462,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                   Cancelar
                 </button>
                 <button className="primary" disabled={busy}>
-                  {busy ? "Cadastrando…" : "Cadastrar projeto"}
+                  {dialog.kind === "edit-project" ? (busy ? "Salvando…" : "Salvar alterações") : busy ? "Cadastrando…" : "Cadastrar projeto"}
                 </button>
               </div>
             </form>

@@ -59,6 +59,8 @@ export type ProviderPreferencesPatch = Partial<ProviderPreferences>;
 export interface ProviderVerification { connected: boolean; authenticated: boolean | null; detail: string; models: Array<{ id: string; name: string }>; defaultModel: string | null; checkedAt: string; }
 export interface ProviderStatus { provider: string; label: string; available: boolean; authenticated: boolean | null; version: string | null; detail: string; executable: { path: string; source: string } | null; transport: "acp" | "legacy"; roles: { implementer: boolean; reviewer: boolean }; login: { command: string; hint: string }; preferences: ProviderPreferences; verification: ProviderVerification | null; fetchedAt: string; usage: ProviderUsageStatus; }
 export interface ControlRoomSnapshot { projects: Project[]; tasks: Task[]; runs: Run[]; logs: LogEntry[]; approvals: Approval[]; alerts: Alert[]; actions?: TaskOutboundAction[]; pullRequests?: TaskPullRequest[]; }
+/** New state of a project: directories with an `id` are kept (path fixed), the others are added, missing ones removed. */
+export interface UpdateProjectInput { name: string; isolation?: ProjectIsolation; directories: Array<{ id?: string; name?: string; path?: string }>; }
 export interface RegisterProjectInput { name: string; directories: Array<{ name?: string; path: string }>; isolation?: ProjectIsolation; }
 /** Attempts of one comparison; an attempt that could not start stays queued and is listed in `errors`. */
 export interface ComparisonStart { comparisonId: string; tasks: Task[]; errors: Array<{ taskId: string; provider: string; error: string }>; }
@@ -92,6 +94,7 @@ export interface ControlRoomClient {
   updateProvider(provider: string, patch: ProviderPreferencesPatch): Promise<ProviderStatus[]>;
   registerProject(input: RegisterProjectInput): Promise<Project>;
   updateProjectIsolation(projectId: string, isolation: ProjectIsolation): Promise<Project>;
+  updateProject(projectId: string, input: UpdateProjectInput): Promise<Project>;
   createTask(input: CreateTaskInput): Promise<Task>;
   getProviderConfig(provider: AcpProvider, directoryId: string): Promise<ProviderConfig>;
   getCodexConfig(directoryId: string): Promise<CodexConfig>;

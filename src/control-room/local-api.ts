@@ -166,6 +166,22 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
       ...(directories ? { directories } : { path: stringField(body, "path") })
     }));
   }
+  const projectUpdateMatch = /^\/api\/control-room\/projects\/([^/]+)\/update$/.exec(url.pathname);
+  if (method === "POST" && projectUpdateMatch?.[1]) {
+    const body = await readBody(request);
+    if (!Array.isArray(body.directories) || !body.directories.length) throw new Error("Campo directories deve conter ao menos um diretorio.");
+    const directories = body.directories.map((item: unknown) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Diretorio invalido.");
+      const value = item as Record<string, unknown>;
+      const id = typeof value.id === "string" ? value.id.trim() : ""; const name = typeof value.name === "string" ? value.name.trim() : "";
+      const path = typeof value.path === "string" ? value.path.trim() : "";
+      if (!id && !path) throw new Error("Cada novo diretorio exige path.");
+      return { ...(id ? { id } : {}), ...(name ? { name } : {}), ...(path ? { path } : {}) };
+    });
+    const isolation = optionalString(body, "isolation");
+    return json(response, 200, service.updateProject(decodeURIComponent(projectUpdateMatch[1]), { name: stringField(body, "name"), directories,
+      ...(isolation ? { isolation: isolation as ProjectIsolation } : {}) }));
+  }
   const projectSettingsMatch = /^\/api\/control-room\/projects\/([^/]+)\/settings$/.exec(url.pathname);
   if (method === "POST" && projectSettingsMatch?.[1]) {
     const isolation = stringField(await readBody(request), "isolation");

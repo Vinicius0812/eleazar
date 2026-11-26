@@ -24,6 +24,7 @@ import {
   type NewTaskTemplate,
   type TaskTemplate,
   type ProjectIsolation,
+  type ProjectUpdate,
   projectIsolations,
   type TaskAction,
   type TaskWorktree,
@@ -100,6 +101,49 @@ export class ControlRoomService {
     };
     this.store.createProject(project);
     return project;
+  }
+
+  /**
+   * Renames the project and its directory labels, reorders them, adds new folders and removes the
+   * ones no task uses. A kept directory never changes path: tasks and worktrees refer to it.
+   */
+  updateProject(projectId: string, input: ProjectUpdate): LocalProject {
+    const current = this.requireProject(projectId);
+    const name = input.name.trim();
+    if (!name) throw new Error("O nome do projeto e obrigatorio.");
+    if (!input.directories.length) throw new Error("Informe ao menos um diretorio local.");
+    const isolation = input.isolation ?? current.isolation;
+    assertProjectIsolation(isolation);
+    const kept = new Set<string>();
+    const paths = new Set<string>();
+    const directories: LocalProjectDirectory[] = input.directories.map((item) => {
+      if (item.id) {
+        const existing = current.directories.find((directory) => directory.id === item.id);
+        if (!existing) throw new Error("Diretorio nao pertence ao projeto.");
+        if (kept.has(existing.id)) throw new Error("Um projeto nao pode conter diretorios duplicados.");
+        if (item.path !== undefined && normalizeDirectoryPath(item.path) !== normalizeDirectoryPath(existing.path)) {
+          throw new Error(`O caminho de ${existing.name} nao pode mudar; remova o diretorio e adicione o novo caminho.`);
+        }
+        kept.add(existing.id);
+        paths.add(normalizeDirectoryPath(existing.path));
+        return { ...existing, name: item.name?.trim() || existing.name };
+      }
+      if (!item.path || !isAbsolute(item.path)) throw new Error("O caminho do diretorio deve ser absoluto.");
+      const path = resolve(item.path);
+      if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error(`O caminho nao existe ou nao e um diretorio: ${path}`);
+      return { id: randomUUID(), name: item.name?.trim() || defaultDirectoryName(path), path, createdAt: now(), isGitRepository: isGitRepository(path) };
+    });
+    for (const directory of directories.filter((item) => !kept.has(item.id))) {
+      const normalized = normalizeDirectoryPath(directory.path);
+      if (paths.has(normalized)) throw new Error("Um projeto nao pode conter diretorios duplicados.");
+      paths.add(normalized);
+    }
+    for (const removed of current.directories.filter((directory) => !kept.has(directory.id))) {
+      if (this.store.isDirectoryInUse(removed.id)) throw conflict(`${removed.name} e usado por tarefas deste projeto; exclua essas tarefas antes de remover o diretorio.`);
+    }
+    const updated = this.store.updateProject({ ...current, name, isolation, path: directories[0]!.path, directories });
+    if (!updated) throw Object.assign(new Error("Projeto nao encontrado."), { statusCode: 404 });
+    return updated;
   }
 
   /** Applies to the next runs. A task that already owns a worktree keeps working in it. */

@@ -321,6 +321,13 @@ export interface NewProjectDirectory {
   path: string;
 }
 
+/** Full new state of a project. Directories with an `id` are kept (their path cannot change); the others are added. */
+export interface ProjectUpdate {
+  name: string;
+  isolation?: ProjectIsolation;
+  directories: ReadonlyArray<{ id?: string; name?: string; path?: string }>;
+}
+
 export interface NewTask {
   projectId: string;
   title: string;
@@ -363,6 +370,10 @@ export interface ControlRoomStore {
   getProject(id: string): LocalProject | null;
   listProjects(): LocalProject[];
   setProjectIsolation(id: string, isolation: ProjectIsolation): LocalProject | null;
+  /** Replaces name, isolation and the ordered directory list in one transaction. */
+  updateProject(project: LocalProject): LocalProject | null;
+  /** True when a task scope, worktree or recorded file still points at the directory. */
+  isDirectoryInUse(directoryId: string): boolean;
   hasActiveDispatchForDirectories(directoryIds: readonly string[], excludingTaskId?: string): boolean;
   createTask(task: ControlRoomTask): void;
   getTask(id: string): ControlRoomTask | null;

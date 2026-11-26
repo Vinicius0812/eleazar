@@ -199,6 +199,30 @@ describe("Pin and delete tasks", () => {
   });
 });
 
+describe("Edit project", () => {
+  it("renames the project and a directory label, keeps its path fixed and adds a folder", async () => {
+    window.location.hash = "#/projects/project-1";
+    const controlled = client();
+    const update = vi.spyOn(controlled, "updateProject");
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: /Editar projeto/ }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Editar projeto" }));
+    const name = dialog.getByLabelText("Nome do projeto");
+    await user.clear(name);
+    await user.type(name, "Renomeado");
+    const labels = dialog.getAllByLabelText("Rótulo do diretório");
+    await user.clear(labels[0]!);
+    await user.type(labels[0]!, "Raiz");
+    expect(dialog.getAllByLabelText("Caminho local absoluto")[0]).toHaveAttribute("readonly");
+    await user.click(dialog.getByRole("button", { name: /Adicionar diretório/ }));
+    await user.type(dialog.getAllByLabelText("Caminho local absoluto")[1]!, "C:\\Outro");
+    await user.click(dialog.getByRole("button", { name: "Salvar alterações" }));
+    expect(update).toHaveBeenCalledWith("project-1", { name: "Renomeado", isolation: "worktree", directories: [{ id: "directory-1", name: "Raiz" }, { name: "", path: "C:\\Outro" }] });
+    expect(await screen.findByText("Projeto atualizado.")).toBeInTheDocument();
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -840,7 +864,7 @@ describe("Navigation", () => {
 function client(): ControlRoomClient {
   const snapshot: ControlRoomSnapshot = { projects: [{ id: "project-1", name: "Projeto", path: "C:\\Projeto", directories: [{ id: "directory-1", name: "Principal", path: "C:\\Projeto", createdAt: "2026-01-01T00:00:00.000Z", isGitRepository: true }], isolation: "worktree", createdAt: "2026-01-01T00:00:00.000Z" }], tasks: [{ id: "task-1", projectId: "project-1", targetDirectoryId: "directory-1", directoryIds: ["directory-1"], usesWorktree: false, title: "Resultado", prompt: "Teste", priority: "normal", status: "completed", kind: "planning", worktreePath: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }], runs: [{ id: "run-1", taskId: "task-1", provider: "codex", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", summary: "Resultado" }], logs: [], approvals: [], alerts: [] };
   const detail: ExecutionDetail = { execution: snapshot.runs[0]!, task: snapshot.tasks[0]!, project: snapshot.projects[0]!, logs: [], files: [], history: snapshot.runs };
-  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, resumeTask: async () => snapshot.tasks[0]!, listTemplates: async () => [], createTemplate: async (input) => ({ id: "tpl", title: "", kind: null, priority: "normal", projectId: null, createdAt: "2026-01-01T00:00:00.000Z", ...input }), deleteTemplate: async () => [], startComparison: async () => ({ comparisonId: "cmp", tasks: [], errors: [] }), chooseComparisonAttempt: async () => [], refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }),
+  return { getSnapshot: async () => snapshot, getExecutionDetail: async () => detail, getProviderStatuses: async () => ["codex", "antigravity", "claude"].map((id) => providerStatus(id)), verifyProvider: async () => [], updateProvider: async () => [], registerProject: async () => snapshot.projects[0]!, updateProjectIsolation: async () => snapshot.projects[0]!, updateProject: async (_id, input) => ({ ...snapshot.projects[0]!, name: input.name }), createTask: async () => snapshot.tasks[0]!, executeTask: async () => snapshot.tasks[0]!, getProviderConfig: async (_provider, directoryId) => ({ directoryId, runtime: { path: "acp", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), getCodexConfig: async () => ({ directoryId: "directory-1", runtime: { path: "codex", version: "1.0.0", source: "path" }, protocolVersion: 1, settings: [], models: [], defaultModel: null }), streamExecutionEvents: async () => true, cancelExecution: async () => undefined, respondPermission: async () => undefined, retryTask: async () => undefined, decideApproval: async () => undefined, sendTaskMessage: async () => snapshot.tasks[0]!, requestTaskAction: async () => { throw new Error("unused"); }, decideTaskAction: async () => { throw new Error("unused"); }, removeTaskWorktrees: async () => snapshot.tasks[0]!, resumeTask: async () => snapshot.tasks[0]!, listTemplates: async () => [], createTemplate: async (input) => ({ id: "tpl", title: "", kind: null, priority: "normal", projectId: null, createdAt: "2026-01-01T00:00:00.000Z", ...input }), deleteTemplate: async () => [], startComparison: async () => ({ comparisonId: "cmp", tasks: [], errors: [] }), chooseComparisonAttempt: async () => [], refreshPullRequests: async () => ({ pullRequests: [], warnings: [] }),
     getTaskFileRoots: async () => [explorerRoot], listTaskFiles: async (_task, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "README.md", path: "README.md", type: "file", size: 6, change: "modified", changedBelow: 0 }], truncated: false }),
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),

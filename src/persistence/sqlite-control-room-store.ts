@@ -75,6 +75,30 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#db.prepare("UPDATE projects SET isolation = ? WHERE id = ?").run(isolation, id);
     return this.getProject(id);
   }
+  updateProject(project: LocalProject): LocalProject | null {
+    return this.#db.transaction(() => {
+      const result = this.#db.prepare("UPDATE projects SET name = @name, path = @path, isolation = @isolation WHERE id = @id").run(project);
+      if (result.changes !== 1) return null;
+      const keep = project.directories.map((directory) => directory.id);
+      const existing = this.#directoriesFor(project.id).map((directory) => directory.id);
+      for (const id of existing.filter((item) => !keep.includes(item))) this.#db.prepare("DELETE FROM project_directories WHERE id = ?").run(id);
+      // Positions are unique per project; move the kept rows out of the way before renumbering.
+      this.#db.prepare("UPDATE project_directories SET position = -1 - position WHERE project_id = ?").run(project.id);
+      const update = this.#db.prepare("UPDATE project_directories SET name = @name, position = @position WHERE id = @id AND project_id = @projectId");
+      const insert = this.#db.prepare(`INSERT INTO project_directories (id, project_id, name, path, position, is_git_repository, created_at)
+        VALUES (@id, @projectId, @name, @path, @position, @isGitRepository, @createdAt)`);
+      project.directories.forEach((directory, position) => {
+        if (existing.includes(directory.id)) update.run({ id: directory.id, projectId: project.id, name: directory.name, position });
+        else insert.run({ ...directory, projectId: project.id, position, isGitRepository: directory.isGitRepository ? 1 : 0 });
+      });
+      return this.getProject(project.id);
+    })();
+  }
+  isDirectoryInUse(directoryId: string): boolean {
+    return ["task_directory_scopes", "task_worktrees", "task_pull_requests", "execution_file_changes"].some((table) =>
+      Boolean(this.#db.prepare(`SELECT 1 FROM ${table} WHERE directory_id = ? LIMIT 1`).get(directoryId)))
+      || Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE target_directory_id = ? LIMIT 1").get(directoryId));
+  }
   hasActiveDispatchForDirectories(directoryIds: readonly string[], excludingTaskId?: string): boolean {
     if (!directoryIds.length) return false;
     const placeholders = directoryIds.map(() => "?").join(", ");
