@@ -366,11 +366,11 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return row ? mapPreferences(row) : null;
   }
   saveProviderPreferences(providerId: string, preferences: ProviderPreferences, updatedAt: string): void {
-    this.#db.prepare(`INSERT INTO provider_settings (provider_id, enabled, automatic, executable_path, default_model, updated_at)
-      VALUES (@providerId, @enabled, @automatic, @executablePath, @defaultModel, @updatedAt)
+    this.#db.prepare(`INSERT INTO provider_settings (provider_id, enabled, automatic, executable_path, default_model, daily_token_budget, updated_at)
+      VALUES (@providerId, @enabled, @automatic, @executablePath, @defaultModel, @dailyTokenBudget, @updatedAt)
       ON CONFLICT(provider_id) DO UPDATE SET enabled = excluded.enabled, automatic = excluded.automatic,
-        executable_path = excluded.executable_path, default_model = excluded.default_model, updated_at = excluded.updated_at`)
-      .run({ ...preferences, enabled: preferences.enabled ? 1 : 0, automatic: preferences.automatic ? 1 : 0, providerId, updatedAt });
+        executable_path = excluded.executable_path, default_model = excluded.default_model, daily_token_budget = excluded.daily_token_budget, updated_at = excluded.updated_at`)
+      .run({ ...preferences, dailyTokenBudget: preferences.dailyTokenBudget ?? null, enabled: preferences.enabled ? 1 : 0, automatic: preferences.automatic ? 1 : 0, providerId, updatedAt });
   }
   createOutboundAction(action: TaskOutboundAction): void {
     this.#db.prepare(`INSERT INTO task_outbound_actions (id, task_id, kind, status, title, body, targets_json, result, requested_by, created_at, decided_at, finished_at)
@@ -447,6 +447,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         executable_path TEXT, default_model TEXT, updated_at TEXT NOT NULL);
     `);
     this.#addColumnIfMissing("projects", "isolation", "TEXT NOT NULL DEFAULT 'worktree'");
+    this.#addColumnIfMissing("provider_settings", "daily_token_budget", "INTEGER");
     this.#addColumnIfMissing("executions", "prompt", "TEXT");
     this.#addColumnIfMissing("tasks", "dispatch_lease", "TEXT");
     this.#addColumnIfMissing("tasks", "target_directory_id", "TEXT");
@@ -529,7 +530,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
         AND NOT EXISTS (SELECT 1 FROM task_directory_scopes scope WHERE scope.task_id = tasks.id)`);
   }
 
-  #addColumnIfMissing(table: "projects" | "tasks" | "executions" | "task_transitions", column: string, definition: string): void {
+  #addColumnIfMissing(table: "projects" | "tasks" | "executions" | "task_transitions" | "provider_settings", column: string, definition: string): void {
     const columns = this.#db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((item) => item.name === column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
@@ -600,7 +601,8 @@ function mapTransition(row: unknown): TaskTransition | null {
 }
 function mapPreferences(item: Row): ProviderPreferences {
   return { enabled: Boolean(item.enabled), automatic: Boolean(item.automatic),
-    executablePath: nullableString(item, "executable_path"), defaultModel: nullableString(item, "default_model") };
+    executablePath: nullableString(item, "executable_path"), defaultModel: nullableString(item, "default_model"),
+    ...(item.daily_token_budget !== null && item.daily_token_budget !== undefined ? { dailyTokenBudget: Number(item.daily_token_budget) } : {}) };
 }
 function mapOutboundAction(row: unknown): TaskOutboundAction | null {
   if (!row) return null; const item = row as Row;

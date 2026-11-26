@@ -35,6 +35,27 @@ describe("provider status service", () => {
     store.close();
   });
 
+  it("conta os tokens de hoje contra o orcamento diario salvo e entrega o sinal ao roteador", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "eleazar-provider-status-")); temporaryDirectories.push(directory);
+    const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
+    const service = new ControlRoomService(store, undefined, { useWorktrees: false });
+    const project = service.registerProject({ name: "Core", path: process.cwd() });
+    const task = service.createTask({ projectId: project.id, title: "Tokens", prompt: "Teste" });
+    const running = await service.dispatch(task.id, { selectedProvider: "antigravity", reason: "teste", candidates: [], requestedActions: [] });
+    service.finishProviderRun(task.id, running.dispatchLease!, { provider: "antigravity", status: "success", response: "ok", durationMs: 1, usage: { total: 900 } });
+    const registry = registryOf([adapter("codex"), adapter("antigravity")], (id) => store.getProviderPreferences(id));
+    const status = new ProviderStatusService(new Orchestrator(registry), service, { read: async () => null });
+    expect(status.quotaSignal("antigravity")).toBeNull();
+    await status.updatePreferences("antigravity", { dailyTokenBudget: 1_000 });
+    expect(store.getProviderPreferences("antigravity")).toMatchObject({ dailyTokenBudget: 1_000 });
+    expect(status.quotaSignal("antigravity")).toEqual({ usedPercent: 90, source: "budget" });
+    const listed = (await status.list(true)).find((item) => item.provider === "antigravity");
+    expect(listed?.usage).toMatchObject({ todayTokens: 900, quota: { usedPercent: 90, state: "low", dailyTokenBudget: 1_000 } });
+    await status.updatePreferences("antigravity", { dailyTokenBudget: null });
+    expect(store.getProviderPreferences("antigravity")?.dailyTokenBudget).toBeUndefined();
+    store.close();
+  });
+
   it("mantem o provider disponivel sem inventar quota quando a leitura de conta falha", async () => {
     const directory = await mkdtemp(join(tmpdir(), "eleazar-provider-status-")); temporaryDirectories.push(directory);
     const store = new SqliteControlRoomStore(join(directory, ".eleazar", "control-room.sqlite"));
@@ -53,3 +74,14 @@ function adapter(provider: ProviderName): AgentAdapter {
     run: async (_request: AgentRunRequest): Promise<AgentRunResult> => ({ provider, status: "success", response: "ok", durationMs: 1 })
   };
 }
+
+describe("quotaFor", () => {
+  it("usa o mais apertado entre o limite da conta e o orcamento diario", async () => {
+    const { quotaFor } = await import("../src/control-room/provider-status.js");
+    expect(quotaFor(null, null, 500)).toBeNull();
+    expect(quotaFor(null, 1_000, 850)).toMatchObject({ usedPercent: 85, source: "budget", state: "low", todayTokens: 850 });
+    expect(quotaFor(40, 1_000, 1_200)).toMatchObject({ usedPercent: 120, source: "budget", state: "exhausted" });
+    expect(quotaFor(90, 1_000, 100)).toMatchObject({ usedPercent: 90, source: "account", state: "low" });
+    expect(quotaFor(10, null, 0)).toMatchObject({ usedPercent: 10, source: "account", state: "ok", dailyTokenBudget: null });
+  });
+});

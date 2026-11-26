@@ -54,7 +54,7 @@ import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
 import { AgentGlyph } from "./components/AgentGlyph.js";
 import { CommandPalette, type CommandItem } from "./components/CommandPalette.js";
-import { ProvidersPage, providerState } from "./components/ProvidersPage.js";
+import { ProvidersPage, providerState, quotaStateLabel } from "./components/ProvidersPage.js";
 import { placeTask } from "./services/board.js";
 import { needsYou } from "./services/inbox.js";
 import { NeedsYouInbox } from "./components/NeedsYouInbox.js";
@@ -195,12 +195,12 @@ function ProviderStatusPanel({ providers, loading, error, onRefresh }: { provide
         <span className={`provider-symbol ${provider.available ? "available" : "unavailable"}`}><AgentGlyph provider={provider.provider} /></span>
         <div><strong>{provider.label}</strong><small>{providerState(provider).label}</small></div>
         <div className="provider-usage">
-          {provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.label}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
+          {provider.usage.quota ? <><strong>{provider.usage.quota.usedPercent.toLocaleString("pt-BR")}% da cota</strong><progress className={`provider-progress ${provider.usage.quota.state}`} max={100} value={Math.min(provider.usage.quota.usedPercent, 100)} aria-label={`Cota do ${provider.label}`} /><small>{quotaStateLabel[provider.usage.quota.state]}</small></> : provider.usage.usedPercent !== null ? <><strong>{provider.usage.usedPercent}% usado</strong><progress className="provider-progress" max={100} value={provider.usage.usedPercent} aria-label={`Uso do ${provider.label}`} /><small>{provider.usage.resetAt ? `Reset: ${new Date(provider.usage.resetAt).toLocaleString("pt-BR")}` : "Reset não informado"}</small></> : provider.usage.totalTokens !== null ? <><strong>{provider.usage.totalTokens.toLocaleString("pt-BR")} tokens</strong><small>Uso observado no Eleazar</small></> : <><strong>Sem consumo disponível</strong><small>Não informado pelo provedor</small></>}
         </div>
       </article>)}
       {!providers.length && !loading && <div className="empty">Nenhum provedor respondeu ao diagnóstico local.</div>}
     </div>
-    <p className="provider-note"><a className="text-button" href="#/providers">Gerenciar provedores <ArrowRight size={14} aria-hidden="true" /></a></p>
+    <p className="provider-note">O Automático evita quem passou de 80% da cota e pula quem a esgotou. <a className="text-button" href="#/providers">Gerenciar provedores <ArrowRight size={14} aria-hidden="true" /></a></p>
     {providers[0] && <p className="provider-note">Dados atualizados em {new Date(providers[0].fetchedAt).toLocaleString("pt-BR")}. O saldo é exibido apenas quando o provedor o informa.</p>}
   </Panel>;
 }

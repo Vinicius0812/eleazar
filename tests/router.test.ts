@@ -152,3 +152,25 @@ describe("Router", () => {
 function healthy(provider: ProviderName): FakeAdapter {
   return new FakeAdapter(provider, { provider, available: true, authenticated: true, detail: "ok" });
 }
+
+describe("Router com cota", () => {
+  it("o Automatico evita um provedor com a cota quase esgotada e pula o esgotado; a escolha explicita continua valendo", async () => {
+    const router = new Router(registryOf([healthyCodex, healthyAntigravity], () => preferences()));
+    const baseline = await router.route({ prompt: "Implemente a API", taskKind: "implementation" });
+    const favourite = baseline.selected!;
+    const other = favourite === "codex" ? "antigravity" : "codex";
+
+    router.useQuota((provider) => provider === favourite ? { usedPercent: 100, source: "budget" } : null);
+    const exhausted = await router.route({ prompt: "Implemente a API", taskKind: "implementation" });
+    expect(exhausted.selected).toBe(other);
+    expect(exhausted.candidates.find((item) => item.provider === favourite)?.reasons.join(" ")).toContain("cota esgotada");
+
+    router.useQuota((provider) => provider === favourite ? { usedPercent: 85, source: "account" } : null);
+    const low = await router.route({ prompt: "Implemente a API", taskKind: "implementation" });
+    expect(low.candidates.find((item) => item.provider === favourite)?.reasons).toContain("cota em 85%: -40");
+
+    router.useQuota(() => ({ usedPercent: 120, source: "budget" }));
+    expect((await router.route({ prompt: "Implemente a API", taskKind: "implementation" })).selected).toBeNull();
+    expect((await router.route({ prompt: "Implemente a API", taskKind: "implementation", preferredProvider: favourite })).selected).toBe(favourite);
+  });
+});

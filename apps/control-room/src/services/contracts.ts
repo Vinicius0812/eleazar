@@ -50,8 +50,10 @@ export interface OutboundActionInput { kind: OutboundActionKind; title?: string;
 export interface Approval { id: string; taskId: string; title: string; description: string; action: string; }
 export interface Alert { id: string; level: "warning" | "info" | "error"; title: string; message: string; }
 export type ProviderUsageSource = "codex_account" | "eleazar_executions" | "unavailable";
-export interface ProviderUsageStatus { source: ProviderUsageSource; usedPercent: number | null; resetAt: string | null; windowDurationMins: number | null; totalTokens: number | null; lifetimeTokens: number | null; todayTokens: number | null; }
-export interface ProviderPreferences { enabled: boolean; automatic: boolean; executablePath: string | null; defaultModel: string | null; }
+/** What the Automatico mode reads before choosing a provider: the account limit or the operator's daily budget. */
+export interface ProviderQuotaStatus { usedPercent: number; source: "account" | "budget"; dailyTokenBudget: number | null; todayTokens: number | null; state: "ok" | "low" | "exhausted"; }
+export interface ProviderUsageStatus { source: ProviderUsageSource; usedPercent: number | null; resetAt: string | null; windowDurationMins: number | null; totalTokens: number | null; lifetimeTokens: number | null; todayTokens: number | null; quota?: ProviderQuotaStatus | null; }
+export interface ProviderPreferences { enabled: boolean; automatic: boolean; executablePath: string | null; defaultModel: string | null; dailyTokenBudget?: number | null; }
 export type ProviderPreferencesPatch = Partial<ProviderPreferences>;
 /** Result of opening and closing one session of the provider, without a prompt. */
 export interface ProviderVerification { connected: boolean; authenticated: boolean | null; detail: string; models: Array<{ id: string; name: string }>; defaultModel: string | null; checkedAt: string; }

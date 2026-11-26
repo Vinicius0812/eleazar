@@ -280,6 +280,11 @@ function preferencesPatch(body: Record<string, unknown>): ProviderPreferencesPat
     if (typeof value !== "boolean") throw new Error(`Campo invalido: ${name}`);
     patch[name] = value;
   }
+  if (body.dailyTokenBudget !== undefined) {
+    const value = body.dailyTokenBudget;
+    if (value !== null && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) throw new Error("Campo invalido: dailyTokenBudget");
+    patch.dailyTokenBudget = value;
+  }
   for (const name of ["executablePath", "defaultModel"] as const) {
     const value = body[name];
     if (value === undefined) continue;

@@ -32,6 +32,8 @@ for (const warning of custom.warnings) console.warn(warning);
 const orchestrator = createEleazar({ customProviders: custom.specs, preferences: (id) => store.getProviderPreferences(id) });
 const executor = new ControlRoomTaskExecutor(service, orchestrator, orchestrator.registry);
 const providers = new ProviderStatusService(orchestrator, service);
+// Automatico reads the account limit and the operator's daily budget before choosing a provider.
+orchestrator.router.useQuota((provider) => providers.quotaSignal(provider));
 const server = createControlRoomServer(service, executor, providers, actions, pullRequests);
 server.listen(port, "127.0.0.1", () => {
   console.log(`Eleazar Control Room API: http://127.0.0.1:${port}`);

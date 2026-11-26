@@ -10,7 +10,8 @@ function choiceLabel({ label, available, authenticated }: ProviderStatus): strin
 export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunch; busy: boolean }) {
   const { acp, config, choices, chosen } = launch;
   const name = chosen?.label ?? "";
-  const automatic = choices.filter((item) => item.preferences.automatic);
+  const automatic = choices.filter((item) => item.preferences.automatic && item.usage.quota?.state !== "exhausted");
+  const exhausted = choices.filter((item) => item.preferences.automatic && item.usage.quota?.state === "exhausted");
   const modelName = (id: string | null | undefined) => config?.models.find((item) => item.id === id)?.name;
   const saved = modelName(chosen?.preferences.defaultModel);
   const announced = modelName(config?.defaultModel) ?? config?.defaultModel;
@@ -26,8 +27,10 @@ export function ExecutionLaunchFields({ launch, busy }: { launch: ExecutionLaunc
       </label>
       {launch.provider === "auto" && choices.length > 0 && (
         <small>{automatic.length
-          ? `Escolhe entre ${automatic.map((item) => item.label).join(", ")} conforme o tipo da tarefa, e só usa quem tiver o login confirmado.`
-          : "Nenhum provedor participa do Automático. Ajuste na tela Provedores ou escolha um acima."}</small>
+          ? `Escolhe entre ${automatic.map((item) => item.label).join(", ")} conforme o tipo da tarefa e a cota disponível, e só usa quem tiver o login confirmado.`
+          : exhausted.length ? "Todos os provedores do Automático estão com a cota esgotada hoje. Escolha um acima ou ajuste o orçamento na tela Provedores."
+          : "Nenhum provedor participa do Automático. Ajuste na tela Provedores ou escolha um acima."}
+          {automatic.length > 0 && exhausted.length > 0 && ` ${exhausted.map((item) => item.label).join(", ")} ${exhausted.length === 1 ? "está" : "estão"} fora por cota esgotada.`}</small>
       )}
       {acp && (
         <div className="model-picker">

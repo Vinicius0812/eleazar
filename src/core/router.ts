@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentHealth, RouteCandidate, RouteDecision, RouteRequest, TaskKind } from "./contracts.js";
+import type { AgentAdapter, AgentHealth, ProviderQuotaReader, RouteCandidate, RouteDecision, RouteRequest, TaskKind } from "./contracts.js";
 import type { ProviderRegistration, ProviderRegistry } from "./provider-registry.js";
 
 const taskPatterns: ReadonlyArray<readonly [TaskKind, RegExp]> = [
@@ -18,6 +18,8 @@ const taskPatterns: ReadonlyArray<readonly [TaskKind, RegExp]> = [
 
 /** Weight of a provider whose descriptor declares no affinity at all. */
 const neutralScore = 50;
+/** From this share of the allowance on, Automatico prefers the other providers. */
+export const quotaWarningPercent = 80;
 
 export function classifyTask(prompt: string): TaskKind {
   const normalizedPrompt = prompt.normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -36,7 +38,12 @@ export function classifyTask(prompt: string): TaskKind {
  * An explicit choice is never replaced by another provider: the task would go to a company the operator did not pick.
  */
 export class Router {
+  #quota: ProviderQuotaReader = () => null;
+
   constructor(private readonly registry: ProviderRegistry) {}
+
+  /** Lets Automatico steer away from providers whose allowance is nearly or fully spent. */
+  useQuota(reader: ProviderQuotaReader): void { this.#quota = reader; }
 
   async route(request: RouteRequest): Promise<RouteDecision> {
     const taskKind = request.taskKind ?? classifyTask(request.prompt);
@@ -51,10 +58,13 @@ export class Router {
       .sort((left, right) => right.score - left.score);
     const selected = candidates.find((candidate) => {
       const adapter = this.registry.get(candidate.provider)!.adapter;
-      return candidate.health.available && adapter.supportedTasks.has(taskKind) && loginAccepted(candidate.health, adapter, explicit);
+      return candidate.health.available && adapter.supportedTasks.has(taskKind) && loginAccepted(candidate.health, adapter, explicit)
+        && (explicit || !this.#exhausted(candidate.provider));
     });
     return { taskKind, selected: selected?.provider ?? null, candidates };
   }
+
+  #exhausted(provider: string): boolean { return (this.#quota(provider)?.usedPercent ?? 0) >= 100; }
 
   async #health({ descriptor, adapter }: ProviderRegistration): Promise<AgentHealth> {
     if (!this.registry.preferences(descriptor.id).enabled) {
@@ -80,6 +90,16 @@ export class Router {
     if (explicit) {
       score += 100;
       reasons.push("preferencia explicita: +100");
+    }
+
+    // An explicit choice is honoured even with the allowance spent; the operator decided.
+    const quota = explicit ? null : this.#quota(descriptor.id);
+    if (quota && quota.usedPercent >= 100) {
+      score -= 200;
+      reasons.push(`cota esgotada (${Math.round(quota.usedPercent)}% ${quota.source === "account" ? "do limite da conta" : "do orcamento diario"}): fora do Automatico`);
+    } else if (quota && quota.usedPercent >= quotaWarningPercent) {
+      score -= 40;
+      reasons.push(`cota em ${Math.round(quota.usedPercent)}%: -40`);
     }
 
     if (!health.available) {

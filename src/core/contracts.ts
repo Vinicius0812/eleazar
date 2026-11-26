@@ -51,7 +51,16 @@ export interface ProviderPreferences {
   automatic: boolean;
   executablePath: string | null;
   defaultModel: string | null;
+  /** Tokens per day the operator allows the Automatico mode to spend on this provider; absent means no limit. */
+  dailyTokenBudget?: number | null;
 }
+
+/**
+ * How much of a provider's allowance is spent: the account's own limit when the provider reports it,
+ * otherwise the tokens the Eleazar saw today against the operator's daily budget.
+ */
+export interface ProviderQuotaSignal { usedPercent: number; source: "account" | "budget"; }
+export type ProviderQuotaReader = (provider: ProviderName) => ProviderQuotaSignal | null;
 
 export interface AgentHealth {
   provider: ProviderName;

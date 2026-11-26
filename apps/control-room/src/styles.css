@@ -3054,3 +3054,16 @@ dialog.command-palette:not([open]) { display: none; }
 .composer-compare .composer-target { margin-top: 8px; }
 .error-text { color: var(--danger); }
 @media (max-width: 760px) { .comparison-attempts, .comparison-diffs { grid-template-columns: 1fr !important; } }
+
+/* Usage and quota per provider; feeds the Automatico mode. */
+.provider-progress.low { accent-color: #b7832f; }
+.provider-progress.exhausted { accent-color: #b54848; }
+.provider-quota { display: grid; gap: 6px; margin: 4px 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-subtle); }
+.provider-quota .provider-progress { width: 100%; margin: 2px 0; }
+.provider-quota small { color: var(--text-muted); font-size: 12px; }
+.provider-quota-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.quota-state { font-size: 12px; font-weight: 700; color: var(--success); }
+.quota-state.low { color: var(--warning); }
+.quota-state.exhausted { color: var(--danger); }
+.provider-budget { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.provider-budget label { flex: 1 1 200px; }

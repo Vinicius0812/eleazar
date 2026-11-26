@@ -192,6 +192,17 @@ export interface ProviderUsageStatus {
   totalTokens: number | null;
   lifetimeTokens: number | null;
   todayTokens: number | null;
+  /** What Automatico reads before choosing this provider; null when nothing limits it. */
+  quota: ProviderQuotaStatus | null;
+}
+export interface ProviderQuotaStatus {
+  usedPercent: number;
+  source: "account" | "budget";
+  /** Operator's daily budget, when the quota comes from it. */
+  dailyTokenBudget: number | null;
+  /** Tokens counted against that budget today (host's local day). */
+  todayTokens: number | null;
+  state: "ok" | "low" | "exhausted";
 }
 export interface ProviderStatus {
   provider: ProviderName;

@@ -22,6 +22,23 @@ function show(providers: ProviderStatus[], pending: string | null = null) {
 }
 
 describe("ProvidersPage", () => {
+  it("shows the quota the Automatico reads and saves the daily budget", async () => {
+    const quota = { usedPercent: 100, source: "budget" as const, dailyTokenBudget: 1_000, todayTokens: 1_000, state: "exhausted" as const };
+    const { card, onChange } = show([status("codex", { usage: { ...status("codex").usage, todayTokens: 1_000, quota }, preferences: { enabled: true, automatic: true, executablePath: null, defaultModel: null, dailyTokenBudget: 1_000 } })]);
+    const panel = within(card("CODEX").getByRole("region", { name: "Uso e cota do CODEX" }));
+    expect(panel.getByText("Cota esgotada · fora do Automático")).toBeInTheDocument();
+    expect(panel.getByText(/1\.000 de 1\.000 tokens hoje/)).toBeInTheDocument();
+    const input = panel.getByLabelText(/Orçamento diário/);
+    const user = userEvent.setup();
+    await user.clear(input);
+    await user.type(input, "5000");
+    await user.click(panel.getByRole("button", { name: "Salvar orçamento" }));
+    expect(onChange).toHaveBeenCalledWith("codex", { dailyTokenBudget: 5000 });
+    await user.clear(input);
+    await user.click(panel.getByRole("button", { name: "Salvar orçamento" }));
+    expect(onChange).toHaveBeenLastCalledWith("codex", { dailyTokenBudget: null });
+  });
+
   it("names the state from the reported facts", () => {
     expect(providerState(status("a")).label).toBe("Pronto");
     expect(providerState(status("a", { authenticated: null })).label).toBe("Login não confirmado");

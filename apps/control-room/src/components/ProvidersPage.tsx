@@ -89,6 +89,8 @@ function ProviderCard({ status, busy, verifying, onVerify, onChange }: { status:
         <button className="secondary" disabled={busy || !preferences.enabled} onClick={() => onVerify(provider)}><PlugZap size={16} aria-hidden="true" /> {verifying ? "Aguarde…" : "Verificar conexão"}</button>
       </div>
 
+      <QuotaPanel key={String(preferences.dailyTokenBudget ?? "")} status={status} busy={busy} onChange={onChange} />
+
       <details className="provider-settings">
         <summary>Modelo e executável</summary>
         <label>
@@ -103,6 +105,42 @@ function ProviderCard({ status, busy, verifying, onVerify, onChange }: { status:
         <ExecutableForm key={preferences.executablePath ?? ""} status={status} busy={busy} onChange={onChange} />
       </details>
     </article>
+  );
+}
+
+export const quotaStateLabel: Record<"ok" | "low" | "exhausted", string> = { ok: "Dentro da cota", low: "Cota quase no fim", exhausted: "Cota esgotada · fora do Automático" };
+
+/** Account limit or daily budget, how much of it is spent, and the budget the operator gives the Automatico mode. */
+function QuotaPanel({ status, busy, onChange }: { status: ProviderStatus; busy: boolean } & Pick<Props, "onChange">) {
+  const { usage, preferences, provider, label } = status;
+  const quota = usage.quota ?? null;
+  const saved = preferences.dailyTokenBudget ?? null;
+  const [budget, setBudget] = useState(saved ? String(saved) : "");
+  const parsed = budget.trim() ? Number(budget.replace(/\D/g, "")) : null;
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (parsed !== null && (!Number.isSafeInteger(parsed) || parsed <= 0)) return;
+    onChange(provider, { dailyTokenBudget: parsed });
+  }
+  return (
+    <section className="provider-quota" aria-label={`Uso e cota do ${label}`}>
+      <div className="provider-quota-heading">
+        <strong>Uso e cota</strong>
+        {quota && <span className={`quota-state ${quota.state}`}>{quotaStateLabel[quota.state]}</span>}
+      </div>
+      {quota ? <>
+        <progress className={`provider-progress ${quota.state}`} max={100} value={Math.min(quota.usedPercent, 100)} aria-label={`Cota usada do ${label}`} />
+        <small>{quota.usedPercent.toLocaleString("pt-BR")}% {quota.source === "account" ? "do limite informado pela conta" : `do orçamento diário (${(quota.todayTokens ?? 0).toLocaleString("pt-BR")} de ${(quota.dailyTokenBudget ?? 0).toLocaleString("pt-BR")} tokens hoje)`}</small>
+      </> : <small>{usage.todayTokens !== null ? `${usage.todayTokens.toLocaleString("pt-BR")} tokens hoje no Eleazar. ` : ""}Sem limite conhecido: defina um orçamento para o Automático considerar o consumo.</small>}
+      <form onSubmit={submit} className="provider-budget">
+        <label>
+          Orçamento diário do Automático (tokens)
+          <input inputMode="numeric" value={budget} disabled={busy} placeholder="Sem limite" maxLength={12} onChange={(event) => setBudget(event.target.value)} />
+        </label>
+        <button className="secondary" disabled={busy || parsed === saved || (parsed !== null && parsed <= 0)}>Salvar orçamento</button>
+      </form>
+      <small>A partir de 80% o Automático prefere os outros provedores; com 100% ele deixa de escolher este até o dia seguinte. Escolher o {label} manualmente continua possível.</small>
+    </section>
   );
 }
 
@@ -145,6 +183,7 @@ function ExecutableForm({ status, busy, onChange }: { status: ProviderStatus; bu
 }
 
 function usageText({ usage }: ProviderStatus): string {
+  if (usage.quota?.source === "budget") return `${usage.quota.usedPercent.toLocaleString("pt-BR")}% do orçamento diário`;
   if (usage.usedPercent !== null) return `${usage.usedPercent}% do limite${usage.resetAt ? `, renova em ${new Date(usage.resetAt).toLocaleString("pt-BR")}` : ""}`;
   return usage.totalTokens !== null ? `${usage.totalTokens.toLocaleString("pt-BR")} tokens no Eleazar` : "Não informado";
 }

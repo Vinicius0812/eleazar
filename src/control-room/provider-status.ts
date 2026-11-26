@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 
-import type { ProviderName, ProviderPreferences } from "../core/contracts.js";
+import type { ProviderName, ProviderPreferences, ProviderQuotaSignal } from "../core/contracts.js";
 import type { ControlRoomService } from "../core/control-room-service.js";
 import type { Orchestrator } from "../core/orchestrator.js";
 import type { ProviderRegistration } from "../core/provider-registry.js";
-import type { ProviderPreferencesPatch, ProviderStatus, ProviderUsageStatus } from "../core/control-room.js";
+import type { ProviderPreferencesPatch, ProviderQuotaStatus, ProviderStatus, ProviderUsageStatus } from "../core/control-room.js";
+import { quotaWarningPercent } from "../core/router.js";
 import { resolveCodexRuntime } from "../adapters/codex-runtime.js";
 
 interface CodexAccountUsage {
@@ -39,9 +40,11 @@ export class ProviderStatusService {
     const fetchedAt = new Date().toISOString();
     this.#cached = health.map((item) => {
       const { descriptor, adapter } = registry.get(item.provider)!;
-      const usage = item.provider === "codex" && codexAccount
+      const seen = observed.get(item.provider) ?? { total: 0, today: 0 };
+      const base = item.provider === "codex" && codexAccount
         ? codexUsage(codexAccount)
-        : observedUsage(observed.get(item.provider) ?? 0, item.available);
+        : observedUsage(seen.total, seen.today, item.available);
+      const usage = { ...base, quota: quotaFor(base.source === "codex_account" ? base.usedPercent : null, registry.preferences(item.provider).dailyTokenBudget ?? null, seen.today) };
       const verification = adapter.lastVerification?.() ?? null;
       return {
         provider: item.provider, label: descriptor.label, available: item.available, authenticated: item.authenticated,
@@ -57,6 +60,19 @@ export class ProviderStatusService {
     });
     this.#cachedAt = Date.now();
     return this.#cached;
+  }
+
+  /**
+   * Cheap reading for the router: the account limit from the last status check (if recent) and
+   * the tokens seen today against the operator's budget. It never starts a provider process.
+   */
+  quotaSignal(provider: ProviderName): ProviderQuotaSignal | null {
+    const recent = this.#cached && Date.now() - this.#cachedAt < 10 * 60_000 ? this.#cached.find((item) => item.provider === provider)?.usage : undefined;
+    const account = recent?.source === "codex_account" ? recent.usedPercent : null;
+    const budget = this.orchestrator.registry.preferences(provider).dailyTokenBudget ?? null;
+    const today = observedTokens(this.controlRoom).get(provider)?.today ?? 0;
+    const quota = quotaFor(account, budget, today);
+    return quota && { usedPercent: quota.usedPercent, source: quota.source };
   }
 
   /** Opens and closes one session, without a prompt, to confirm connection and login. */
@@ -101,22 +117,37 @@ async function assertExecutable(path: string, names: readonly string[]): Promise
   if (!file?.isFile()) throw new Error("O executavel informado nao existe.");
 }
 
-function observedTokens(controlRoom: ControlRoomService): Map<ProviderStatus["provider"], number> {
-  const totals = new Map<ProviderStatus["provider"], number>();
+/** Tokens the Eleazar saw per provider: in total, and in executions that finished today (host's local day). */
+function observedTokens(controlRoom: ControlRoomService, now = new Date()): Map<ProviderStatus["provider"], { total: number; today: number }> {
+  const totals = new Map<ProviderStatus["provider"], { total: number; today: number }>();
+  const today = localDay(now);
   for (const task of controlRoom.listTasks()) {
     for (const execution of controlRoom.store.listExecutions(task.id)) {
       if (!execution.provider || !execution.usage?.total) continue;
-      totals.set(execution.provider, (totals.get(execution.provider) ?? 0) + execution.usage.total);
+      const current = totals.get(execution.provider) ?? { total: 0, today: 0 };
+      const finishedToday = execution.finishedAt !== null && localDay(new Date(execution.finishedAt)) === today;
+      totals.set(execution.provider, { total: current.total + execution.usage.total, today: current.today + (finishedToday ? execution.usage.total : 0) });
     }
   }
   return totals;
 }
+function localDay(date: Date): string { return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`; }
 
-function codexUsage(account: CodexAccountUsage): ProviderUsageStatus {
+/** The tighter of the account's limit and the operator's daily budget; null when neither applies. */
+export function quotaFor(accountPercent: number | null, dailyTokenBudget: number | null, todayTokens: number): ProviderQuotaStatus | null {
+  const fromBudget = dailyTokenBudget && dailyTokenBudget > 0 ? Math.round((todayTokens / dailyTokenBudget) * 1000) / 10 : null;
+  if (accountPercent === null && fromBudget === null) return null;
+  const useAccount = fromBudget === null || (accountPercent !== null && accountPercent >= fromBudget);
+  const usedPercent = useAccount ? accountPercent! : fromBudget!;
+  return { usedPercent, source: useAccount ? "account" : "budget", dailyTokenBudget: dailyTokenBudget ?? null, todayTokens: dailyTokenBudget ? todayTokens : null,
+    state: usedPercent >= 100 ? "exhausted" : usedPercent >= quotaWarningPercent ? "low" : "ok" };
+}
+
+function codexUsage(account: CodexAccountUsage): Omit<ProviderUsageStatus, "quota"> {
   return { source: "codex_account", usedPercent: account.usedPercent, resetAt: account.resetAt, windowDurationMins: account.windowDurationMins, totalTokens: null, lifetimeTokens: account.lifetimeTokens, todayTokens: account.todayTokens };
 }
-function observedUsage(total: number, available: boolean): ProviderUsageStatus {
-  return { source: available ? "eleazar_executions" : "unavailable", usedPercent: null, resetAt: null, windowDurationMins: null, totalTokens: available ? total : null, lifetimeTokens: null, todayTokens: null };
+function observedUsage(total: number, today: number, available: boolean): Omit<ProviderUsageStatus, "quota"> {
+  return { source: available ? "eleazar_executions" : "unavailable", usedPercent: null, resetAt: null, windowDurationMins: null, totalTokens: available ? total : null, lifetimeTokens: null, todayTokens: available ? today : null };
 }
 
 /** Minimal JSON-RPC client for the official local Codex App Server. It never invokes auth mutations. */
