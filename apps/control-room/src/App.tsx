@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Activity,
+  ArrowLeft,
   ArrowRight,
   Bell,
   BellOff,
@@ -589,9 +590,11 @@ export function App({ client }: { client: ControlRoomClient }) {
   ];
   // Where the operator is, from the workspace down to the current screen; every level but the last is a link.
   const tasksCrumb: Crumb = { label: "Tarefas", href: "#/tasks" };
-  const projectCrumb = (projectId: string): Crumb => ({ label: projectName(projectId), href: "#/tasks", onClick: () => setProjectFilter(projectId) });
+  // A task lives in its project: the trail goes Projetos > project > task, and back leads to the project.
+  const projectsCrumb: Crumb = { label: "Projetos", href: "#/projects" };
+  const projectCrumb = (projectId: string): Crumb => ({ label: projectName(projectId), href: projectHash(projectId), onClick: () => setProjectFilter(projectId) });
   const taskCrumbs = (task: Task | undefined, title: string | undefined, current: boolean): Crumb[] => task
-    ? [tasksCrumb, projectCrumb(task.projectId), current ? { label: task.title } : { label: task.title, href: `#/tasks/${encodeURIComponent(task.id)}` }]
+    ? [projectsCrumb, projectCrumb(task.projectId), current ? { label: task.title } : { label: task.title, href: `#/tasks/${encodeURIComponent(task.id)}` }]
     : [tasksCrumb, { label: title ?? "Tarefa" }];
   const filesTask = filesRoute ? tasks.find((task) => task.id === filesRoute.taskId) : undefined;
   const viewedProject = projectView ? projects.find((project) => project.id === projectView.projectId) : undefined;
@@ -632,6 +635,9 @@ export function App({ client }: { client: ControlRoomClient }) {
     if (permission === "granted") { setNotificationsOn(true); setNotice("Notificações ativadas: avisaremos quando algo precisar de você ou um turno terminar."); }
     else setNotice("O navegador bloqueou as notificações. Libere-as nas configurações do site para ativar.");
   }
+  // The level right above the current screen; the overview is the top and has none.
+  const backCrumb: Crumb | undefined = active === "overview" && !taskRoute && !executionRoute && !filesRoute ? undefined
+    : [...crumbs].reverse().slice(1).find((crumb) => crumb.href) ?? { label: "Workspace", href: "#/overview" };
   return (
     <div className={`shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>
@@ -737,6 +743,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       </aside>
       <div className="content">
         <header className="topbar">
+          {backCrumb && <a className="topbar-back" href={backCrumb.href} onClick={backCrumb.onClick} aria-label={`Voltar para ${backCrumb.label}`} title={`Voltar para ${backCrumb.label}`}><ArrowLeft size={16} aria-hidden="true" /></a>}
           <nav aria-label="Você está em" className="breadcrumbs">
             <ol>
               <li><a href="#/overview">Workspace</a></li>
@@ -823,6 +830,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                ) : selectedTask ? (
                  <TaskWorkspace
                    view={publishRoute ? "publish" : "conversation"}
+                   back={{ href: projectHash(selectedTask.projectId), label: `Voltar a ${projectName(selectedTask.projectId)}` }}
                    client={client}
                    onSessionChanged={refreshSession}
                    task={selectedTask}

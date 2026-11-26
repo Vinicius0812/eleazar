@@ -834,11 +834,15 @@ describe("Navigation", () => {
     render(<App client={client()} />);
     const trail = within(await screen.findByRole("navigation", { name: "Você está em" }));
     await waitFor(() => expect(trail.getByRole("link", { name: "Resultado" })).toHaveAttribute("href", "#/tasks/task-1"));
-    expect(trail.getByRole("link", { name: "Tarefas" })).toHaveAttribute("href", "#/tasks");
+    expect(trail.getByRole("link", { name: "Projetos" })).toHaveAttribute("href", "#/projects");
+    expect(trail.getByRole("link", { name: "Projeto" })).toHaveAttribute("href", "#/projects/project-1");
     expect(trail.getByText("Arquivos")).toHaveAttribute("aria-current", "location");
-    await userEvent.click(trail.getByRole("link", { name: "Projeto" }));
-    await waitFor(() => expect(window.location.hash).toBe("#/tasks"));
-    expect(await screen.findByRole("combobox", { name: "Filtrar por projeto" })).toHaveValue("project-1");
+    expect(screen.getByRole("link", { name: "Voltar para Resultado" })).toHaveAttribute("href", "#/tasks/task-1");
+    await userEvent.click(trail.getByRole("link", { name: "Resultado" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/tasks/task-1"));
+    expect(screen.getByRole("link", { name: "Voltar para Projeto" })).toHaveAttribute("href", "#/projects/project-1");
+    await userEvent.click(screen.getByRole("link", { name: "Voltar para Projeto" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/projects/project-1"));
   });
 
   it("opens the project page from the sidebar and remembers a collapsed project", async () => {

@@ -16,7 +16,9 @@ const statusCopy: Record<Task["status"], string> = {
   cancelled: "A tarefa foi cancelada.",
 };
 
-export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, previousRuns = [], latestLog, failure, actions, followUp, publishing, view = "conversation" }: {
+export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, projectName, directoryName, scopeNames, run, previousRuns = [], latestLog, failure, actions, followUp, publishing, view = "conversation", back = { href: "#/tasks", label: "Voltar à fila" } }: {
+  /** Where "back" leads from the task: its project. */
+  back?: { href: string; label: string };
   client: ControlRoomClient;
   onSessionChanged?: () => void;
   task: Task;
@@ -94,7 +96,7 @@ export function TaskWorkspace({ client, onSessionChanged, task, statusLabel, pro
         {task.status !== "queued" && <TaskChangesSummary client={client} task={task} />}
         {followUp}
         <div className="task-next-actions">
-          <a className="text-button" href="#/tasks"><ArrowLeft size={15} aria-hidden="true" /> Voltar à fila</a>
+          <a className="text-button" href={back.href}><ArrowLeft size={15} aria-hidden="true" /> {back.label}</a>
           {actions}
         </div>
       </article>
