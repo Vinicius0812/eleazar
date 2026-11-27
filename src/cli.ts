@@ -9,6 +9,9 @@ import { CodexAdapter } from "./adapters/codex.js";
 import { createLocalEleazar } from "./create-eleazar.js";
 import type { ProviderName } from "./core/contracts.js";
 import { escapeTerminal, runCrossReviewCommand, safeResultJson } from "./cross-review-cli.js";
+import { defaultSkillRoots, discoverSkills } from "./adapters/skill-importer.js";
+import { SkillCatalog } from "./core/skill-catalog.js";
+import { SqliteControlRoomStore } from "./persistence/sqlite-control-room-store.js";
 
 const parsed = parseArgs({
   allowPositionals: true,
@@ -41,6 +44,9 @@ try {
     case "cross-review":
       await crossReview();
       break;
+    case "skills":
+      await skills();
+      break;
     case "help":
     case "--help":
     case "-h":
@@ -52,6 +58,23 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
+}
+
+/** `eleazar skills import`: copies the operator's Claude and Codex skills into this folder's Control Room. */
+async function skills(): Promise<void> {
+  if (positionals[0] !== "import") throw new Error("Uso: eleazar skills import [--json]");
+  const store = new SqliteControlRoomStore(resolve(process.cwd(), ".eleazar", "control-room.sqlite"));
+  try {
+    const catalog = new SkillCatalog(store);
+    const result = catalog.importSkills(await discoverSkills(defaultSkillRoots()));
+    const summary = { added: result.added.map((skill) => `${skill.name} (${skill.source})`), updated: result.updated.map((skill) => `${skill.name} (${skill.source})`),
+      unchanged: result.unchanged, keptLocalEdits: result.keptLocalEdits.map((skill) => skill.name), total: catalog.listSkills().length };
+    if (parsed.values.json) { console.log(JSON.stringify(summary, null, 2)); return; }
+    console.log(`Skills importadas: ${summary.added.length} novas, ${summary.updated.length} atualizadas, ${summary.unchanged} sem mudanca.`);
+    for (const name of summary.added) console.log(`  + ${escapeTerminal(name)}`);
+    for (const name of summary.updated) console.log(`  ~ ${escapeTerminal(name)}`);
+    for (const name of summary.keptLocalEdits) console.log(`  = ${escapeTerminal(name)} (editada no Eleazar; mantida)`);
+  } finally { store.close(); }
 }
 
 async function doctor(): Promise<void> {
@@ -200,6 +223,7 @@ Uso:
   eleazar plan <tarefa> [--provider auto|${providerNames.join("|")}]
   eleazar run <tarefa> [--provider auto|${providerNames.join("|")}] [--cwd <pasta>]
   eleazar cross-review <tarefa> --cwd <raiz-git> --file <caminho-relativo> [--file <caminho-relativo>] [--json]
+  eleazar skills import [--json]   (copia as skills do Claude e do Codex para o Control Room desta pasta)
 
 Opcoes:
   -p, --prompt      Texto da tarefa

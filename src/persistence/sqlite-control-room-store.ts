@@ -18,6 +18,8 @@ import type {
   TaskOutboundAction,
   TaskPullRequest,
   TaskTemplate,
+  Skill,
+  AgentProfile,
   TaskWorktree,
   TaskTransition
 } from "../core/control-room.js";
@@ -111,8 +113,9 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   }
   createTask(task: ControlRoomTask): void {
     this.#db.transaction(() => {
-      this.#db.prepare(`INSERT INTO tasks (id, project_id, target_directory_id, uses_worktree, title, prompt, priority, status, kind, worktree_path, dispatch_lease, comparison_id, created_at, updated_at)
-        VALUES (@id, @projectId, @targetDirectoryId, @usesWorktree, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @comparisonId, @createdAt, @updatedAt)`).run({ ...task, comparisonId: task.comparisonId ?? null, usesWorktree: task.usesWorktree ? 1 : 0 });
+      this.#db.prepare(`INSERT INTO tasks (id, project_id, target_directory_id, uses_worktree, title, prompt, priority, status, kind, worktree_path, dispatch_lease, comparison_id, agent_profile_id, skill_ids_json, created_at, updated_at)
+        VALUES (@id, @projectId, @targetDirectoryId, @usesWorktree, @title, @prompt, @priority, @status, @kind, @worktreePath, @dispatchLease, @comparisonId, @agentProfileId, @skillIdsJson, @createdAt, @updatedAt)`).run({ ...task, comparisonId: task.comparisonId ?? null,
+        agentProfileId: task.agentProfileId ?? null, skillIdsJson: task.skillIds?.length ? JSON.stringify(task.skillIds) : null, usesWorktree: task.usesWorktree ? 1 : 0 });
       this.#replaceTaskDirectoryScope(task.id, task.directoryIds);
     })();
   }
@@ -418,6 +421,25 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     return result.changes === 1 ? this.getOutboundAction(id) : null;
   }
 
+  saveSkill(skill: Skill): void {
+    this.#db.prepare(`INSERT INTO skills (id, slug, name, description, content, source, source_path, support_files_json, imported_hash, created_at, updated_at)
+      VALUES (@id, @slug, @name, @description, @content, @source, @sourcePath, @supportFilesJson, @importedHash, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET slug = excluded.slug, name = excluded.name, description = excluded.description, content = excluded.content,
+        source = excluded.source, source_path = excluded.source_path, support_files_json = excluded.support_files_json,
+        imported_hash = excluded.imported_hash, updated_at = excluded.updated_at`).run({ ...skill, supportFilesJson: JSON.stringify(skill.supportFiles) });
+  }
+  getSkill(id: string): Skill | null { return mapSkill(this.#db.prepare("SELECT * FROM skills WHERE id = ?").get(id)); }
+  listSkills(): Skill[] { return this.#db.prepare("SELECT * FROM skills ORDER BY name COLLATE NOCASE, source").all().map(mapSkill).filter(isPresent); }
+  deleteSkill(id: string): boolean { return this.#db.prepare("DELETE FROM skills WHERE id = ?").run(id).changes === 1; }
+  saveAgentProfile(profile: AgentProfile): void {
+    this.#db.prepare(`INSERT INTO agent_profiles (id, name, role, instructions, skill_ids_json, provider, model, created_at, updated_at)
+      VALUES (@id, @name, @role, @instructions, @skillIdsJson, @provider, @model, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, instructions = excluded.instructions, skill_ids_json = excluded.skill_ids_json,
+        provider = excluded.provider, model = excluded.model, updated_at = excluded.updated_at`).run({ ...profile, skillIdsJson: JSON.stringify(profile.skillIds) });
+  }
+  getAgentProfile(id: string): AgentProfile | null { return mapAgentProfile(this.#db.prepare("SELECT * FROM agent_profiles WHERE id = ?").get(id)); }
+  listAgentProfiles(): AgentProfile[] { return this.#db.prepare("SELECT * FROM agent_profiles ORDER BY name COLLATE NOCASE").all().map(mapAgentProfile).filter(isPresent); }
+  deleteAgentProfile(id: string): boolean { return this.#db.prepare("DELETE FROM agent_profiles WHERE id = ?").run(id).changes === 1; }
   setTaskPinned(taskId: string, pinnedAt: string | null): ControlRoomTask | null {
     this.#db.prepare("UPDATE tasks SET pinned_at = ? WHERE id = ?").run(pinnedAt, taskId);
     return this.getTask(taskId);
@@ -498,6 +520,11 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS task_outbound_actions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), kind TEXT NOT NULL,
         status TEXT NOT NULL, title TEXT, body TEXT, targets_json TEXT NOT NULL, result TEXT, requested_by TEXT NOT NULL,
         created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT);
+      CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL, source TEXT NOT NULL, source_path TEXT UNIQUE, support_files_json TEXT NOT NULL DEFAULT '[]', imported_hash TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS agent_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
+        skill_ids_json TEXT NOT NULL DEFAULT '[]', provider TEXT, model TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,
         kind TEXT, priority TEXT NOT NULL, project_id TEXT REFERENCES projects(id), created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, automatic INTEGER NOT NULL,
@@ -511,6 +538,8 @@ export class SqliteControlRoomStore implements ControlRoomStore {
     this.#addColumnIfMissing("tasks", "uses_worktree", "INTEGER NOT NULL DEFAULT 0");
     this.#addColumnIfMissing("tasks", "comparison_id", "TEXT");
     this.#addColumnIfMissing("tasks", "pinned_at", "TEXT");
+    this.#addColumnIfMissing("tasks", "agent_profile_id", "TEXT");
+    this.#addColumnIfMissing("tasks", "skill_ids_json", "TEXT");
     this.#addColumnIfMissing("executions", "lease_id", "TEXT");
     this.#addColumnIfMissing("executions", "output", "TEXT");
     this.#addColumnIfMissing("executions", "usage_json", "TEXT");
@@ -613,7 +642,9 @@ function mapTask(row: unknown, directoryIds: string[], branch: string | null): C
     priority: stringValue(item, "priority") as ControlRoomTask["priority"], status: stringValue(item, "status") as ControlRoomTask["status"],
     kind: stringValue(item, "kind") as ControlRoomTask["kind"], worktreePath: nullableString(item, "worktree_path"), branch, dispatchLease: nullableString(item, "dispatch_lease"),
     ...(item.comparison_id ? { comparisonId: stringValue(item, "comparison_id") } : {}),
-    ...(item.pinned_at ? { pinnedAt: stringValue(item, "pinned_at") } : {}), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+    ...(item.pinned_at ? { pinnedAt: stringValue(item, "pinned_at") } : {}),
+    ...(item.agent_profile_id ? { agentProfileId: stringValue(item, "agent_profile_id") } : {}),
+    ...(item.skill_ids_json ? { skillIds: JSON.parse(stringValue(item, "skill_ids_json")) as string[] } : {}), createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapExecution(row: unknown): TaskExecution | null {
   if (!row) return null; const item = row as Row;
@@ -662,6 +693,19 @@ function mapPreferences(item: Row): ProviderPreferences {
   return { enabled: Boolean(item.enabled), automatic: Boolean(item.automatic),
     executablePath: nullableString(item, "executable_path"), defaultModel: nullableString(item, "default_model"),
     ...(item.daily_token_budget !== null && item.daily_token_budget !== undefined ? { dailyTokenBudget: Number(item.daily_token_budget) } : {}) };
+}
+function mapSkill(row: unknown): Skill | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), slug: stringValue(item, "slug"), name: stringValue(item, "name"), description: stringValue(item, "description"),
+    content: stringValue(item, "content"), source: stringValue(item, "source") as Skill["source"], sourcePath: nullableString(item, "source_path"),
+    supportFiles: JSON.parse(stringValue(item, "support_files_json")) as string[], importedHash: nullableString(item, "imported_hash"),
+    createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
+}
+function mapAgentProfile(row: unknown): AgentProfile | null {
+  if (!row) return null; const item = row as Row;
+  return { id: stringValue(item, "id"), name: stringValue(item, "name"), role: stringValue(item, "role"), instructions: stringValue(item, "instructions"),
+    skillIds: JSON.parse(stringValue(item, "skill_ids_json")) as string[], provider: nullableString(item, "provider"), model: nullableString(item, "model"),
+    createdAt: stringValue(item, "created_at"), updatedAt: stringValue(item, "updated_at") };
 }
 function mapOutboundAction(row: unknown): TaskOutboundAction | null {
   if (!row) return null; const item = row as Row;

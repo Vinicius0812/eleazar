@@ -186,6 +186,7 @@ export class ControlRoomService {
       worktreePath: null,
       dispatchLease: null,
       ...(input.comparisonId ? { comparisonId: input.comparisonId } : {}),
+      ...this.taskGuidance(input),
       createdAt,
       updatedAt: createdAt
     };
@@ -235,6 +236,15 @@ export class ControlRoomService {
 
   deleteTemplate(id: string): void {
     if (!this.store.deleteTaskTemplate(id)) throw Object.assign(new Error("Modelo nao encontrado."), { statusCode: 404 });
+  }
+
+  /** Validates the agent profile and skills a new task asks for. */
+  private taskGuidance(input: NewTask): Pick<ControlRoomTask, "agentProfileId" | "skillIds"> {
+    if (input.agentProfileId && !this.store.getAgentProfile(input.agentProfileId)) throw new Error("Agente nao encontrado.");
+    const skillIds = [...new Set(input.skillIds ?? [])];
+    if (skillIds.length > 20) throw new Error("Escolha no maximo 20 skills por tarefa.");
+    if (skillIds.some((id) => !this.store.getSkill(id))) throw new Error("Skill nao encontrada.");
+    return { ...(input.agentProfileId ? { agentProfileId: input.agentProfileId } : {}), ...(skillIds.length ? { skillIds } : {}) };
   }
 
   /**

@@ -12,6 +12,7 @@ export interface ComparisonStart {
 }
 import { GitChangeCollector } from "./git-change-collector.js";
 import { buildResumeMessage } from "../core/resume-context.js";
+import { SkillCatalog } from "../core/skill-catalog.js";
 
 /** Minimal boundary for the live provider runner; tests can use a deterministic substitute. */
 export interface ControlRoomTaskRunner {
@@ -24,13 +25,14 @@ export class ControlRoomTaskExecutor {
   private readonly active = new Map<string, AbortController>();
   private readonly pendingPermissions = new Map<string, { executionId: string; resolve: (optionId: string | null) => void }>();
   private readonly configCache = new Map<string, { expires: number; value: ProviderConfig }>();
+  private readonly catalog: SkillCatalog;
   isActive(executionId: string): boolean { return this.active.has(executionId); }
   constructor(
     private readonly service: ControlRoomService,
     private readonly runner: ControlRoomTaskRunner,
     private readonly registry: ProviderRegistry,
     private readonly changes = new GitChangeCollector()
-  ) {}
+  ) { this.catalog = new SkillCatalog(service.store); }
 
   async providerConfig(provider: ProviderName, directoryId: string): Promise<ProviderConfig> {
     const directory = this.service.store.listProjects().flatMap((project) => project.directories).find((item) => item.id === directoryId);
@@ -127,7 +129,14 @@ export class ControlRoomTaskExecutor {
   async start(taskId: string, preferredProvider?: ProviderName, model?: string, sessionId?: string, followUp?: string): Promise<ControlRoomTask> {
     const task = this.requireStartableTask(taskId, followUp !== undefined);
     const directory = this.requireTargetDirectory(task);
-    const request = makeRunRequest(task, directory, null, followUp, Boolean(sessionId));
+    // The task's agent profile picks the provider and model only when the operator did not.
+    const profile = this.catalog.agentFor(task);
+    if (!preferredProvider && profile?.provider && this.registry.get(profile.provider)) {
+      preferredProvider = profile.provider;
+      if (!model && !sessionId && profile.model) model = profile.model;
+    }
+    const briefing = this.catalog.briefing(task);
+    const request = makeRunRequest(task, directory, null, followUp, Boolean(sessionId), briefing);
     const route = await this.runner.router.route({
       prompt: request.prompt,
       taskKind: task.kind,
@@ -169,7 +178,7 @@ export class ControlRoomTaskExecutor {
       return worktree ? { ...item, path: worktree.path } : item;
     };
     const directories = this.requireTaskDirectories(dispatched).map(located);
-    const workingRequest = worktrees.length ? makeRunRequest(task, located(directory), worktrees[0]!.branch, followUp, Boolean(sessionId)) : request;
+    const workingRequest = worktrees.length ? makeRunRequest(task, located(directory), worktrees[0]!.branch, followUp, Boolean(sessionId), briefing) : request;
     const execution = this.service.store.listExecutions(task.id).find((item) => item.leaseId === dispatched.dispatchLease);
     if (!execution) throw new Error("Execucao reservada nao encontrada.");
     const controller = new AbortController();
@@ -274,7 +283,7 @@ export class ControlRoomTaskExecutor {
 
 function conflict(message: string): Error { return Object.assign(new Error(message), { statusCode: 409 }); }
 
-function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory, branch: string | null, followUp?: string, resumed = false): AgentRunRequest {
+function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory, branch: string | null, followUp?: string, resumed = false, briefing = ""): AgentRunRequest {
   return {
     cwd: directory.path,
     taskKind: task.kind,
@@ -283,6 +292,8 @@ function makeRunRequest(task: ControlRoomTask, directory: LocalProjectDirectory,
       `Diretorio autorizado: ${directory.path}`,
       ...(branch ? [`Branch da tarefa: ${branch} (worktree isolada; nao troque de branch nem crie commits, o operador faz o commit pelo Eleazar).`] : []),
       "Execute somente o pedido abaixo no diretorio autorizado. Nao faca push, merge, deploy, publicacao, login, logout ou leitura de credenciais. Relate de forma objetiva o resultado e os testes executados.",
+      // A resumed session already received the agent profile and skills in its first turn.
+      ...(briefing && !resumed ? ["", briefing] : []),
       "",
       // Without a resumed session the agent has no memory of the first request, so it is repeated.
       ...(followUp !== undefined && !resumed ? ["Pedido original desta tarefa:", task.prompt, "", "Nova mensagem do operador, continuando o trabalho ja feito neste diretorio:"] : []),

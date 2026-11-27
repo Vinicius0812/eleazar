@@ -10,6 +10,8 @@ import type { PullRequestService } from "../core/pull-requests.js";
 import { TaskFileExplorer } from "./file-explorer.js";
 import type { ProjectTerminals, TerminalEvent } from "./project-terminal.js";
 import { findProjectIcon } from "./project-icon.js";
+import { SkillCatalog } from "../core/skill-catalog.js";
+import { defaultSkillRoots, discoverSkills, type SkillRoot } from "../adapters/skill-importer.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -17,10 +19,10 @@ const uiOrigins = new Set([
 ]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service), terminals?: ProjectTerminals): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service), terminals?: ProjectTerminals, skillRoots: () => SkillRoot[] = () => defaultSkillRoots()): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, executor, providers, actions, pullRequests, explorer, terminals, request, response);
+      await route(service, executor, providers, actions, pullRequests, explorer, terminals, skillRoots, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -29,7 +31,7 @@ export function createControlRoomServer(service: ControlRoomService, executor?: 
   });
 }
 
-async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, terminals: ProjectTerminals | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, terminals: ProjectTerminals | undefined, skillRoots: () => SkillRoot[], request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -120,6 +122,36 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     service.deleteTemplate(decodeURIComponent(templateDeleteMatch[1]));
     return json(response, 200, service.listTemplates());
   }
+  // Skills and agent profiles of the Eleazar, usable with any provider.
+  if (url.pathname.startsWith("/api/control-room/skills") || url.pathname.startsWith("/api/control-room/agents")) {
+    const catalog = new SkillCatalog(service.store);
+    if (method === "GET" && url.pathname === "/api/control-room/skills") return json(response, 200, catalog.listSkills());
+    if (method === "GET" && url.pathname === "/api/control-room/agents") return json(response, 200, catalog.listAgents());
+    if (method === "POST" && url.pathname === "/api/control-room/skills/import") {
+      const body = await readBody(request);
+      const sources = body.sources === undefined ? undefined : arrayOfStrings(body.sources, "sources");
+      const roots = skillRoots().filter((root) => !sources || sources.includes(root.source));
+      const result = catalog.importSkills(await discoverSkills(roots));
+      return json(response, 200, { added: result.added.length, updated: result.updated.length, unchanged: result.unchanged,
+        keptLocalEdits: result.keptLocalEdits.map((skill) => skill.name), skills: catalog.listSkills() });
+    }
+    if (method === "POST" && url.pathname === "/api/control-room/skills") {
+      const body = await readBody(request);
+      return json(response, 201, catalog.createSkill({ name: stringField(body, "name"), description: optionalString(body, "description") ?? "", content: stringField(body, "content") }));
+    }
+    if (method === "POST" && url.pathname === "/api/control-room/agents") return json(response, 201, catalog.createAgent(agentInput(await readBody(request))));
+    const itemMatch = /^\/api\/control-room\/(skills|agents)\/([^/]+)\/(update|delete)$/.exec(url.pathname);
+    if (method === "POST" && itemMatch?.[1] && itemMatch[2] && itemMatch[3]) {
+      const id = decodeURIComponent(itemMatch[2]);
+      const body = await readBody(request);
+      if (itemMatch[1] === "skills") {
+        if (itemMatch[3] === "delete") { catalog.deleteSkill(id); return json(response, 200, catalog.listSkills()); }
+        return json(response, 200, catalog.updateSkill(id, { name: stringField(body, "name"), description: optionalString(body, "description") ?? "", content: stringField(body, "content") }));
+      }
+      if (itemMatch[3] === "delete") { catalog.deleteAgent(id); return json(response, 200, catalog.listAgents()); }
+      return json(response, 200, catalog.updateAgent(id, agentInput(body)));
+    }
+  }
   // Bash in one of the project's folders, opened and driven only by the local operator.
   const projectTerminalMatch = /^\/api\/control-room\/projects\/([^/]+)\/terminals$/.exec(url.pathname);
   if (projectTerminalMatch?.[1] && (method === "GET" || method === "POST")) {
@@ -206,7 +238,7 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     if (kind && !taskKinds.includes(kind as typeof taskKinds[number])) throw new Error("Tipo de tarefa invalido.");
     const targetDirectoryId = optionalString(body, "targetDirectoryId");
     const directoryIds = optionalArrayOfStrings(body.directoryIds, "directoryIds");
-    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}), ...(targetDirectoryId ? { targetDirectoryId } : {}), ...(directoryIds ? { directoryIds } : {}) }));
+    return json(response, 201, service.createTask({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"), ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}), ...(targetDirectoryId ? { targetDirectoryId } : {}), ...(directoryIds ? { directoryIds } : {}), ...taskGuidance(body) }));
   }
   const transitionMatch = /^\/api\/control-room\/tasks\/([^/]+)\/transition$/.exec(url.pathname);
   if (method === "POST" && transitionMatch?.[1]) {
@@ -251,7 +283,7 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     const targetDirectoryId = optionalString(body, "targetDirectoryId");
     return json(response, 202, await executor.startComparison({ projectId: stringField(body, "projectId"), title: stringField(body, "title"), prompt: stringField(body, "prompt"),
       ...(priority ? { priority: priority as TaskPriority } : {}), ...(kind ? { kind: kind as typeof taskKinds[number] } : {}),
-      ...(targetDirectoryId ? { targetDirectoryId, directoryIds: [targetDirectoryId] } : {}) }, providers));
+      ...(targetDirectoryId ? { targetDirectoryId, directoryIds: [targetDirectoryId] } : {}), ...taskGuidance(body) }, providers));
   }
   const comparisonMatch = /^\/api\/control-room\/comparisons\/([^/]+)(\/choose)?$/.exec(url.pathname);
   if (comparisonMatch?.[1]) {
@@ -393,6 +425,18 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
 }
 function stringField(body: Record<string, unknown>, name: string): string { const value = optionalString(body, name); if (!value) throw new Error(`Campo obrigatorio: ${name}`); return value; }
 function optionalString(body: Record<string, unknown>, name: string): string | undefined { const value = body[name]; return typeof value === "string" ? value.trim() : undefined; }
+/** Agent profile and skills chosen for a new task. */
+function taskGuidance(body: Record<string, unknown>): { agentProfileId?: string; skillIds?: string[] } {
+  const agentProfileId = optionalString(body, "agentProfileId");
+  const skillIds = body.skillIds === undefined ? undefined : arrayOfStrings(body.skillIds, "skillIds");
+  return { ...(agentProfileId ? { agentProfileId } : {}), ...(skillIds?.length ? { skillIds } : {}) };
+}
+function agentInput(body: Record<string, unknown>) {
+  const provider = body.provider === null ? null : optionalString(body, "provider") ?? null;
+  const model = body.model === null ? null : optionalString(body, "model") ?? null;
+  return { name: stringField(body, "name"), role: optionalString(body, "role") ?? "", instructions: typeof body.instructions === "string" ? body.instructions : "",
+    skillIds: body.skillIds === undefined ? [] : arrayOfStrings(body.skillIds, "skillIds"), provider, model };
+}
 function preferencesPatch(body: Record<string, unknown>): ProviderPreferencesPatch {
   const patch: ProviderPreferencesPatch = {};
   for (const name of ["enabled", "automatic"] as const) {

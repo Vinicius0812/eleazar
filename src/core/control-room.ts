@@ -62,6 +62,10 @@ export interface ControlRoomTask {
   comparisonId?: string | null;
   /** When the operator pinned the task to the top of its project; absent when not pinned. */
   pinnedAt?: string | null;
+  /** Eleazar agent profile whose role and instructions lead every turn, whatever the provider. */
+  agentProfileId?: string | null;
+  /** Eleazar skills handed to the agent with the request. */
+  skillIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -340,6 +344,44 @@ export interface NewTask {
   directoryIds?: readonly string[];
   /** Groups this task with the other attempts of a comparison. */
   comparisonId?: string;
+  agentProfileId?: string;
+  skillIds?: readonly string[];
+}
+
+/** Where a skill came from. Imported ones keep the original file untouched; the Eleazar works on its own copy. */
+export const skillSources = ["eleazar", "claude", "codex"] as const;
+export type SkillSource = (typeof skillSources)[number];
+
+/** Instructions in the SKILL.md format, usable with any provider because they travel in the prompt. */
+export interface Skill {
+  id: string;
+  /** Folder name of the original, or a slug of the name. */
+  slug: string;
+  name: string;
+  description: string;
+  content: string;
+  source: SkillSource;
+  /** Original SKILL.md (or prompt file) for an imported skill. */
+  sourcePath: string | null;
+  /** Other files next to the original (scripts, references), listed for the agent; never copied. */
+  supportFiles: string[];
+  /** Hash of the content last imported; a different current hash means the copy was edited here. */
+  importedHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A reusable agent: role, standing instructions, skills and the provider it prefers (null: Automatico). */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  role: string;
+  instructions: string;
+  skillIds: string[];
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** A request the operator runs often, saved to start new tasks from it. */
@@ -415,6 +457,14 @@ export interface ControlRoomStore {
   listOutboundActions(taskId?: string): TaskOutboundAction[];
   /** Compare-and-set on the status so two decisions cannot both win. */
   setTaskPinned(taskId: string, pinnedAt: string | null): ControlRoomTask | null;
+  saveSkill(skill: Skill): void;
+  getSkill(id: string): Skill | null;
+  listSkills(): Skill[];
+  deleteSkill(id: string): boolean;
+  saveAgentProfile(profile: AgentProfile): void;
+  getAgentProfile(id: string): AgentProfile | null;
+  listAgentProfiles(): AgentProfile[];
+  deleteAgentProfile(id: string): boolean;
   /** Removes the task and everything recorded about it. True when it existed. */
   deleteTask(taskId: string): boolean;
   createTaskTemplate(template: TaskTemplate): void;
