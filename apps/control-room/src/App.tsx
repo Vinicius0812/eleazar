@@ -11,6 +11,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
+  BookOpen,
+  Bot,
   BellOff,
   Keyboard,
   Check,
@@ -59,6 +61,8 @@ import { ProjectPage, projectHash, projectRoute } from "./components/ProjectPage
 import { ProjectTerminal } from "./components/ProjectTerminal.js";
 import { ProjectList } from "./components/ProjectList.js";
 import { TaskSidePanel } from "./components/TaskSidePanel.js";
+import { SkillsPage } from "./components/SkillsPage.js";
+import { AgentsPage } from "./components/AgentsPage.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -82,6 +86,8 @@ import type {
   Project,
   ProviderStatus,
   TaskTemplate,
+  Skill,
+  AgentProfile,
   LogEntry,
   Run,
   Task,
@@ -110,6 +116,8 @@ const navigation = [
   { id: "logs", label: "Logs", icon: Terminal, group: "Histórico" },
   { id: "projects", label: "Projetos", icon: FolderGit2, group: "Configuração" },
   { id: "providers", label: "Provedores", icon: PlugZap, group: "Configuração" },
+  { id: "agents", label: "Agentes", icon: Bot, group: "Configuração" },
+  { id: "skills", label: "Skills", icon: BookOpen, group: "Configuração" },
 ];
 const navigationGroups = [...new Set(navigation.map((item) => item.group))];
 const sidebarTaskLimit = 6;
@@ -171,7 +179,7 @@ function routeId(hash: string, page: "executions" | "tasks"): string | null {
     return null;
   }
 }
-type PageRoute = "overview" | "inbox" | "projects" | "tasks" | "executions" | "approvals" | "providers" | "logs" | "not-found";
+type PageRoute = "overview" | "inbox" | "skills" | "agents" | "projects" | "tasks" | "executions" | "approvals" | "providers" | "logs" | "not-found";
 type Theme = "light" | "dark";
 
 const narrowScreen = "(max-width: 760px)";
@@ -184,7 +192,7 @@ function preferredTheme(): Theme {
 
 function pageFromHash(hash: string): PageRoute {
   const value = hash.replace(/^#\/?/, "").split("/")[0] || "overview";
-  return ["overview", "inbox", "projects", "tasks", "executions", "approvals", "providers", "logs"].includes(value) ? value as PageRoute : "not-found";
+  return ["overview", "inbox", "skills", "agents", "projects", "tasks", "executions", "approvals", "providers", "logs"].includes(value) ? value as PageRoute : "not-found";
 }
 function ExecutionFeedback({ run, latestLog }: { run: Run; latestLog?: LogEntry | undefined }) {
   const failed = run.status === "failed";
@@ -345,13 +353,20 @@ export function App({ client }: { client: ControlRoomClient }) {
     window.localStorage.setItem("eleazar.theme", theme);
   }, [theme]);
   useEffect(() => {
-    if (active !== "overview" && active !== "providers" && dialog?.kind !== "execute" && !taskRoute) return;
+    if (active !== "overview" && active !== "providers" && active !== "agents" && dialog?.kind !== "execute" && !taskRoute) return;
     let alive = true;
     setProvidersLoading(true); setProvidersError("");
     client.getProviderStatuses().then((items) => { if (alive) setProviders(items); }).catch((reason) => { if (alive) setProvidersError(message(reason)); }).finally(() => { if (alive) setProvidersLoading(false); });
     return () => { alive = false; };
   }, [active, client, dialog?.kind, Boolean(taskRoute)]);
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
+  const reloadCatalog = useCallback(() => {
+    void client.listSkills().then(setSkills).catch(() => undefined);
+    void client.listAgents().then(setAgentProfiles).catch(() => undefined);
+  }, [client]);
+  useEffect(() => { reloadCatalog(); }, [reloadCatalog]);
   const composing = taskRoute === "new";
   useEffect(() => {
     if (!composing) return;
@@ -431,7 +446,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       setBusy(false);
     }
   }
-  async function mutate<Result>(operation: () => Promise<Result>, success: string, onSuccess?: (result: Result) => void) {
+  async function mutate<Result>(operation: () => Promise<Result>, success: string | ((result: Result) => string), onSuccess?: (result: Result) => void) {
     setBusy(true);
     setFormError("");
     setNotice("");
@@ -448,7 +463,7 @@ export function App({ client }: { client: ControlRoomClient }) {
       }
       onSuccess?.(result);
       // After onSuccess so a navigation it starts is already in location.hash and keeps the notice.
-      setNotice(success);
+      setNotice(typeof success === "function" ? success(result) : success);
     } catch (reason) {
       setFormError(message(reason));
     } finally {
@@ -578,7 +593,7 @@ export function App({ client }: { client: ControlRoomClient }) {
   const selectedActions = selectedTask ? (data?.actions ?? []).filter((action) => action.taskId === selectedTask.id) : [];
   const selectedTaskFinished = selectedTask?.status === "completed" || selectedTask?.status === "failed";
   const pageTitle: Record<Exclude<PageRoute, "not-found">, [string, string]> = {
-    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], inbox: ["Precisa de você", "Tudo o que espera uma decisão sua, em todos os projetos."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
+    overview: ["Sala de controle", "Acompanhe o trabalho. Direcione o próximo passo."], inbox: ["Precisa de você", "Tudo o que espera uma decisão sua, em todos os projetos."], skills: ["Skills", "Instruções reutilizáveis que qualquer provedor pode seguir."], agents: ["Agentes", "Perfis com função, instruções e skills, independentes do provedor."], projects: ["Projetos", "Cadastre e acompanhe os diretórios do workspace."], tasks: ["Fila de tarefas", "Priorize, execute e acompanhe o próximo trabalho."], executions: ["Execuções", "Consulte as tentativas e seus resultados persistidos."], approvals: ["Aprovações", "Decisões que precisam da sua intervenção."], providers: ["Provedores", "Conecte a sua conta em cada agente e escolha quem participa do Automático."], logs: ["Logs", "Atividade recente registrada pelo núcleo local."]
   };
   const commandItems: CommandItem[] = [
     { id: "action-new-task", group: "Ações", label: "Nova tarefa", hint: "Descrever o que fazer", icon: Plus, run: () => { window.location.hash = "/tasks/new"; } },
@@ -827,7 +842,7 @@ export function App({ client }: { client: ControlRoomClient }) {
                ) : taskRoute === "new" ? (
                  <TaskComposer projects={projects} initialProjectId={projectFilter} busy={busy} error={formError} onSubmit={submitTask} onRegisterProject={() => open({ kind: "project" })}
                    agents={providers.filter((provider) => provider.preferences.enabled && provider.available && provider.authenticated !== false && provider.roles.implementer).map((provider) => ({ id: provider.provider, label: provider.label }))}
-                   onCompare={submitComparison} templates={templates}
+                   onCompare={submitComparison} templates={templates} agentProfiles={agentProfiles} skills={skills}
                    onSaveTemplate={(input) => void mutate(() => client.createTemplate(input), `Modelo "${input.name}" salvo. Ele aparece em "Começar de um modelo".`, (saved) => setTemplates((current) => [...current, saved].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))))}
                    onDeleteTemplate={(template) => { if (window.confirm(`Excluir o modelo "${template.name}"? As tarefas já criadas com ele não mudam.`)) void mutate(() => client.deleteTemplate(template.id), "Modelo excluído.", setTemplates); }} />
                ) : selectedTask ? (
@@ -872,7 +887,8 @@ export function App({ client }: { client: ControlRoomClient }) {
                {selectedTask && data && <TaskSidePanel task={selectedTask} project={projects.find((project) => project.id === selectedTask.projectId)}
                  runs={data.runs.filter((run) => run.taskId === selectedTask.id)} providers={providers}
                  siblings={selectedTask.comparisonId ? tasks.filter((task) => task.comparisonId === selectedTask.comparisonId && task.id !== selectedTask.id).map((task) => ({ task, runs: data.runs.filter((run) => run.taskId === task.id) })) : []}
-                 actions={selectedActions} pullRequests={(data.pullRequests ?? []).filter((item) => item.taskId === selectedTask.id)} />}
+                 actions={selectedActions} pullRequests={(data.pullRequests ?? []).filter((item) => item.taskId === selectedTask.id)}
+                 profile={agentProfiles.find((agent) => agent.id === selectedTask.agentProfileId)} skills={skills} />}
                </div>
              </section>
            ) : active === "not-found" ? <section className="route-not-found"><img className="maestro-mark" src={maestroUrl} alt="" width={72} height={72} /><div className="eyebrow">ROTA LOCAL</div><h1>Página não encontrada</h1><p>Essa rota não faz parte da Control Room.</p><button className="primary" onClick={() => navigate("overview")}>Voltar à visão geral</button></section> : <>
@@ -954,7 +970,16 @@ export function App({ client }: { client: ControlRoomClient }) {
                   </div>
                 ))}
               </section>}
-              {active === "providers" ? <ProvidersPage providers={providers} loading={providersLoading} error={providersError} pending={providerPending} onRefresh={refreshProviders}
+              {active === "skills" ? <SkillsPage skills={skills} busy={busy}
+                onImport={() => void mutate(() => client.importSkills(), (result) => `Importação concluída: ${result.added} nova(s), ${result.updated} atualizada(s), ${result.unchanged} sem mudança${result.keptLocalEdits.length ? `; mantidas as suas edições em ${result.keptLocalEdits.join(", ")}` : ""}. Os originais do Claude e do Codex não foram alterados.`, (result) => setSkills(result.skills))}
+                onCreate={(input) => void mutate(() => client.createSkill(input), "Skill criada.", reloadCatalog)}
+                onUpdate={(id, input) => void mutate(() => client.updateSkill(id, input), "Skill salva. O arquivo original, se houver, não foi alterado.", reloadCatalog)}
+                onDelete={(skill) => { if (window.confirm(`Excluir a skill "${skill.name}" do Eleazar? Ela sai dos agentes que a usam. ${skill.sourcePath ? "O arquivo original não é apagado." : ""}`)) void mutate(() => client.deleteSkill(skill.id), "Skill excluída.", reloadCatalog); }} />
+              : active === "agents" ? <AgentsPage agents={agentProfiles} skills={skills} providers={providers} busy={busy}
+                onCreate={(input) => void mutate(() => client.createAgent(input), "Agente criado. Escolha-o ao criar uma tarefa.", reloadCatalog)}
+                onUpdate={(id, input) => void mutate(() => client.updateAgent(id, input), "Agente salvo.", reloadCatalog)}
+                onDelete={(agent) => { if (window.confirm(`Excluir o agente "${agent.name}"? As tarefas que já o usaram mantêm o histórico.`)) void mutate(() => client.deleteAgent(agent.id), "Agente excluído.", reloadCatalog); }} />
+              : active === "providers" ? <ProvidersPage providers={providers} loading={providersLoading} error={providersError} pending={providerPending} onRefresh={refreshProviders}
                 onVerify={(provider) => void changeProvider(provider, () => client.verifyProvider(provider))}
                 onChange={(provider, patch) => void changeProvider(provider, () => client.updateProvider(provider, patch))} /> :
               <div className={`dashboard-grid page-${active}`}>

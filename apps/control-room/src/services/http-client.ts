@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type Skill, type SkillImport, type AgentProfile, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 // VITE_CONTROL_ROOM_API points a second copy of the interface at another local host, such as a test database.
 const apiBase = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_CONTROL_ROOM_API ?? "http://127.0.0.1:4317/api/control-room";
@@ -46,6 +46,15 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     getTaskChanges(taskId, directoryId) { return request<ExplorerChanges>(`/tasks/${encodeURIComponent(taskId)}/changes?${explorerQuery(directoryId)}`); },
     getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
     searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
+    listSkills() { return request<Skill[]>("/skills"); },
+    importSkills(sources) { return request<SkillImport>("/skills/import", { method: "POST", body: JSON.stringify(sources ? { sources } : {}) }); },
+    createSkill(input) { return request<Skill>("/skills", { method: "POST", body: JSON.stringify(input) }); },
+    updateSkill(skillId, input) { return request<Skill>(`/skills/${encodeURIComponent(skillId)}/update`, { method: "POST", body: JSON.stringify(input) }); },
+    deleteSkill(skillId) { return request<Skill[]>(`/skills/${encodeURIComponent(skillId)}/delete`, { method: "POST", body: "{}" }); },
+    listAgents() { return request<AgentProfile[]>("/agents"); },
+    createAgent(input) { return request<AgentProfile>("/agents", { method: "POST", body: JSON.stringify(input) }); },
+    updateAgent(agentId, input) { return request<AgentProfile>(`/agents/${encodeURIComponent(agentId)}/update`, { method: "POST", body: JSON.stringify(input) }); },
+    deleteAgent(agentId) { return request<AgentProfile[]>(`/agents/${encodeURIComponent(agentId)}/delete`, { method: "POST", body: "{}" }); },
     pinTask(taskId, pinned) { return request<Task>(`/tasks/${encodeURIComponent(taskId)}/pin`, { method: "POST", body: JSON.stringify({ pinned }) }); },
     async deleteTask(taskId) { await request<unknown>(`/tasks/${encodeURIComponent(taskId)}/delete`, { method: "POST", body: "{}" }); },
     projectIconUrl(projectId) { return `${baseUrl}/projects/${encodeURIComponent(projectId)}/icon`; },

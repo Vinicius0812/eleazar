@@ -12,7 +12,15 @@ export interface ProjectDirectory { id: string; name: string; path: string; crea
 /** Where agents work: an isolated worktree per task, or the project's own folders. */
 export type ProjectIsolation = "worktree" | "direct";
 export interface Project { id: string; name: string; path: string; directories: ProjectDirectory[]; isolation: ProjectIsolation; createdAt: string; }
-export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; branch?: string | null; dispatchLease?: string | null; comparisonId?: string | null; pinnedAt?: string | null; createdAt: string; updatedAt: string; }
+export interface Task { id: string; projectId: string; targetDirectoryId: string | null; directoryIds: string[]; usesWorktree: boolean; title: string; prompt: string; priority: Priority; status: TaskStatus; kind: string; worktreePath: string | null; branch?: string | null; dispatchLease?: string | null; comparisonId?: string | null; pinnedAt?: string | null; agentProfileId?: string | null; skillIds?: string[]; createdAt: string; updatedAt: string; }
+export type SkillSource = "eleazar" | "claude" | "codex";
+/** Instructions in the SKILL.md format; they travel in the prompt, so any provider can follow them. */
+export interface Skill { id: string; slug: string; name: string; description: string; content: string; source: SkillSource; sourcePath: string | null; supportFiles: string[]; importedHash: string | null; createdAt: string; updatedAt: string; }
+export interface SkillInput { name: string; description?: string; content: string; }
+export interface SkillImport { added: number; updated: number; unchanged: number; keptLocalEdits: string[]; skills: Skill[]; }
+/** A reusable agent of the Eleazar: role, standing instructions, skills and preferred provider (null: Automático). */
+export interface AgentProfile { id: string; name: string; role: string; instructions: string; skillIds: string[]; provider: string | null; model: string | null; createdAt: string; updatedAt: string; }
+export interface AgentProfileInput { name: string; role?: string; instructions?: string; skillIds?: string[]; provider?: string | null; model?: string | null; }
 export interface Run { id: string; taskId: string; provider: string | null; status: ExecutionStatus; startedAt: string | null; finishedAt: string | null; summary: string | null; prompt?: string | null; output?: string | null; usage?: TokenUsage | null; transport?: "acp" | "legacy" | null; model?: string | null; sessionId?: string | null; }
 export interface LogEntry { id: string; executionId: string; level: LogLevel; message: string; createdAt: string; }
 export interface ExecutionFileChange { id: string; executionId: string; directoryId: string; path: string; kind: "added" | "modified" | "deleted" | "untracked" | "preexisting"; additions: number | null; deletions: number | null; }
@@ -67,7 +75,7 @@ export interface ComparisonStart { comparisonId: string; tasks: Task[]; errors: 
 /** A request the operator runs often, saved to start new tasks from it. */
 export interface TaskTemplate { id: string; name: string; title: string; prompt: string; kind: string | null; priority: Priority; projectId: string | null; createdAt: string; }
 export interface TaskTemplateInput { name: string; title?: string; prompt: string; kind?: string; priority?: Priority; projectId?: string; }
-export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; }
+export interface CreateTaskInput { projectId: string; targetDirectoryId: string; directoryIds: string[]; title: string; prompt: string; priority: Priority; kind?: string; agentProfileId?: string; skillIds?: string[]; }
 /** `auto` or a registered provider id. */
 export type ExecutionProvider = string;
 export type ExplorerChangeKind = "added" | "modified" | "deleted" | "renamed" | "untracked";
@@ -129,6 +137,16 @@ export interface ControlRoomClient {
   getTaskFile(taskId: string, directoryId: string, path: string): Promise<ExplorerFile>;
   searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
   pinTask(taskId: string, pinned: boolean): Promise<Task>;
+  listSkills(): Promise<Skill[]>;
+  /** Copies the operator's Claude and Codex skills; originals are never changed. */
+  importSkills(sources?: SkillSource[]): Promise<SkillImport>;
+  createSkill(input: SkillInput): Promise<Skill>;
+  updateSkill(skillId: string, input: SkillInput): Promise<Skill>;
+  deleteSkill(skillId: string): Promise<Skill[]>;
+  listAgents(): Promise<AgentProfile[]>;
+  createAgent(input: AgentProfileInput): Promise<AgentProfile>;
+  updateAgent(agentId: string, input: AgentProfileInput): Promise<AgentProfile>;
+  deleteAgent(agentId: string): Promise<AgentProfile[]>;
   /** Deletes the task and its history; the host refuses while it runs or still owns a worktree. */
   deleteTask(taskId: string): Promise<void>;
   /** Address of the project's favicon (404 when it has none); optional for clients without one. */

@@ -1,10 +1,13 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ArrowUp, BookmarkPlus, FolderGit2, Trash2 } from "lucide-react";
 
-import type { CreateTaskInput, Priority, Project, TaskTemplate, TaskTemplateInput } from "../services/contracts.js";
+import type { AgentProfile, CreateTaskInput, Priority, Project, Skill, TaskTemplate, TaskTemplateInput } from "../services/contracts.js";
 
-export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject, agents = [], onCompare, templates = [], onSaveTemplate, onDeleteTemplate }: {
+export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit, onRegisterProject, agents = [], onCompare, templates = [], onSaveTemplate, onDeleteTemplate, agentProfiles = [], skills = [] }: {
   projects: Project[];
+  /** Eleazar agents and skills, sent with the request to whichever provider runs it. */
+  agentProfiles?: AgentProfile[];
+  skills?: Skill[];
   /** Saved requests the operator can start from. */
   templates?: TaskTemplate[];
   onSaveTemplate?(input: TaskTemplateInput): void;
@@ -29,6 +32,10 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
   const additional = project?.directories.filter((directory) => directory.id !== target?.id) ?? [];
   const [compare, setCompare] = useState(false);
   const [templateId, setTemplateId] = useState("");
+  const [agentProfileId, setAgentProfileId] = useState("");
+  const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [skillFilter, setSkillFilter] = useState("");
+  const chosenAgent = agentProfiles.find((agent) => agent.id === agentProfileId);
   const [naming, setNaming] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const form = useRef<HTMLFormElement>(null);
@@ -76,6 +83,8 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
       prompt: String(fields.get("prompt")),
       priority: String(fields.get("priority")) as Priority,
       ...(kind === "review" || kind === "planning" ? { kind } : {}),
+      ...(chosenAgent ? { agentProfileId: chosenAgent.id } : {}),
+      ...(skillIds.length ? { skillIds } : {}),
     };
     if (comparing && onCompare) onCompare({ ...input, directoryIds: [target.id] }, rivals);
     else onSubmit(input);
@@ -130,6 +139,33 @@ export function TaskComposer({ projects, initialProjectId, busy, error, onSubmit
           </select>
         </label>
       </div>
+      {(agentProfiles.length > 0 || skills.length > 0) && (
+        <details className="composer-options" open={Boolean(chosenAgent) || skillIds.length > 0}>
+          <summary>Agente e skills{chosenAgent || skillIds.length ? ` · ${[chosenAgent?.name, skillIds.length ? `${skillIds.length} skill${skillIds.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")}` : ""}</summary>
+          {agentProfiles.length > 0 && <label>
+            Agente
+            <select value={agentProfileId} onChange={(event) => setAgentProfileId(event.target.value)}>
+              <option value="">Nenhum (só o pedido)</option>
+              {agentProfiles.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}{agent.role ? ` · ${agent.role}` : ""}</option>)}
+            </select>
+            <small>{chosenAgent ? `Envia a função, as instruções e ${chosenAgent.skillIds.length} skill(s) do agente${chosenAgent.provider ? `; prefere ${chosenAgent.provider}${chosenAgent.model ? ` (${chosenAgent.model})` : ""} quando você não escolher outro provedor` : ""}.` : "O perfil vai junto com o pedido para qualquer provedor."}</small>
+          </label>}
+          {skills.length > 0 && <fieldset className="task-scope catalog-skills">
+            <legend>Skills desta tarefa ({skillIds.length})</legend>
+            {skills.length > 8 && <input className="explorer-filter" type="search" value={skillFilter} placeholder="Filtrar skills…" aria-label="Filtrar skills" onChange={(event) => setSkillFilter(event.target.value)} />}
+            <div className="catalog-skill-options">
+              {skills.filter((skill) => !skillFilter.trim() || skill.name.toLocaleLowerCase().includes(skillFilter.trim().toLocaleLowerCase()) || skillIds.includes(skill.id)).map((skill) => (
+                <label key={skill.id} className="scope-option" title={skill.description}>
+                  <input type="checkbox" checked={skillIds.includes(skill.id) || Boolean(chosenAgent?.skillIds.includes(skill.id))} disabled={Boolean(chosenAgent?.skillIds.includes(skill.id))}
+                    onChange={(event) => setSkillIds((current) => event.target.checked ? [...current, skill.id] : current.filter((id) => id !== skill.id))} />
+                  {skill.name}
+                </label>
+              ))}
+            </div>
+            <small>As skills do agente escolhido já vão marcadas.</small>
+          </fieldset>}
+        </details>
+      )}
       <details className="composer-options">
         <summary>Tipo, prioridade e escopo</summary>
         <label>

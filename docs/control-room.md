@@ -150,6 +150,12 @@ Os ícones em `apps/control-room/src/assets/icons` (marca do Eleazar e glifos do
 - `POST /projects/:id/terminals` recebe `{ "directoryId": "..." }` e inicia um bash na pasta (Git for Windows no Windows, nunca o lançador do WSL; `ELEAZAR_BASH` define outro caminho). `GET /projects/:id/terminals` lista os abertos, `POST /terminals/:id/input` recebe `{ "command": "..." }` (uma linha, até 10.000 caracteres), `POST /terminals/:id/close` encerra a árvore de processos e `GET /terminals/:id/events` transmite `input`, `stdout`, `stderr`, `done` (código de saída e diretório atual) e `exit` por SSE, com replay por `Last-Event-ID`.
 - O comando é escrito na entrada do bash como o operador digitou, nunca montado dentro de outra linha de comando. Não há pseudo terminal: programas que pedem interação pelo teclado não funcionam, e o diretório é mantido entre comandos. Nada é gravado no banco; no máximo seis terminais ficam abertos e todos terminam com o host.
 
+### Skills e agentes
+
+- `GET /skills`, `POST /skills` (`{ name, description?, content }`), `POST /skills/:id/update` e `POST /skills/:id/delete` mantem o catalogo de skills (formato SKILL.md) na tabela `skills`. `POST /skills/import` (`{ sources?: ["claude", "codex"] }`) copia `~/.claude/skills/*/SKILL.md` e `~/.codex/skills/*/SKILL.md` (sem as pastas de sistema, que comecam com ponto). Os originais nunca sao alterados; os arquivos de apoio so sao listados. Reimportar atualiza as copias, exceto as editadas no Eleazar, e uma skill identica nas duas origens entra uma vez. O comando `eleazar skills import` faz o mesmo pelo terminal.
+- `GET /agents`, `POST /agents` (`{ name, role?, instructions?, skillIds?, provider?, model? }`), `POST /agents/:id/update` e `POST /agents/:id/delete` mantem os perfis de agente na tabela `agent_profiles`.
+- `POST /tasks` e `POST /comparisons` aceitam `agentProfileId` e `skillIds`. Ao executar, o perfil (funcao e instrucoes) e as skills vao no prompt, antes do pedido, para qualquer provedor; sem provedor escolhido pelo operador, vale o provedor (e o modelo) preferido do agente. Uma sessao ACP retomada nao recebe o bloco de novo.
+
 ### Retomada e modelos
 
 - `POST /tasks/:id/resume` recebe `{}` e continua uma tarefa `failed` (inclusive a interrompida por reinício do host) com o mesmo provedor. Com `capabilities.loadSession`, a sessão ACP anterior é recarregada e a mensagem é curta; sem ela, a mensagem leva o pedido original e o que foi gravado do turno perdido: a mensagem que o iniciou, o plano, as últimas ferramentas e as últimas falas do agente.

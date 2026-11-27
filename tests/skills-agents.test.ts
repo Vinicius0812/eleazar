@@ -45,8 +45,12 @@ describe("Skills", () => {
       expect(first.added.map((skill) => [skill.name, skill.source, skill.description])).toEqual([["gerar-prompts", "claude", "Gera prompts por repositorio"], ["relatorio", "codex", ""]]);
       expect(first.added[1]!.supportFiles).toEqual(["scripts"]);
       expect(first.added[0]!.content).toBe("# Gerar prompts\nUse um prompt por repositorio.");
+      // The identical copy kept in Codex is not imported twice.
+      await mkdir(join(codex, "gerar-prompts"), { recursive: true });
+      await writeFile(join(codex, "gerar-prompts", "SKILL.md"), "---\nname: gerar-prompts\n---\n# Gerar prompts\nUse um prompt por repositorio.\n");
+      expect(catalog.importSkills(await discoverSkills(roots)).added).toEqual([]);
 
-      expect(catalog.importSkills(await discoverSkills(roots))).toMatchObject({ added: [], updated: [], unchanged: 2 });
+      expect(catalog.importSkills(await discoverSkills(roots))).toMatchObject({ added: [], updated: [], unchanged: 3 });
       const relatorio = first.added[1]!;
       catalog.updateSkill(relatorio.id, { name: "relatorio", content: "Minha versao." });
       await writeFile(join(codex, "relatorio", "SKILL.md"), "# Relatorio\nNova versao do Codex.\n");

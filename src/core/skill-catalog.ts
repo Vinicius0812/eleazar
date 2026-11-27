@@ -70,10 +70,12 @@ export class SkillCatalog {
       const content = candidate.content.slice(0, maxSkillChars);
       const hash = contentHash(content);
       const previous = existing.find((skill) => skill.sourcePath === candidate.sourcePath);
+      // The same skill kept in both Claude and Codex, word for word, is imported once.
+      if (!previous && existing.some((skill) => skill.slug === candidate.slug && skill.importedHash === hash)) { result.unchanged += 1; continue; }
       if (!previous) {
         const skill: Skill = { id: randomUUID(), slug: candidate.slug, name: candidate.name.slice(0, 120), description: candidate.description.slice(0, 1_000), content,
           source: candidate.source, sourcePath: candidate.sourcePath, supportFiles: candidate.supportFiles.slice(0, 50), importedHash: hash, createdAt: now, updatedAt: now };
-        this.store.saveSkill(skill); result.added.push(skill); continue;
+        this.store.saveSkill(skill); result.added.push(skill); existing.push(skill); continue;
       }
       if (previous.importedHash === hash) { result.unchanged += 1; continue; }
       if (previous.importedHash !== contentHash(previous.content)) { result.keptLocalEdits.push(previous); continue; }

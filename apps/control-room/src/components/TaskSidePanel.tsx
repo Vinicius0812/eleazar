@@ -1,7 +1,7 @@
-import { Bot, Coins, FolderOpen, GitBranch, GitPullRequest, Info, Send } from "lucide-react";
+import { Bot, Coins, FolderOpen, GitBranch, GitPullRequest, Info, Send, Sparkles } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph.js";
-import type { Project, ProviderStatus, Run, Task, TaskOutboundAction, TaskPullRequest } from "../services/contracts.js";
+import type { AgentProfile, Project, ProviderStatus, Run, Skill, Task, TaskOutboundAction, TaskPullRequest } from "../services/contracts.js";
 
 const kindLabel: Record<string, string> = {
   implementation: "Implementação", review: "Revisão", planning: "Planejamento", research: "Pesquisa",
@@ -48,7 +48,10 @@ export function recruitedAgents(task: Task, runs: readonly Run[], siblings: Read
 }
 
 /** Side panel of a task, in the style of the agent apps: who works on it, where, and what is pending. */
-export function TaskSidePanel({ task, project, runs, siblings = [], providers, actions = [], pullRequests = [] }: {
+export function TaskSidePanel({ task, project, runs, siblings = [], providers, actions = [], pullRequests = [], profile, skills = [] }: {
+  /** The Eleazar agent profile chosen for the task. */
+  profile?: AgentProfile | undefined;
+  skills?: Skill[];
   task: Task;
   project: Project | undefined;
   /** The task's runs, newest first. */
@@ -87,6 +90,17 @@ export function TaskSidePanel({ task, project, runs, siblings = [], providers, a
         </ul>
         {task.comparisonId && <a className="text-button" href={`#/comparisons/${encodeURIComponent(task.comparisonId)}`}>Comparar as tentativas</a>}
       </section>
+
+      {(profile || (task.skillIds?.length ?? 0) > 0) && (
+        <section>
+          <h2><Sparkles size={15} aria-hidden="true" /> Perfil e skills</h2>
+          {profile && <p className="task-side-profile"><strong>{profile.name}</strong>{profile.role ? ` · ${profile.role}` : ""}<br /><small>Prefere {profile.provider ?? "o Automático"}{profile.model ? ` · ${profile.model}` : ""}</small></p>}
+          <ul className="task-side-skills">
+            {[...new Set([...(profile?.skillIds ?? []), ...(task.skillIds ?? [])])].map((id) => skills.find((skill) => skill.id === id)).filter((skill): skill is Skill => Boolean(skill))
+              .map((skill) => <li key={skill.id} title={skill.description}>{skill.name}</li>)}
+          </ul>
+        </section>
+      )}
 
       <section>
         <h2><Info size={15} aria-hidden="true" /> Tarefa</h2>

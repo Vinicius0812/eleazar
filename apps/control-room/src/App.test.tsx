@@ -223,6 +223,63 @@ describe("Edit project", () => {
   });
 });
 
+describe("Skills and agents", () => {
+  const skill = { id: "s1", slug: "gerar-prompts", name: "gerar-prompts", description: "Prompts por repositório", content: "# Gerar prompts", source: "claude" as const, sourcePath: "C:\\Users\\x\\.claude\\skills\\gerar-prompts\\SKILL.md", supportFiles: [], importedHash: "h", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+  const agent = { id: "a1", name: "Revisor", role: "Revisa código", instructions: "Aponte riscos.", skillIds: ["s1"], provider: "claude", model: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+
+  it("imports skills from Claude and Codex and edits a copy without touching the original", async () => {
+    window.location.hash = "#/skills";
+    const controlled = client();
+    vi.spyOn(controlled, "importSkills").mockResolvedValue({ added: 1, updated: 0, unchanged: 0, keptLocalEdits: [], skills: [skill] });
+    const update = vi.spyOn(controlled, "updateSkill").mockResolvedValue({ ...skill, content: "Nova" });
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: /Importar do Claude e do Codex/ }));
+    expect(await screen.findByText(/Importação concluída: 1 nova\(s\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /gerar-prompts/ }));
+    const form = within(screen.getByRole("form", { name: "Editar gerar-prompts" }));
+    expect(form.getByText(/Editar aqui não altera o original/)).toBeInTheDocument();
+    await user.clear(form.getByLabelText("Conteúdo"));
+    await user.type(form.getByLabelText("Conteúdo"), "Nova");
+    await user.click(form.getByRole("button", { name: "Salvar skill" }));
+    expect(update).toHaveBeenCalledWith("s1", { name: "gerar-prompts", description: "Prompts por repositório", content: "Nova" });
+  });
+
+  it("creates an agent with skills and a preferred provider", async () => {
+    window.location.hash = "#/agents";
+    const controlled = client();
+    vi.spyOn(controlled, "listSkills").mockResolvedValue([skill]);
+    const create = vi.spyOn(controlled, "createAgent").mockResolvedValue(agent);
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: /Novo agente/ }));
+    const form = within(screen.getByRole("form", { name: "Novo agente" }));
+    await user.type(form.getByLabelText("Nome"), "Revisor");
+    await user.type(form.getByLabelText("Função"), "Revisa código");
+    await user.selectOptions(form.getByLabelText("Provedor preferido"), "claude");
+    await user.click(await form.findByRole("checkbox", { name: /gerar-prompts/ }));
+    await user.click(form.getByRole("button", { name: "Criar agente" }));
+    expect(create).toHaveBeenCalledWith({ name: "Revisor", role: "Revisa código", instructions: "", skillIds: ["s1"], provider: "claude", model: null });
+  });
+
+  it("sends the chosen agent and extra skills with a new task", async () => {
+    window.location.hash = "#/tasks/new";
+    const controlled = client();
+    vi.spyOn(controlled, "listSkills").mockResolvedValue([skill, { ...skill, id: "s2", name: "documentacao", source: "codex" }]);
+    vi.spyOn(controlled, "listAgents").mockResolvedValue([agent]);
+    const createTask = vi.spyOn(controlled, "createTask");
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.type(await screen.findByLabelText("Solicitação"), "Revise o módulo");
+    await user.click(await screen.findByText(/Agente e skills/));
+    await user.selectOptions(screen.getByRole("combobox", { name: /^Agente/ }), "a1");
+    expect(screen.getByRole("checkbox", { name: "gerar-prompts" })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "documentacao" }));
+    await user.click(screen.getByRole("button", { name: /Criar tarefa/ }));
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ agentProfileId: "a1", skillIds: ["s2"] }));
+  });
+});
+
 describe("Task workspace", () => {
   it("allows choosing Claude as the first provider for a text task", async () => {
     window.location.hash = "#/tasks/task-1";
@@ -875,6 +932,8 @@ function client(): ControlRoomClient {
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),
     searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }),
+    listSkills: async () => [], importSkills: async () => ({ added: 0, updated: 0, unchanged: 0, keptLocalEdits: [], skills: [] }), createSkill: async () => { throw new Error("unused"); }, updateSkill: async () => { throw new Error("unused"); }, deleteSkill: async () => [],
+    listAgents: async () => [], createAgent: async () => { throw new Error("unused"); }, updateAgent: async () => { throw new Error("unused"); }, deleteAgent: async () => [],
     pinTask: async (taskId, pinned) => ({ ...snapshot.tasks[0]!, id: taskId, pinnedAt: pinned ? "2026-01-02T00:00:00.000Z" : null }), deleteTask: async () => undefined,
     listTerminals: async () => [], openTerminal: async () => { throw new Error("unused"); }, sendTerminalInput: async () => { throw new Error("unused"); }, closeTerminal: async () => { throw new Error("unused"); }, streamTerminalEvents: async () => true,
     getProjectFileRoots: async () => [explorerRoot], listProjectFiles: async (_project, _directory, path = "") => ({ root: explorerRoot, path, entries: [{ name: "package.json", path: "package.json", type: "file", size: 6, change: null, changedBelow: 0 }], truncated: false }),
