@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <title>Eleazar · o regente</title>
-  <!-- Original drawing made in VectorCraft for the Eleazar, a nod to the Brazilian conductor Eleazar de Carvalho. -->
+  <!-- Original drawing made in VectorCraft for the Eleazar, a nod to the Brazilian conductor Eleazar de Carvalho.
+       Proportions: shoulders about two head widths, upper arm and forearm about one head each, hands under a head. -->
   <defs>
     <linearGradient id="eleazar-maestro-bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#7b66e0"/>
@@ -8,14 +9,18 @@
     </linearGradient>
   </defs>
   <rect width="256" height="256" rx="58" fill="url(#eleazar-maestro-bg)"/>
-  <path d="M196 34 C214 30 228 36 236 48 M188 22 C214 14 238 24 248 44" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.35"/>
-  <path d="M148 178 L194 150 C202 140 212 134 222 132 C229 131 231 138 225 141 L218 144 L230 146 C237 147 236 154 229 155 L214 157 C208 163 201 167 193 169 L160 198 Z" fill="#ffffff"/>
-  <path d="M36 256 C38 212 54 180 86 164 L112 156 L132 158 C150 164 164 176 170 196 L176 256 Z" fill="#ffffff"/>
-  <path d="M124 168 C140 156 158 140 170 122 L184 104 C188 98 196 96 201 100 C206 105 204 112 199 116 L188 128 C176 148 160 166 142 184 Z" fill="#ffffff"/>
-  <line x1="196" y1="104" x2="228" y2="50" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-  <circle cx="228" cy="47" r="9" fill="#f4c95d"/>
-  <path d="M100 60 C116 50 138 54 144 70 L146 82 L150 86 L158 98 L149 100 L151 108 L146 111 C146 121 140 128 129 130 L121 131 L118 150 L96 152 L94 132 C82 126 78 112 78 100 C76 84 84 68 100 60 Z" fill="#ffffff"/>
-  <path d="M98 59 C116 47 141 53 146 73 C132 66 116 68 106 77 C98 85 95 97 95 111 L89 121 C78 111 75 92 81 77 C85 68 91 63 98 59 Z" fill="#d8cffc"/>
-  <polyline points="98,162 116,212 134,166" fill="none" stroke="#4a3aa8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <polygon points="104,154 116,160 128,152 128,168 116,162 104,170" fill="#4a3aa8"/>
+  <g fill="#ffffff">
+    <path d="M46 256 C48 200 54 150 66 132 C74 120 90 114 102 112 L120 112 C136 116 150 124 156 136 C162 160 162 210 164 256 Z"/>
+    <line x1="136" y1="152" x2="180" y2="146" stroke="#ffffff" stroke-width="18" stroke-linecap="round"/>
+    <path d="M176 137 C186 132 198 130 208 131 C215 132 215 139 208 140 L199 141 L211 143 C217 144 216 151 210 151 L196 152 C188 156 182 156 177 154 Z"/>
+    <polyline points="146,132 190,116 204,76" fill="none" stroke="#ffffff" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="206" cy="66" r="10"/>
+    <line x1="208" y1="62" x2="236" y2="26" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+    <path d="M92 60 C100 53 114 52 121 60 C124 64 124 70 124 74 L130 84 L124 87 L125 92 L122 94 C122 99 118 102 112 102 L110 110 L97 111 L95 101 C88 97 84 89 84 80 C84 71 87 64 92 60 Z"/>
+  </g>
+  <circle cx="237" cy="25" r="7" fill="#f4c95d"/>
+  <path d="M90 61 C98 52 116 50 123 62 C114 59 104 61 99 67 C94 73 93 82 94 92 L89 96 C84 90 82 80 84 72 C85 67 87 64 90 61 Z" fill="#d8cffc"/>
+  <polyline points="101,116 116,170 131,118" fill="none" stroke="#4a3aa8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="106,110 116,115 126,110 126,121 116,116 106,121" fill="#4a3aa8"/>
+  <line x1="195" y1="82" x2="211" y2="88" stroke="#4a3aa8" stroke-width="3" stroke-linecap="round"/>
 </svg>
