@@ -35,9 +35,10 @@ export class SkillCatalog {
   listSkills(): Skill[] { return this.store.listSkills(); }
   listAgents(): AgentProfile[] { return this.store.listAgentProfiles(); }
 
-  createSkill(input: SkillInput): Skill {
+  /** `origin` keeps where an imported bundle says the skill came from; it is still the Eleazar's own copy. */
+  createSkill(input: SkillInput, origin: SkillSource = "eleazar"): Skill {
     const now = new Date().toISOString();
-    const skill: Skill = { id: randomUUID(), slug: slugify(input.name), ...validSkill(input), source: "eleazar", sourcePath: null, supportFiles: [], importedHash: null, createdAt: now, updatedAt: now };
+    const skill: Skill = { id: randomUUID(), slug: slugify(input.name), ...validSkill(input), source: origin, sourcePath: null, supportFiles: [], importedHash: null, createdAt: now, updatedAt: now };
     this.store.saveSkill(skill);
     return skill;
   }

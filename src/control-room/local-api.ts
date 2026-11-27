@@ -11,7 +11,8 @@ import { TaskFileExplorer } from "./file-explorer.js";
 import type { ProjectTerminals, TerminalEvent } from "./project-terminal.js";
 import { findProjectIcon } from "./project-icon.js";
 import { SkillCatalog } from "../core/skill-catalog.js";
-import { defaultSkillRoots, discoverSkills, type SkillRoot } from "../adapters/skill-importer.js";
+import { applyImport, exportBundle, parseBundle, previewImport, type BundleFile, type ConflictChoice } from "../core/catalog-bundle.js";
+import { createZip, readZip } from "../adapters/zip.js";
 
 const uiOrigins = new Set([
   "http://127.0.0.1:5173", "http://localhost:5173",
@@ -19,10 +20,10 @@ const uiOrigins = new Set([
 ]);
 
 /** A small, local JSON API intended for the future React Control Room UI. */
-export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service), terminals?: ProjectTerminals, skillRoots: () => SkillRoot[] = () => defaultSkillRoots()): Server {
+export function createControlRoomServer(service: ControlRoomService, executor?: ControlRoomTaskExecutor, providers?: ProviderStatusService, actions?: OutboundActionService, pullRequests?: PullRequestService, explorer: TaskFileExplorer = new TaskFileExplorer(service), terminals?: ProjectTerminals): Server {
   return createServer(async (request, response) => {
     try {
-      await route(service, executor, providers, actions, pullRequests, explorer, terminals, skillRoots, request, response);
+      await route(service, executor, providers, actions, pullRequests, explorer, terminals, request, response);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro interno.";
       const status = error instanceof Error ? (error as Error & { statusCode?: number }).statusCode : undefined;
@@ -31,7 +32,7 @@ export function createControlRoomServer(service: ControlRoomService, executor?: 
   });
 }
 
-async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, terminals: ProjectTerminals | undefined, skillRoots: () => SkillRoot[], request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function route(service: ControlRoomService, executor: ControlRoomTaskExecutor | undefined, providers: ProviderStatusService | undefined, actions: OutboundActionService | undefined, pullRequests: PullRequestService | undefined, explorer: TaskFileExplorer, terminals: ProjectTerminals | undefined, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   assertSafeLocalRequest(request);
@@ -123,18 +124,29 @@ async function route(service: ControlRoomService, executor: ControlRoomTaskExecu
     return json(response, 200, service.listTemplates());
   }
   // Skills and agent profiles of the Eleazar, usable with any provider.
+  // The catalog as a .zip: skills/<nome>/SKILL.md and agents/<nome>.json (see catalog-bundle.ts).
+  if (url.pathname.startsWith("/api/control-room/catalog/")) {
+    const catalog = new SkillCatalog(service.store);
+    if (method === "GET" && url.pathname === "/api/control-room/catalog/export") {
+      const files = exportBundle(catalog.listSkills(), catalog.listAgents());
+      const zip = createZip(files.map((file) => ({ path: `eleazar-catalogo/${file.path}`, data: Buffer.from(file.text, "utf8") })));
+      response.writeHead(200, { "content-type": "application/zip", "content-disposition": `attachment; filename="eleazar-catalogo-${new Date().toISOString().slice(0, 10)}.zip"`, "content-length": zip.length });
+      response.end(zip);
+      return;
+    }
+    if (method === "POST" && (url.pathname === "/api/control-room/catalog/import/preview" || url.pathname === "/api/control-room/catalog/import")) {
+      const body = await readBody(request, 40_000_000);
+      const bundle = parseBundle(bundleFiles(body));
+      if (url.pathname.endsWith("/preview")) return json(response, 200, previewImport(catalog, bundle));
+      const choice = optionalString(body, "conflicts") ?? "skip";
+      if (choice !== "skip" && choice !== "replace" && choice !== "duplicate") throw new Error("Escolha invalida para conflitos.");
+      return json(response, 200, { ...applyImport(catalog, bundle, choice as ConflictChoice), skillsTotal: catalog.listSkills().length, agentsTotal: catalog.listAgents().length });
+    }
+  }
   if (url.pathname.startsWith("/api/control-room/skills") || url.pathname.startsWith("/api/control-room/agents")) {
     const catalog = new SkillCatalog(service.store);
     if (method === "GET" && url.pathname === "/api/control-room/skills") return json(response, 200, catalog.listSkills());
     if (method === "GET" && url.pathname === "/api/control-room/agents") return json(response, 200, catalog.listAgents());
-    if (method === "POST" && url.pathname === "/api/control-room/skills/import") {
-      const body = await readBody(request);
-      const sources = body.sources === undefined ? undefined : arrayOfStrings(body.sources, "sources");
-      const roots = skillRoots().filter((root) => !sources || sources.includes(root.source));
-      const result = catalog.importSkills(await discoverSkills(roots));
-      return json(response, 200, { added: result.added.length, updated: result.updated.length, unchanged: result.unchanged,
-        keptLocalEdits: result.keptLocalEdits.map((skill) => skill.name), skills: catalog.listSkills() });
-    }
     if (method === "POST" && url.pathname === "/api/control-room/skills") {
       const body = await readBody(request);
       return json(response, 201, catalog.createSkill({ name: stringField(body, "name"), description: optionalString(body, "description") ?? "", content: stringField(body, "content") }));
@@ -409,14 +421,26 @@ function streamTerminal(terminals: ProjectTerminals, sessionId: string, request:
 }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+/** Files of a catalog import: attached one by one (folder or files) or as a .zip in base64. */
+function bundleFiles(body: Record<string, unknown>): BundleFile[] {
+  if (typeof body.zipBase64 === "string") {
+    return readZip(Buffer.from(body.zipBase64, "base64")).filter((entry) => /\.(md|json)$/i.test(entry.path)).map((entry) => ({ path: entry.path, text: entry.data.toString("utf8") }));
+  }
+  if (!Array.isArray(body.files) || body.files.length > 5_000) throw new Error("Envie os arquivos da pasta ou um .zip.");
+  return body.files.map((item) => {
+    if (!item || typeof item !== "object" || typeof (item as BundleFile).path !== "string" || typeof (item as BundleFile).text !== "string") throw new Error("Arquivo invalido na importacao.");
+    return { path: (item as BundleFile).path, text: (item as BundleFile).text };
+  });
+}
+
+async function readBody(request: IncomingMessage, limit = 1_000_000): Promise<Record<string, unknown>> {
   let text = "";
   let byteLength = 0;
   const decoder = new TextDecoder();
   for await (const chunk of request) {
     const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     byteLength += bytes.byteLength;
-    if (byteLength > 1_000_000) throw new Error("Corpo da requisicao excede 1 MB.");
+    if (byteLength > limit) throw new Error(`Corpo da requisicao excede ${Math.round(limit / 1_000_000)} MB.`);
     text += decoder.decode(bytes, { stream: true });
   }
   text += decoder.decode();

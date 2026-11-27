@@ -10,7 +10,7 @@ import { SkillCatalog } from "../src/core/skill-catalog.js";
 import { discoverSkills, parseFrontmatter } from "../src/adapters/skill-importer.js";
 import { createControlRoomServer } from "../src/control-room/local-api.js";
 import { ControlRoomTaskExecutor, type ControlRoomTaskRunner } from "../src/control-room/task-executor.js";
-import { TaskFileExplorer } from "../src/control-room/file-explorer.js";
+import { readZip } from "../src/adapters/zip.js";
 import { SqliteControlRoomStore } from "../src/persistence/sqlite-control-room-store.js";
 import { acpRegistry } from "./helpers.js";
 
@@ -92,18 +92,15 @@ describe("Skills", () => {
     } finally { store.close(); }
   });
 
-  it("serve skills e agentes pela API local, inclusive a importacao", async () => {
-    const { store, roots } = await home();
+  it("serve skills e agentes pela API local", async () => {
+    const { store } = await home();
     const service = new ControlRoomService(store);
-    const server = createControlRoomServer(service, undefined, undefined, undefined, undefined, new TaskFileExplorer(service), undefined, () => roots);
+    const server = createControlRoomServer(service);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     try {
       const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
       const api = `http://127.0.0.1:${address.port}/api/control-room`;
       const post = (path: string, body: object) => fetch(`${api}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      const imported = await (await post("/skills/import", { sources: ["codex"] })).json() as { added: number; skills: Array<{ id: string; source: string }> };
-      expect(imported.added).toBe(1);
-      expect(imported.skills.map((skill) => skill.source)).toEqual(["codex"]);
       const own = await (await post("/skills", { name: "Commits curtos", content: "Mensagens de commit no imperativo." })).json() as { id: string; source: string };
       expect(own.source).toBe("eleazar");
       const agent = await post("/agents", { name: "Implementador", role: "Implementa", skillIds: [own.id], provider: "codex", model: "gpt-x" });
@@ -115,6 +112,55 @@ describe("Skills", () => {
       expect((await post(`/skills/${own.id}/delete`, {})).status).toBe(200);
       expect((await post(`/agents/${created.id}/delete`, {})).status).toBe(200);
       expect(await (await fetch(`${api}/agents`)).json()).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      store.close();
+    }
+  });
+
+  it("exporta o catalogo em .zip e o importa de volta, com previa e escolha para conflitos", async () => {
+    const { store } = await home();
+    const service = new ControlRoomService(store);
+    const catalog = new SkillCatalog(store);
+    const skill = catalog.createSkill({ name: "Revisao: seguranca", description: "Riscos primeiro", content: "# Revisao\nComece pela seguranca." }, "claude");
+    catalog.createAgent({ name: "Revisor", role: "Revisa", instructions: "Seja direto.", skillIds: [skill.id], provider: "claude" });
+    const server = createControlRoomServer(service);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("Endereco ausente");
+      const api = `http://127.0.0.1:${address.port}/api/control-room`;
+      const post = (path: string, body: object) => fetch(`${api}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const exported = await fetch(`${api}/catalog/export`);
+      expect(exported.headers.get("content-type")).toBe("application/zip");
+      const zip = Buffer.from(await exported.arrayBuffer());
+      const entries = readZip(zip).map((entry) => [entry.path, entry.data.toString("utf8")] as const);
+      expect(entries.map(([path]) => path)).toEqual(["eleazar-catalogo/eleazar.json", "eleazar-catalogo/skills/revisao-seguranca/SKILL.md", "eleazar-catalogo/agents/revisor.json"]);
+      expect(entries[1]![1]).toContain('name: "Revisao: seguranca"');
+      expect(JSON.parse(entries[2]![1])).toMatchObject({ name: "Revisor", skills: ["Revisao: seguranca"], provider: "claude" });
+
+      // Same catalog back: everything is identical, nothing changes.
+      const same = await (await post("/catalog/import/preview", { zipBase64: zip.toString("base64") })).json() as { skills: Array<{ status: string }>; agents: Array<{ status: string }> };
+      expect([...same.skills, ...same.agents].map((item) => item.status)).toEqual(["same", "same"]);
+
+      // A folder with an edited skill, a new one and a broken agent.
+      const files = [
+        { path: "minhas/skills/revisao-seguranca/SKILL.md", text: "---\nname: Revisao: seguranca\n---\nOutra versao." },
+        { path: "minhas/skills/nova/SKILL.md", text: "Sem cabecalho, o nome vem da pasta." },
+        { path: "minhas/agents/quebrado.json", text: "{" },
+        { path: "minhas/README.txt", text: "ignorado" },
+      ];
+      const preview = await (await post("/catalog/import/preview", { files })).json() as { skills: Array<{ name: string; status: string }>; ignored: string[]; warnings: string[] };
+      expect(preview.skills).toMatchObject([{ name: "Revisao: seguranca", status: "conflict" }, { name: "nova", status: "new" }]);
+      expect(preview.ignored).toEqual(["minhas/README.txt"]);
+      expect(preview.warnings[0]).toContain("agente invalido");
+
+      const kept = await (await post("/catalog/import", { files, conflicts: "duplicate" })).json() as { skills: { added: string[] } };
+      expect(kept.skills.added).toEqual(["Revisao: seguranca (importada)", "nova"]);
+      expect(catalog.listSkills().find((item) => item.id === skill.id)?.content).toBe("# Revisao\nComece pela seguranca.");
+      const replaced = await (await post("/catalog/import", { files, conflicts: "replace" })).json() as { skills: { replaced: string[]; skipped: string[] } };
+      expect(replaced.skills).toMatchObject({ replaced: ["Revisao: seguranca"], skipped: ["nova"] });
+      expect(catalog.listSkills().find((item) => item.id === skill.id)?.content).toBe("Outra versao.");
+      expect((await post("/catalog/import", { files, conflicts: "tudo" })).status).toBe(400);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       store.close();
