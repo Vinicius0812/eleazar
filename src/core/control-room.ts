@@ -461,6 +461,9 @@ export interface ControlRoomStore {
   getSkill(id: string): Skill | null;
   listSkills(): Skill[];
   deleteSkill(id: string): boolean;
+  /** Originals the operator removed from the catalog; a later import skips them. */
+  excludeSkillSource(sourcePath: string, createdAt: string): void;
+  listExcludedSkillSources(): string[];
   saveAgentProfile(profile: AgentProfile): void;
   getAgentProfile(id: string): AgentProfile | null;
   listAgentProfiles(): AgentProfile[];

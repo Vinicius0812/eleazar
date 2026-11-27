@@ -86,6 +86,9 @@ describe("Skills", () => {
 
       catalog.deleteSkill(skill!.id);
       expect(store.getAgentProfile(revisor.id)?.skillIds).toEqual([]);
+      // A removed duplicate does not come back with the next import.
+      expect(catalog.importSkills(await discoverSkills(roots)).added).toEqual([]);
+      expect(catalog.listSkills().some((item) => item.id === skill!.id || item.sourcePath === skill!.sourcePath)).toBe(false);
     } finally { store.close(); }
   });
 

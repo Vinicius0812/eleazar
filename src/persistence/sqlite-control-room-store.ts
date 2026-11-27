@@ -431,6 +431,12 @@ export class SqliteControlRoomStore implements ControlRoomStore {
   getSkill(id: string): Skill | null { return mapSkill(this.#db.prepare("SELECT * FROM skills WHERE id = ?").get(id)); }
   listSkills(): Skill[] { return this.#db.prepare("SELECT * FROM skills ORDER BY name COLLATE NOCASE, source").all().map(mapSkill).filter(isPresent); }
   deleteSkill(id: string): boolean { return this.#db.prepare("DELETE FROM skills WHERE id = ?").run(id).changes === 1; }
+  excludeSkillSource(sourcePath: string, createdAt: string): void {
+    this.#db.prepare("INSERT OR IGNORE INTO skill_import_exclusions (source_path, created_at) VALUES (?, ?)").run(sourcePath, createdAt);
+  }
+  listExcludedSkillSources(): string[] {
+    return (this.#db.prepare("SELECT source_path FROM skill_import_exclusions").all() as Array<{ source_path: string }>).map((row) => row.source_path);
+  }
   saveAgentProfile(profile: AgentProfile): void {
     this.#db.prepare(`INSERT INTO agent_profiles (id, name, role, instructions, skill_ids_json, provider, model, created_at, updated_at)
       VALUES (@id, @name, @role, @instructions, @skillIdsJson, @provider, @model, @createdAt, @updatedAt)
@@ -523,6 +529,7 @@ export class SqliteControlRoomStore implements ControlRoomStore {
       CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
         content TEXT NOT NULL, source TEXT NOT NULL, source_path TEXT UNIQUE, support_files_json TEXT NOT NULL DEFAULT '[]', imported_hash TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS skill_import_exclusions (source_path TEXT PRIMARY KEY, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS agent_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
         skill_ids_json TEXT NOT NULL DEFAULT '[]', provider TEXT, model TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,

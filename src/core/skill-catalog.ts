@@ -49,9 +49,13 @@ export class SkillCatalog {
     return skill;
   }
 
-  /** Removes the Eleazar's copy and its links from agents; the original file is never touched. */
+  /**
+   * Removes the Eleazar's copy and its links from agents; the original file is never touched.
+   * An imported skill is remembered so that importing again does not bring it back.
+   */
   deleteSkill(id: string): void {
-    this.requireSkill(id);
+    const skill = this.requireSkill(id);
+    if (skill.sourcePath) this.store.excludeSkillSource(skill.sourcePath, new Date().toISOString());
     for (const profile of this.store.listAgentProfiles().filter((item) => item.skillIds.includes(id))) {
       this.store.saveAgentProfile({ ...profile, skillIds: profile.skillIds.filter((skillId) => skillId !== id), updatedAt: new Date().toISOString() });
     }
@@ -64,9 +68,12 @@ export class SkillCatalog {
    */
   importSkills(candidates: readonly SkillCandidate[]): SkillImportResult {
     const existing = this.store.listSkills();
+    const excluded = new Set(this.store.listExcludedSkillSources());
     const result: SkillImportResult = { added: [], updated: [], unchanged: 0, keptLocalEdits: [] };
     const now = new Date().toISOString();
     for (const candidate of candidates) {
+      // Removed by the operator: stays out until they create it again.
+      if (excluded.has(candidate.sourcePath)) continue;
       const content = candidate.content.slice(0, maxSkillChars);
       const hash = contentHash(content);
       const previous = existing.find((skill) => skill.sourcePath === candidate.sourcePath);
