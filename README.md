@@ -4,7 +4,7 @@
 
 > Uma meta. Varios agentes. Uma execucao coordenada.
 
-O nome homenageia o regente brasileiro Eleazar de Carvalho: assim como um maestro conduz a orquestra, o Eleazar conduz os agentes de programacao. A marca, um regente com a batuta erguida, fica em `docs/assets/eleazar-maestro.svg` (versao completa) e `apps/control-room/public/favicon.svg` (versao simplificada para tamanhos pequenos).
+O nome homenageia o regente brasileiro Eleazar de Carvalho: assim como um maestro conduz a orquestra, o Eleazar conduz os agentes de programacao. A marca principal, um regente com a batuta erguida, fica em `docs/assets/eleazar-maestro.svg`; no canto dela aparece a marca pequena, um E cuja barra de cima vira a batuta e as outras terminam nos agentes que ela conduz (`apps/control-room/public/favicon.svg`, usada no favicon e na barra lateral).
 
 Eleazar e um orquestrador local-first de agentes de programacao. Ele classifica uma tarefa, verifica provedores locais e delega a execucao ao agente mais adequado. O **Control Room** e a interface React local para acompanhar os projetos, tarefas, execucoes e decisoes persistidos pelo nucleo em SQLite.
 

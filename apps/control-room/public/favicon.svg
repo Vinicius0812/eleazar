@@ -1,25 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <title>Eleazar</title>
-  <!-- Simplified mark of the conductor (eleazar-maestro.svg): the same figure, closer, with a thicker baton so it reads at 16 px. -->
+  <!-- Small mark: an E whose top bar lifts into the conductor's baton (gold tip) and whose other bars end
+       in the agents it conducts, joined by the trail of the beat. Made to read at 16 px. -->
   <defs>
-    <linearGradient id="eleazar-bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+    <linearGradient id="eleazar-small-bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#7b66e0"/>
       <stop offset="1" stop-color="#33267d"/>
     </linearGradient>
   </defs>
-  <rect width="256" height="256" rx="58" fill="url(#eleazar-bg)"/>
-  <g transform="translate(-62 -8) scale(1.25)">
-    <g fill="#ffffff">
-      <path d="M46 256 C48 200 54 150 66 132 C74 120 90 114 102 112 L120 112 C136 116 150 124 156 136 C162 160 162 210 164 256 Z"/>
-      <line x1="136" y1="152" x2="180" y2="146" stroke="#ffffff" stroke-width="18" stroke-linecap="round"/>
-      <path d="M176 137 C186 132 198 130 208 131 C215 132 215 139 208 140 L199 141 L211 143 C217 144 216 151 210 151 L196 152 C188 156 182 156 177 154 Z"/>
-      <polyline points="146,132 190,116 204,76" fill="none" stroke="#ffffff" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="206" cy="66" r="10"/>
-      <line x1="208" y1="62" x2="228" y2="36" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
-      <path d="M92 60 C100 53 114 52 121 60 C124 64 124 70 124 74 L130 84 L124 87 L125 92 L122 94 C122 99 118 102 112 102 L110 110 L97 111 L95 101 C88 97 84 89 84 80 C84 71 87 64 92 60 Z"/>
-    </g>
-    <circle cx="229" cy="34" r="9" fill="#f4c95d"/>
-    <path d="M90 61 C98 52 116 50 123 62 C114 59 104 61 99 67 C94 73 93 82 94 92 L89 96 C84 90 82 80 84 72 C85 67 87 64 90 61 Z" fill="#d8cffc"/>
-    <polygon points="106,110 116,115 126,110 126,121 116,116 106,121" fill="#4a3aa8"/>
-  </g>
+  <rect width="256" height="256" rx="58" fill="url(#eleazar-small-bg)"/>
+  <path d="M198 41 Q222 92 186 131 Q158 162 186 190" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.3"/>
+  <path d="M140 72 L78 72 L78 190 L150 190" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M78 131 L148 131" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="186" cy="190" r="16" fill="#ffffff"/>
+  <circle cx="186" cy="131" r="16" fill="#ffffff"/>
+  <path d="M140 72 L192 44" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="198" cy="41" r="16" fill="#f4c95d"/>
 </svg>
