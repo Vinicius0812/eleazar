@@ -1,5 +1,5 @@
 import { readableProviderMessage } from "./run-messages.js";
-import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type Skill, type SkillImport, type AgentProfile, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
+import { isLiveExecution, terminalEventKinds, type Approval, type AcpProvider, type CodexConfig, type ProviderConfig, type ExecuteOptions, type EventStreamOptions, type ExecutionEvent, type ControlRoomClient, type OutboundActionInput, type TaskOutboundAction, type TaskPullRequest, type PullRequestRefresh, type ExplorerRoot, type ExplorerListing, type ExplorerChanges, type ExplorerFile, type ExplorerSearch, type ComparisonStart, type TaskTemplate, type Skill, type AgentProfile, type CatalogImportPreview, type CatalogImportResult, type TerminalEvent, type TerminalSession, ControlRoomSnapshot, CreateTaskInput, ExecutionDetail, ExecutionProvider, Project, ProviderStatus, RegisterProjectInput, Run, Task } from "./contracts.js";
 
 // VITE_CONTROL_ROOM_API points a second copy of the interface at another local host, such as a test database.
 const apiBase = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_CONTROL_ROOM_API ?? "http://127.0.0.1:4317/api/control-room";
@@ -47,7 +47,14 @@ export function createHttpControlRoomClient(baseUrl = apiBase): ControlRoomClien
     getTaskFile(taskId, directoryId, path) { return request<ExplorerFile>(`/tasks/${encodeURIComponent(taskId)}/files/content?${explorerQuery(directoryId, path)}`); },
     searchTaskFiles(taskId, directoryId, query) { return request<ExplorerSearch>(`/tasks/${encodeURIComponent(taskId)}/files/search?${explorerQuery(directoryId)}&${new URLSearchParams({ q: query }).toString()}`); },
     listSkills() { return request<Skill[]>("/skills"); },
-    importSkills(sources) { return request<SkillImport>("/skills/import", { method: "POST", body: JSON.stringify(sources ? { sources } : {}) }); },
+    async exportCatalog() {
+      const response = await fetch(`${baseUrl}/catalog/export`);
+      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => ({})), response.status));
+      const fileName = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "eleazar-catalogo.zip";
+      return { blob: await response.blob(), fileName };
+    },
+    previewCatalogImport(source) { return request<CatalogImportPreview>("/catalog/import/preview", { method: "POST", body: JSON.stringify(source) }); },
+    importCatalog(source, conflicts) { return request<CatalogImportResult>("/catalog/import", { method: "POST", body: JSON.stringify({ ...source, conflicts }) }); },
     createSkill(input) { return request<Skill>("/skills", { method: "POST", body: JSON.stringify(input) }); },
     updateSkill(skillId, input) { return request<Skill>(`/skills/${encodeURIComponent(skillId)}/update`, { method: "POST", body: JSON.stringify(input) }); },
     deleteSkill(skillId) { return request<Skill[]>(`/skills/${encodeURIComponent(skillId)}/delete`, { method: "POST", body: "{}" }); },

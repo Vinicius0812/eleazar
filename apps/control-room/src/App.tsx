@@ -9,6 +9,8 @@ import {
 import {
   Activity,
   ArrowLeft,
+  Download,
+  Upload,
   ArrowRight,
   Bell,
   BookOpen,
@@ -63,6 +65,7 @@ import { ProjectList } from "./components/ProjectList.js";
 import { TaskSidePanel } from "./components/TaskSidePanel.js";
 import { SkillsPage } from "./components/SkillsPage.js";
 import { AgentsPage } from "./components/AgentsPage.js";
+import { CatalogImportDialog } from "./components/CatalogImportDialog.js";
 import { TaskFollowUp } from "./components/TaskFollowUp.js";
 import { TaskPublishing } from "./components/TaskPublishing.js";
 import { TaskBoard } from "./components/TaskBoard.js";
@@ -133,6 +136,7 @@ function readCollapsedProjects(): string[] {
 type DialogState =
   | { kind: "project" }
   | { kind: "edit-project"; project: Project }
+  | { kind: "catalog-import" }
   | { kind: "execute"; task: Task }
   | { kind: "related"; task: Task }
   | { kind: "approval"; approval: Approval }
@@ -164,6 +168,11 @@ function Panel({
       {children}
     </section>
   );
+}
+function importSummary(result: { skills: { added: string[]; replaced: string[]; skipped: string[] }; agents: { added: string[]; replaced: string[]; skipped: string[] }; warnings: string[] }): string {
+  const part = (label: string, group: { added: string[]; replaced: string[]; skipped: string[] }) =>
+    `${label}: ${group.added.length} nova(s), ${group.replaced.length} substituída(s), ${group.skipped.length} mantida(s)`;
+  return `Importação concluída. ${part("Skills", result.skills)}; ${part("agentes", result.agents)}.${result.warnings.length ? ` Avisos: ${result.warnings.join(" ")}` : ""}`;
 }
 function message(reason: unknown) {
   return reason instanceof Error
@@ -489,6 +498,22 @@ export function App({ client }: { client: ControlRoomClient }) {
     <button type="button" className={`${compact ? "icon-button" : "text-button"} danger`} disabled={busy || task.status === "planning" || task.status === "running"} onClick={() => removeTask(task)} aria-label={`Excluir ${task.title}`} title={task.status === "running" || task.status === "planning" ? "Cancele a execução antes de excluir" : "Excluir tarefa"}>
       <Trash2 size={15} aria-hidden="true" />{!compact && " Excluir"}
     </button>
+  </>;
+  async function exportCatalog() {
+    setBusy(true); setFormError("");
+    try {
+      const { blob, fileName } = await client.exportCatalog();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url; link.download = fileName; document.body.append(link); link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      setNotice(`Catálogo exportado: ${skills.length} skill(s) e ${agentProfiles.length} agente(s) em ${fileName}.`);
+    } catch (reason) { setFormError(message(reason)); }
+    finally { setBusy(false); }
+  }
+  const catalogActions = <>
+    <button type="button" className="secondary" disabled={busy} onClick={() => void exportCatalog()}><Download size={15} aria-hidden="true" /> Exportar</button>
+    <button type="button" className="secondary" disabled={busy} onClick={() => open({ kind: "catalog-import" })}><Upload size={15} aria-hidden="true" /> Importar</button>
   </>;
   async function untilPreparing(taskId: string, request: Promise<unknown>): Promise<void> {
     let settled = false;
@@ -970,12 +995,11 @@ export function App({ client }: { client: ControlRoomClient }) {
                   </div>
                 ))}
               </section>}
-              {active === "skills" ? <SkillsPage skills={skills} busy={busy}
-                onImport={() => void mutate(() => client.importSkills(), (result) => `Importação concluída: ${result.added} nova(s), ${result.updated} atualizada(s), ${result.unchanged} sem mudança${result.keptLocalEdits.length ? `; mantidas as suas edições em ${result.keptLocalEdits.join(", ")}` : ""}. Os originais do Claude e do Codex não foram alterados.`, (result) => setSkills(result.skills))}
+              {active === "skills" ? <SkillsPage skills={skills} busy={busy} catalogActions={catalogActions}
                 onCreate={(input) => void mutate(() => client.createSkill(input), "Skill criada.", reloadCatalog)}
                 onUpdate={(id, input) => void mutate(() => client.updateSkill(id, input), "Skill salva. O arquivo original, se houver, não foi alterado.", reloadCatalog)}
                 onDelete={(skill) => { if (window.confirm(`Excluir a skill "${skill.name}" do Eleazar? Ela sai dos agentes que a usam. ${skill.sourcePath ? "O arquivo original não é apagado." : ""}`)) void mutate(() => client.deleteSkill(skill.id), "Skill excluída.", reloadCatalog); }} />
-              : active === "agents" ? <AgentsPage agents={agentProfiles} skills={skills} providers={providers} busy={busy}
+              : active === "agents" ? <AgentsPage agents={agentProfiles} skills={skills} providers={providers} busy={busy} catalogActions={catalogActions}
                 onCreate={(input) => void mutate(() => client.createAgent(input), "Agente criado. Escolha-o ao criar uma tarefa.", reloadCatalog)}
                 onUpdate={(id, input) => void mutate(() => client.updateAgent(id, input), "Agente salvo.", reloadCatalog)}
                 onDelete={(agent) => { if (window.confirm(`Excluir o agente "${agent.name}"? As tarefas que já o usaram mantêm o histórico.`)) void mutate(() => client.deleteAgent(agent.id), "Agente excluído.", reloadCatalog); }} />
@@ -1379,6 +1403,8 @@ export function App({ client }: { client: ControlRoomClient }) {
               ? "Cadastrar projeto local"
               : dialog.kind === "edit-project"
               ? "Editar projeto"
+              : dialog.kind === "catalog-import"
+              ? "Importar skills e agentes"
                : dialog.kind === "execute"
                  ? "Executar tarefa"
                  : dialog.kind === "related"
@@ -1393,6 +1419,10 @@ export function App({ client }: { client: ControlRoomClient }) {
             <div className="error" role="alert">
               {formError}
             </div>
+          )}
+          {dialog.kind === "catalog-import" && (
+            <CatalogImportDialog client={client} busy={busy} onCancel={() => setDialog(null)}
+              onImport={(source, conflicts) => void mutate(() => client.importCatalog(source, conflicts), (result) => importSummary(result), reloadCatalog)} />
           )}
           {(dialog.kind === "project" || dialog.kind === "edit-project") && (
             <form onSubmit={submitProject}>

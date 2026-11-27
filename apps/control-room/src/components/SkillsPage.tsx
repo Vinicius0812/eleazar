@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Download, FileText, Plus, Search, Trash2 } from "lucide-react";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { FileText, Plus, Search, Trash2 } from "lucide-react";
 
 import type { Skill, SkillInput, SkillSource } from "../services/contracts.js";
 
@@ -9,10 +9,11 @@ export const skillSourceLabel: Record<SkillSource, string> = { eleazar: "Eleazar
  * The Eleazar's skill catalog. Imported skills are copies: editing one here never touches the
  * original in Claude's or Codex's folder, and a later import keeps the edit.
  */
-export function SkillsPage({ skills, busy, onImport, onCreate, onUpdate, onDelete }: {
+export function SkillsPage({ skills, busy, catalogActions, onCreate, onUpdate, onDelete }: {
   skills: Skill[];
   busy: boolean;
-  onImport(): void;
+  /** Export and import buttons of the whole catalog. */
+  catalogActions?: ReactNode;
   onCreate(input: SkillInput): void;
   onUpdate(id: string, input: SkillInput): void;
   onDelete(skill: Skill): void;
@@ -27,14 +28,14 @@ export function SkillsPage({ skills, busy, onImport, onCreate, onUpdate, onDelet
       <div className="catalog-intro">
         <p>Skills são instruções no formato SKILL.md. O Eleazar as envia junto com o pedido, então funcionam com qualquer provedor: escolha-as na tarefa ou vincule-as a um agente.</p>
         <div className="catalog-actions">
-          <button className="secondary" disabled={busy} onClick={onImport} title="Copia ~/.claude/skills e ~/.codex/skills; os originais não mudam"><Download size={15} aria-hidden="true" /> Importar do Claude e do Codex</button>
+          {catalogActions}
           <button className="primary" disabled={busy} onClick={() => setSelectedId("new")}><Plus size={15} aria-hidden="true" /> Nova skill</button>
         </div>
       </div>
       <div className="catalog-layout">
         <div className="catalog-list">
           <label className="search"><Search size={16} aria-hidden="true" /><input aria-label="Buscar skill" placeholder="Buscar por nome, descrição ou origem…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          {!skills.length && <div className="empty">Nenhuma skill ainda. Importe as suas do Claude e do Codex ou crie uma.</div>}
+          {!skills.length && <div className="empty">Nenhuma skill ainda. Importe uma pasta ou um .zip de skills, ou crie uma.</div>}
           <ul aria-label="Skills cadastradas">
             {visible.map((skill) => (
               <li key={skill.id}>

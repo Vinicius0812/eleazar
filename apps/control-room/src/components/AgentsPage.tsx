@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Bot, Plus, Trash2 } from "lucide-react";
 
 import { AgentGlyph } from "./AgentGlyph.js";
@@ -6,7 +6,9 @@ import { skillSourceLabel } from "./SkillsPage.js";
 import type { AgentProfile, AgentProfileInput, ProviderStatus, Skill } from "../services/contracts.js";
 
 /** Reusable agents: a role, standing instructions and skills, run by the preferred provider or by Automático. */
-export function AgentsPage({ agents, skills, providers, busy, onCreate, onUpdate, onDelete }: {
+export function AgentsPage({ agents, skills, providers, busy, onCreate, onUpdate, onDelete, catalogActions }: {
+  /** Export and import buttons of the whole catalog. */
+  catalogActions?: ReactNode;
   agents: AgentProfile[];
   skills: Skill[];
   providers: ProviderStatus[];
@@ -22,7 +24,7 @@ export function AgentsPage({ agents, skills, providers, busy, onCreate, onUpdate
     <section className="catalog-page" aria-label="Agentes">
       <div className="catalog-intro">
         <p>Um agente reúne função, instruções permanentes e skills. Escolha-o na tarefa: o Eleazar envia o perfil a qualquer provedor e usa o provedor preferido do agente quando você não escolhe outro.</p>
-        <div className="catalog-actions"><button className="primary" disabled={busy} onClick={() => setSelectedId("new")}><Plus size={15} aria-hidden="true" /> Novo agente</button></div>
+        <div className="catalog-actions">{catalogActions}<button className="primary" disabled={busy} onClick={() => setSelectedId("new")}><Plus size={15} aria-hidden="true" /> Novo agente</button></div>
       </div>
       <div className="catalog-layout">
         <div className="catalog-list">

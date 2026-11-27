@@ -227,22 +227,47 @@ describe("Skills and agents", () => {
   const skill = { id: "s1", slug: "gerar-prompts", name: "gerar-prompts", description: "Prompts por repositório", content: "# Gerar prompts", source: "claude" as const, sourcePath: "C:\\Users\\x\\.claude\\skills\\gerar-prompts\\SKILL.md", supportFiles: [], importedHash: "h", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
   const agent = { id: "a1", name: "Revisor", role: "Revisa código", instructions: "Aponte riscos.", skillIds: ["s1"], provider: "claude", model: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
 
-  it("imports skills from Claude and Codex and edits a copy without touching the original", async () => {
+  it("edits an imported skill without touching the original", async () => {
     window.location.hash = "#/skills";
     const controlled = client();
-    vi.spyOn(controlled, "importSkills").mockResolvedValue({ added: 1, updated: 0, unchanged: 0, keptLocalEdits: [], skills: [skill] });
+    vi.spyOn(controlled, "listSkills").mockResolvedValue([skill]);
     const update = vi.spyOn(controlled, "updateSkill").mockResolvedValue({ ...skill, content: "Nova" });
     const user = userEvent.setup();
     render(<App client={controlled} />);
-    await user.click(await screen.findByRole("button", { name: /Importar do Claude e do Codex/ }));
-    expect(await screen.findByText(/Importação concluída: 1 nova\(s\)/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /gerar-prompts/ }));
+    await user.click(await screen.findByRole("button", { name: /gerar-prompts/ }));
     const form = within(screen.getByRole("form", { name: "Editar gerar-prompts" }));
     expect(form.getByText(/Editar aqui não altera o original/)).toBeInTheDocument();
     await user.clear(form.getByLabelText("Conteúdo"));
     await user.type(form.getByLabelText("Conteúdo"), "Nova");
     await user.click(form.getByRole("button", { name: "Salvar skill" }));
     expect(update).toHaveBeenCalledWith("s1", { name: "gerar-prompts", description: "Prompts por repositório", content: "Nova" });
+  });
+
+  it("explains the expected format, previews the attached files and imports with the chosen conflict rule", async () => {
+    window.location.hash = "#/skills";
+    const controlled = client();
+    const preview = vi.spyOn(controlled, "previewCatalogImport").mockResolvedValue({
+      skills: [{ name: "gerar-prompts", origin: "claude", status: "conflict", path: "skills/gerar-prompts/SKILL.md" }, { name: "nova", origin: "eleazar", status: "new", path: "skills/nova/SKILL.md" }],
+      agents: [{ name: "Revisor", status: "same", path: "agents/revisor.json", missingSkills: [] }], ignored: ["README.txt"], warnings: [] });
+    const importCatalog = vi.spyOn(controlled, "importCatalog");
+    const user = userEvent.setup();
+    render(<App client={controlled} />);
+    await user.click(await screen.findByRole("button", { name: "Importar" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Importar skills e agentes" }));
+    expect(dialog.getByRole("note")).toHaveTextContent("skills/<nome>/SKILL.md");
+    await user.click(dialog.getByRole("button", { name: /Entendi, escolher arquivos/ }));
+    const file = new File(["---\nname: nova\n---\nConteúdo"], "SKILL.md", { type: "text/markdown" });
+    Object.defineProperty(file, "webkitRelativePath", { value: "minhas/skills/nova/SKILL.md" });
+    await user.upload(dialog.getByLabelText("Pasta do catálogo"), file);
+    await waitFor(() => expect(dialog.queryByRole("alert")?.textContent ?? "sem erro").toBe("sem erro"));
+    await waitFor(() => expect(preview).toHaveBeenCalledWith({ files: [{ path: "minhas/skills/nova/SKILL.md", text: "---\nname: nova\n---\nConteúdo" }] }));
+    const list = within(await dialog.findByRole("list", { name: "Prévia da importação" }));
+    expect(list.getByText("Conflito")).toBeInTheDocument();
+    expect(dialog.getByText("1 arquivo(s) fora do formato foram ignorados.")).toBeInTheDocument();
+    await user.click(dialog.getByLabelText(/Manter os dois/));
+    await user.click(dialog.getByRole("button", { name: "Importar 2 item(ns)" }));
+    expect(importCatalog).toHaveBeenCalledWith({ files: [{ path: "minhas/skills/nova/SKILL.md", text: "---\nname: nova\n---\nConteúdo" }] }, "duplicate");
+    expect(await screen.findByText(/Importação concluída/)).toBeInTheDocument();
   });
 
   it("creates an agent with skills and a preferred provider", async () => {
@@ -932,7 +957,8 @@ function client(): ControlRoomClient {
     getTaskChanges: async () => ({ root: explorerRoot, changes: [{ path: "README.md", previousPath: null, kind: "modified", additions: 1, deletions: 1 }], warnings: [] }),
     getTaskFile: async (_task, _directory, path) => ({ root: explorerRoot, path, exists: true, size: 6, binary: false, content: "novo\n", tooLarge: false, change: { path, previousPath: null, kind: "modified", additions: 1, deletions: 1 }, diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-velho\n+novo\n`, diffTruncated: false }),
     searchTaskFiles: async (_task, _directory, query) => ({ root: explorerRoot, query, paths: ["README.md"], truncated: false }),
-    listSkills: async () => [], importSkills: async () => ({ added: 0, updated: 0, unchanged: 0, keptLocalEdits: [], skills: [] }), createSkill: async () => { throw new Error("unused"); }, updateSkill: async () => { throw new Error("unused"); }, deleteSkill: async () => [],
+    listSkills: async () => [], exportCatalog: async () => ({ blob: new Blob(["zip"]), fileName: "eleazar-catalogo.zip" }), previewCatalogImport: async () => ({ skills: [], agents: [], ignored: [], warnings: [] }),
+    importCatalog: async () => ({ skills: { added: [], replaced: [], skipped: [] }, agents: { added: [], replaced: [], skipped: [] }, warnings: [], skillsTotal: 0, agentsTotal: 0 }), createSkill: async () => { throw new Error("unused"); }, updateSkill: async () => { throw new Error("unused"); }, deleteSkill: async () => [],
     listAgents: async () => [], createAgent: async () => { throw new Error("unused"); }, updateAgent: async () => { throw new Error("unused"); }, deleteAgent: async () => [],
     pinTask: async (taskId, pinned) => ({ ...snapshot.tasks[0]!, id: taskId, pinnedAt: pinned ? "2026-01-02T00:00:00.000Z" : null }), deleteTask: async () => undefined,
     listTerminals: async () => [], openTerminal: async () => { throw new Error("unused"); }, sendTerminalInput: async () => { throw new Error("unused"); }, closeTerminal: async () => { throw new Error("unused"); }, streamTerminalEvents: async () => true,

@@ -17,7 +17,23 @@ export type SkillSource = "eleazar" | "claude" | "codex";
 /** Instructions in the SKILL.md format; they travel in the prompt, so any provider can follow them. */
 export interface Skill { id: string; slug: string; name: string; description: string; content: string; source: SkillSource; sourcePath: string | null; supportFiles: string[]; importedHash: string | null; createdAt: string; updatedAt: string; }
 export interface SkillInput { name: string; description?: string; content: string; }
-export interface SkillImport { added: number; updated: number; unchanged: number; keptLocalEdits: string[]; skills: Skill[]; }
+/** Files of a catalog import: a folder or loose files read as text, or a .zip in base64. */
+export type CatalogImportSource = { files: Array<{ path: string; text: string }> } | { zipBase64: string };
+export type CatalogImportStatus = "new" | "same" | "conflict";
+export type CatalogConflictChoice = "skip" | "replace" | "duplicate";
+export interface CatalogImportPreview {
+  skills: Array<{ name: string; origin: SkillSource; status: CatalogImportStatus; path: string }>;
+  agents: Array<{ name: string; status: CatalogImportStatus; path: string; missingSkills: string[] }>;
+  ignored: string[];
+  warnings: string[];
+}
+export interface CatalogImportResult {
+  skills: { added: string[]; replaced: string[]; skipped: string[] };
+  agents: { added: string[]; replaced: string[]; skipped: string[] };
+  warnings: string[];
+  skillsTotal: number;
+  agentsTotal: number;
+}
 /** A reusable agent of the Eleazar: role, standing instructions, skills and preferred provider (null: Automático). */
 export interface AgentProfile { id: string; name: string; role: string; instructions: string; skillIds: string[]; provider: string | null; model: string | null; createdAt: string; updatedAt: string; }
 export interface AgentProfileInput { name: string; role?: string; instructions?: string; skillIds?: string[]; provider?: string | null; model?: string | null; }
@@ -138,8 +154,10 @@ export interface ControlRoomClient {
   searchTaskFiles(taskId: string, directoryId: string, query: string): Promise<ExplorerSearch>;
   pinTask(taskId: string, pinned: boolean): Promise<Task>;
   listSkills(): Promise<Skill[]>;
-  /** Copies the operator's Claude and Codex skills; originals are never changed. */
-  importSkills(sources?: SkillSource[]): Promise<SkillImport>;
+  /** The whole catalog as a .zip: skills/<nome>/SKILL.md and agents/<nome>.json. */
+  exportCatalog(): Promise<{ blob: Blob; fileName: string }>;
+  previewCatalogImport(source: CatalogImportSource): Promise<CatalogImportPreview>;
+  importCatalog(source: CatalogImportSource, conflicts: CatalogConflictChoice): Promise<CatalogImportResult>;
   createSkill(input: SkillInput): Promise<Skill>;
   updateSkill(skillId: string, input: SkillInput): Promise<Skill>;
   deleteSkill(skillId: string): Promise<Skill[]>;
